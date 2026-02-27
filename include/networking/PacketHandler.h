@@ -18,6 +18,7 @@
 #include "networking/ConnectionState.h"
 #include "networking/PlayPackets.h"
 #include "entity/Player.h"
+#include "entity/MobEntity.h"
 #include "world/World.h"
 #include "command/CommandHandler.h"
 #include "persistence/PlayerDataIO.h"
@@ -151,6 +152,42 @@ public:
                 }
             }
         }
+
+        // Mob spawning — every 200 ticks (10 seconds)
+        if (world.worldTime % 200 == 0 && !players_.empty()) {
+            mobSpawner_.setNextEntityId(&nextEntityId_);
+
+            // Use first player as spawn center
+            auto& firstPlayer = players_.begin()->second;
+
+            // Try spawn
+            auto spawned = mobSpawner_.trySpawnAround(
+                firstPlayer.posX, firstPlayer.posY, firstPlayer.posZ,
+                world.worldTime);
+
+            // Broadcast new mobs to all players
+            for (auto& mob : spawned) {
+                auto pkt = SpawnMobPacket::fromMob(mob);
+                for (auto& [fd, conn] : connections) {
+                    if (conn.state() == ConnectionState::Play) {
+                        conn.sendPacket(pkt.serialize());
+                    }
+                }
+            }
+
+            // Despawn distant mobs
+            auto removed = mobSpawner_.despawnFarFrom(
+                firstPlayer.posX, firstPlayer.posY, firstPlayer.posZ);
+            if (!removed.empty()) {
+                DestroyEntitiesPacket destroy;
+                destroy.entityIds = removed;
+                for (auto& [fd, conn] : connections) {
+                    if (conn.state() == ConnectionState::Play) {
+                        conn.sendPacket(destroy.serialize());
+                    }
+                }
+            }
+        }
     }
 
     void onDisconnect(int fd, std::unordered_map<int, Connection>& connections) {
@@ -199,6 +236,7 @@ private:
     std::unordered_map<int, Connection>* connections_ = nullptr;
     CommandHandler commandHandler_;
     PlayerDataIO playerDataIO_;
+    MobSpawner mobSpawner_;
 
     // Generate offline UUID from player name — simplified UUID v3 approach
     // Vanilla uses UUID.nameUUIDFromBytes("OfflinePlayer:" + name)
@@ -414,6 +452,12 @@ private:
 
         std::cout << "[PLAY] " << playerName << " (eid=" << eid
                   << ") joined the game\n";
+
+        // 13. Send existing mobs
+        for (auto& [mobId, mob] : mobSpawner_.mobs()) {
+            auto pkt = SpawnMobPacket::fromMob(mob);
+            conn.sendPacket(pkt.serialize());
+        }
     }
 
     // Helper: broadcast entity movement to all other play-state connections
