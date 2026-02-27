@@ -1,0 +1,192 @@
+#pragma once
+// Play state packets (S→C) for the join sequence.
+// Implements the minimum packets a MC 1.7.10 client needs to fully connect.
+// 
+// Reference: hd.java (Join Game), protocol wiki for others.
+// Protocol version: 5 (Minecraft 1.7.10)
+
+#include <cstdint>
+#include <vector>
+#include <cstring>
+#include "networking/PacketBuffer.h"
+
+namespace mc {
+
+// ============================================================
+// S→C 0x01 Join Game — hd.java
+// ============================================================
+// hd.b(et): writeInt(entityId), writeByte(gameMode|hardcore),
+//           writeByte(dimension), writeByte(difficulty),
+//           writeByte(maxPlayers), writeString(levelType)
+struct JoinGamePacket {
+    int32_t entityId;
+    uint8_t gameMode;     // 0=survival,1=creative,2=adventure
+    bool    hardcore;
+    int8_t  dimension;    // -1=nether,0=overworld,1=end
+    uint8_t difficulty;   // 0=peaceful,1=easy,2=normal,3=hard
+    uint8_t maxPlayers;
+    std::string levelType; // "default","flat","largeBiomes","amplified"
+
+    PacketBuffer serialize() const {
+        PacketBuffer buf;
+        buf.writeVarInt(0x01); // Packet ID
+        buf.writeInt(entityId);
+        uint8_t modeByte = gameMode;
+        if (hardcore) modeByte |= 0x08;
+        buf.writeByte(modeByte);
+        buf.writeByte(static_cast<uint8_t>(dimension));
+        buf.writeByte(difficulty);
+        buf.writeByte(maxPlayers);
+        buf.writeString(levelType);
+        return buf;
+    }
+};
+
+// ============================================================
+// S→C 0x05 Spawn Position
+// ============================================================
+// Sends the world spawn position (compass points here)
+struct SpawnPositionPacket {
+    int32_t x, y, z;
+
+    PacketBuffer serialize() const {
+        PacketBuffer buf;
+        buf.writeVarInt(0x05); // Packet ID
+        buf.writeInt(x);
+        buf.writeInt(y);
+        buf.writeInt(z);
+        return buf;
+    }
+};
+
+// ============================================================
+// S→C 0x08 Player Position And Look
+// ============================================================
+// Teleports the player and sets look direction
+struct PlayerPositionAndLookPacket {
+    double x, y, z;
+    float  yaw, pitch;
+    bool   onGround;
+
+    PacketBuffer serialize() const {
+        PacketBuffer buf;
+        buf.writeVarInt(0x08); // Packet ID
+        buf.writeDouble(x);
+        buf.writeDouble(y); // feet Y (client uses this + 1.62 for eyes)
+        buf.writeDouble(z);
+        buf.writeFloat(yaw);
+        buf.writeFloat(pitch);
+        buf.writeBoolean(onGround);
+        return buf;
+    }
+};
+
+// ============================================================
+// S→C 0x00 Keep Alive
+// ============================================================
+struct KeepAlivePacket {
+    int32_t keepAliveId;
+
+    PacketBuffer serialize() const {
+        PacketBuffer buf;
+        buf.writeVarInt(0x00); // Packet ID
+        buf.writeInt(keepAliveId);
+        return buf;
+    }
+};
+
+// ============================================================
+// S→C 0x21 Chunk Data
+// ============================================================
+// Sends a single chunk column. For initial join we send an empty
+// "unload" chunk (groundUp=true, primaryBitmap=0, data=empty)
+// to satisfy the client's requirement for spawn area chunks.
+struct ChunkDataPacket {
+    int32_t  chunkX, chunkZ;
+    bool     groundUpContinuous;
+    uint16_t primaryBitmap;
+    uint16_t addBitmap;
+    std::vector<uint8_t> compressedData; // zlib-compressed chunk data
+
+    PacketBuffer serialize() const {
+        PacketBuffer buf;
+        buf.writeVarInt(0x21); // Packet ID
+        buf.writeInt(chunkX);
+        buf.writeInt(chunkZ);
+        buf.writeBoolean(groundUpContinuous);
+        buf.writeShort(static_cast<int16_t>(primaryBitmap));
+        buf.writeShort(static_cast<int16_t>(addBitmap));
+        buf.writeInt(static_cast<int32_t>(compressedData.size()));
+        buf.writeBytes(compressedData);
+        return buf;
+    }
+
+    // Create an "unload" chunk packet — tells the client this chunk has no data
+    static ChunkDataPacket makeUnload(int32_t cx, int32_t cz) {
+        ChunkDataPacket pkt;
+        pkt.chunkX = cx;
+        pkt.chunkZ = cz;
+        pkt.groundUpContinuous = true;
+        pkt.primaryBitmap = 0;
+        pkt.addBitmap = 0;
+        // Empty zlib stream: just the zlib header for empty deflate
+        // In MC 1.7.10, even an "unload" needs a valid compressed payload
+        // with 0 sections. Minimal valid zlib: 78 9C 03 00 00 00 00 01
+        pkt.compressedData = {0x78, 0x9C, 0x03, 0x00, 0x00, 0x00, 0x00, 0x01};
+        return pkt;
+    }
+};
+
+// ============================================================
+// S→C 0x39 Player Abilities
+// ============================================================
+// Sets the player's abilities (flying, invulnerable, etc.)
+struct PlayerAbilitiesPacket {
+    bool invulnerable;
+    bool flying;
+    bool allowFlying;
+    bool creativeMode;
+    float flySpeed;    // Default: 0.05
+    float walkSpeed;   // Default: 0.1
+
+    PacketBuffer serialize() const {
+        PacketBuffer buf;
+        buf.writeVarInt(0x39); // Packet ID
+        uint8_t flags = 0;
+        if (invulnerable) flags |= 0x01;
+        if (flying)       flags |= 0x02;
+        if (allowFlying)  flags |= 0x04;
+        if (creativeMode) flags |= 0x08;
+        buf.writeByte(flags);
+        buf.writeFloat(flySpeed);
+        buf.writeFloat(walkSpeed);
+        return buf;
+    }
+};
+
+// ============================================================
+// S→C 0x3F Plugin Message 
+// ============================================================
+// Used for brand channel "MC|Brand"
+struct PluginMessagePacket {
+    std::string channel;
+    std::vector<uint8_t> data;
+
+    PacketBuffer serialize() const {
+        PacketBuffer buf;
+        buf.writeVarInt(0x3F); // Packet ID
+        buf.writeString(channel);
+        buf.writeShort(static_cast<int16_t>(data.size()));
+        buf.writeBytes(data);
+        return buf;
+    }
+
+    static PluginMessagePacket makeBrand(const std::string& brand) {
+        PluginMessagePacket pkt;
+        pkt.channel = "MC|Brand";
+        pkt.data.assign(brand.begin(), brand.end());
+        return pkt;
+    }
+};
+
+} // namespace mc
