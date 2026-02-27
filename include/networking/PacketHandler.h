@@ -568,6 +568,47 @@ private:
                 buf.readByte(); // cursorY
                 buf.readByte(); // cursorZ
 
+                // Check if clicking on an interactive block
+                if (player && x != -1) {
+                    uint16_t clickedBlock = world.getBlock(x, y, z);
+
+                    // Crafting table — open 3x3 crafting window
+                    if (clickedBlock == BlockID::CRAFTING) {
+                        OpenWindowPacket win;
+                        win.windowId = 1;
+                        win.inventoryType = 1; // Crafting table
+                        win.windowTitle = R"({"text":"Crafting"})";
+                        win.slotCount = 0; // Crafting uses 0 for slot count
+                        win.useProvidedTitle = true;
+                        conn.sendPacket(win.serialize());
+                        break;
+                    }
+
+                    // Chest — open chest window
+                    if (clickedBlock == BlockID::CHEST) {
+                        OpenWindowPacket win;
+                        win.windowId = 2;
+                        win.inventoryType = 0; // Chest
+                        win.windowTitle = R"({"text":"Chest"})";
+                        win.slotCount = 27;
+                        win.useProvidedTitle = true;
+                        conn.sendPacket(win.serialize());
+                        break;
+                    }
+
+                    // Furnace — open furnace window
+                    if (clickedBlock == BlockID::FURNACE) {
+                        OpenWindowPacket win;
+                        win.windowId = 3;
+                        win.inventoryType = 2; // Furnace
+                        win.windowTitle = R"({"text":"Furnace"})";
+                        win.slotCount = 3;
+                        win.useProvidedTitle = true;
+                        conn.sendPacket(win.serialize());
+                        break;
+                    }
+                }
+
                 // Adjust position based on face
                 if (player && !heldItem.isEmpty() && x != -1) {
                     int32_t bx = x, bz = z;

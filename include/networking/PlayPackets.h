@@ -953,4 +953,58 @@ struct EffectPacket {
     }
 };
 
+// ============================================================
+// S→C 0x2D Open Window — gs.java
+// ============================================================
+struct OpenWindowPacket {
+    uint8_t windowId;
+    uint8_t inventoryType;  // 1=crafting, 0=chest, 2=furnace, etc.
+    std::string windowTitle;
+    uint8_t slotCount;
+    bool useProvidedTitle = true;
+
+    PacketBuffer serialize() const {
+        PacketBuffer buf;
+        buf.writeVarInt(0x2D); // Packet ID
+        buf.writeByte(windowId);
+        buf.writeByte(inventoryType);
+        buf.writeString(windowTitle);
+        buf.writeByte(slotCount);
+        buf.writeBoolean(useProvidedTitle);
+        return buf;
+    }
+};
+
+// ============================================================
+// S→C 0x2E Close Window — gu.java
+// ============================================================
+struct CloseWindowPacket {
+    uint8_t windowId;
+
+    PacketBuffer serialize() const {
+        PacketBuffer buf;
+        buf.writeVarInt(0x2E); // Packet ID
+        buf.writeByte(windowId);
+        return buf;
+    }
+};
+
+// ============================================================
+// S→C 0x32 Confirm Transaction — gw.java
+// ============================================================
+struct ConfirmTransactionPacket {
+    uint8_t windowId;
+    int16_t actionNumber;
+    bool accepted;
+
+    PacketBuffer serialize() const {
+        PacketBuffer buf;
+        buf.writeVarInt(0x32); // Packet ID
+        buf.writeByte(windowId);
+        buf.writeShort(actionNumber);
+        buf.writeBoolean(accepted);
+        return buf;
+    }
+};
+
 } // namespace mc
