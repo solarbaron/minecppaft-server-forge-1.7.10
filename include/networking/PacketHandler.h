@@ -24,6 +24,7 @@
 #include "command/CommandHandler.h"
 #include "persistence/PlayerDataIO.h"
 #include "physics/Physics.h"
+#include "mechanics/BlockTickHandler.h"
 #include <functional>
 
 namespace mc {
@@ -262,6 +263,48 @@ public:
                 }
             }
         }
+
+        // Random block ticks — every tick for chunks near players
+        if (!players_.empty()) {
+            // Get chunks around first player (simplified: tick 4x4 area)
+            auto& fp = players_.begin()->second;
+            int pcx = static_cast<int>(fp.posX) >> 4;
+            int pcz = static_cast<int>(fp.posZ) >> 4;
+
+            for (int dx = -2; dx <= 2; ++dx) {
+                for (int dz = -2; dz <= 2; ++dz) {
+                    if (world.hasChunk(pcx + dx, pcz + dz)) {
+                        auto& chunk = world.getChunk(pcx + dx, pcz + dz);
+                        auto changes = blockTickHandler_.tickChunk(chunk);
+
+                        // Broadcast block changes
+                        for (auto& change : changes) {
+                            BlockChangePacket bcp;
+                            bcp.x = change.x;
+                            bcp.y = static_cast<uint8_t>(change.y);
+                            bcp.z = change.z;
+                            bcp.blockId = change.blockId;
+                            bcp.metadata = change.meta;
+
+                            for (auto& [fd, conn] : connections) {
+                                if (conn.state() == ConnectionState::Play) {
+                                    conn.sendPacket(bcp.serialize());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Save all world data (call on shutdown)
+    void saveWorld() {
+        world.saveAll();
+        for (auto& [fd, player] : players_) {
+            playerDataIO_.savePlayer(player);
+        }
+        std::cout << "[SERVER] World and player data saved.\n";
     }
 
     void onDisconnect(int fd, std::unordered_map<int, Connection>& connections) {
@@ -312,6 +355,7 @@ private:
     PlayerDataIO playerDataIO_;
     MobSpawner mobSpawner_;
     std::unordered_map<int32_t, MobAIState> mobAIStates_;
+    BlockTickHandler blockTickHandler_;
 
     // Helper: find a connection by fd
     static Connection* findConnection(std::unordered_map<int, Connection>& conns, int fd) {

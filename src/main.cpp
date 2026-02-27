@@ -82,6 +82,7 @@ int main(int argc, char* argv[]) {
     }
 
     std::cout << "\nStopping server...\n";
+    handler.saveWorld();
     server.stop();
     std::cout << "Server stopped.\n";
     return 0;
