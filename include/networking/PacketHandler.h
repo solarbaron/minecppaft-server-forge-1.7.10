@@ -603,18 +603,6 @@ private:
     // === Play join sequence ===
     void sendJoinSequence(Connection& conn, const std::string& playerName,
                           const std::string& uuid) {
-        // Debug helper to log each packet sent
-        auto sendDebug = [&](const PacketBuffer& pkt, const char* label) {
-            auto& d = pkt.data();
-            int pid = (d.size() > 0) ? d[0] : -1;
-            // For VarInt > 127, read 2 bytes
-            if (d.size() > 1 && (d[0] & 0x80)) pid = (d[0] & 0x7F) | (d[1] << 7);
-            std::cout << "[DBG] Sending " << label << " packetId=0x"
-                      << std::hex << pid << std::dec
-                      << " size=" << d.size() << " bytes\n";
-            conn.sendPacket(pkt);
-        };
-
         int32_t eid = nextEntityId_++;
 
         Player player;
@@ -639,18 +627,18 @@ private:
         joinGame.difficulty = 1; // Easy
         joinGame.maxPlayers = static_cast<uint8_t>(maxPlayers);
         joinGame.levelType = "flat";
-        sendDebug(joinGame.serialize(), "JoinGame");
+        conn.sendPacket(joinGame.serialize());
 
         // 2. MC|Brand
         auto brand = PluginMessagePacket::makeBrand("MineCPPaft");
-        sendDebug(brand.serialize(), "MC|Brand");
+        conn.sendPacket(brand.serialize());
 
         // 3. Spawn Position
         SpawnPositionPacket spawnPos;
         spawnPos.x = 0;
         spawnPos.y = 4;
         spawnPos.z = 0;
-        sendDebug(spawnPos.serialize(), "SpawnPosition");
+        conn.sendPacket(spawnPos.serialize());
 
         // 4. Player Abilities
         PlayerAbilitiesPacket abilities;
@@ -660,20 +648,20 @@ private:
         abilities.creativeMode = (player.gameMode == GameMode::Creative);
         abilities.flySpeed = player.flySpeed;
         abilities.walkSpeed = player.walkSpeed;
-        sendDebug(abilities.serialize(), "PlayerAbilities");
+        conn.sendPacket(abilities.serialize());
 
         // 5. Time
         TimeUpdatePacket time;
         time.worldAge = world.worldTime;
         time.timeOfDay = world.dayTime;
-        sendDebug(time.serialize(), "TimeUpdate");
+        conn.sendPacket(time.serialize());
 
         // 6. Chunks around spawn (7x7)
         for (int cx = -3; cx <= 3; ++cx) {
             for (int cz = -3; cz <= 3; ++cz) {
                 auto& chunk = world.getChunk(cx, cz);
                 auto pkt = ChunkDataPacket::fromChunkColumn(chunk, true);
-                sendDebug(pkt.serialize(), "ChunkData");
+                conn.sendPacket(pkt.serialize());
             }
         }
 
@@ -685,7 +673,7 @@ private:
         posLook.yaw = player.yaw;
         posLook.pitch = player.pitch;
         posLook.onGround = false;
-        sendDebug(posLook.serialize(), "PlayerPosLook");
+        conn.sendPacket(posLook.serialize());
 
         // Store player BEFORE broadcasting (so we have the entity ID)
         players_[conn.fd()] = player;
@@ -697,7 +685,7 @@ private:
             invBuf.writeByte(0);      // Window ID 0 = player inventory
             invBuf.writeShort(45);    // 45 slots
             player.inventory.writeAllSlots(invBuf);
-            sendDebug(invBuf, "WindowItems");
+            conn.sendPacket(invBuf);
         }
 
         // 9. Update Health — ib.java
@@ -705,21 +693,21 @@ private:
         hp.health = player.health;
         hp.food = player.foodStats.foodLevel;
         hp.saturation = player.foodStats.saturation;
-        sendDebug(hp.serialize(), "UpdateHealth");
+        conn.sendPacket(hp.serialize());
 
         // 10. Set Experience — ia.java
         SetExperiencePacket xp;
         xp.barProgress = player.experienceProgress;
         xp.level = player.experienceLevel;
         xp.totalExp = player.totalExperience;
-        sendDebug(xp.serialize(), "SetExperience");
+        conn.sendPacket(xp.serialize());
 
         // 11. Player List — add self to tab list
         PlayerListItemPacket selfTab;
         selfTab.playerName = playerName;
         selfTab.online = true;
         selfTab.ping = 0;
-        sendDebug(selfTab.serialize(), "PlayerListSelf");
+        conn.sendPacket(selfTab.serialize());
 
         // 12. Add all existing players to new player's tab list
         for (auto& [otherFd, otherPlayer] : players_) {
@@ -728,7 +716,7 @@ private:
             otherTab.playerName = otherPlayer.name;
             otherTab.online = true;
             otherTab.ping = 50;
-            sendDebug(otherTab.serialize(), "PlayerListOther");
+            conn.sendPacket(otherTab.serialize());
         }
 
         std::cout << "[PLAY] " << playerName << " (eid=" << eid
@@ -737,7 +725,7 @@ private:
         // 13. Send existing mobs
         for (auto& [mobId, mob] : mobSpawner_.mobs()) {
             auto pkt = SpawnMobPacket::fromMob(mob);
-            sendDebug(pkt.serialize(), "SpawnMob");
+            conn.sendPacket(pkt.serialize());
         }
     }
 
