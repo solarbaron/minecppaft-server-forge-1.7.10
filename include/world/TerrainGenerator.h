@@ -20,6 +20,7 @@
 #include <algorithm>
 
 #include "world/Chunk.h"
+#include "world/TreeGenerator.h"
 
 namespace mc {
 
@@ -231,6 +232,9 @@ public:
             }
         }
 
+        // 6. Tree decoration
+        generateTrees(*chunk, cx, cz, heightMap, biomeMap);
+
         return chunk;
     }
 
@@ -393,6 +397,63 @@ private:
                     bz = std::clamp(bz, 0, 15);
                 }
             }
+        }
+    }
+
+    // Tree decoration pass
+    void generateTrees(ChunkColumn& chunk, int cx, int cz,
+                       const std::array<int, 256>& heightMap,
+                       const std::array<BiomeType, 256>& biomeMap) {
+        std::mt19937 treeRng(seed_ ^ (cx * 456789123LL + cz * 321654987LL));
+
+        // Determine tree count by dominant biome
+        BiomeType dominant = biomeMap[8 * 16 + 8]; // Center of chunk
+        int treeCount = 0;
+        switch (dominant) {
+            case BiomeType::FOREST:
+            case BiomeType::ROOFED_FOREST:
+            case BiomeType::BIRCH_FOREST:
+                treeCount = 5 + (treeRng() % 5); break; // 5-9
+            case BiomeType::JUNGLE:
+                treeCount = 8 + (treeRng() % 5); break; // 8-12
+            case BiomeType::TAIGA:
+                treeCount = 4 + (treeRng() % 4); break; // 4-7
+            case BiomeType::PLAINS:
+            case BiomeType::SAVANNA:
+                treeCount = (treeRng() % 3 == 0) ? 1 : 0; break; // 0-1
+            case BiomeType::EXTREME_HILLS:
+                treeCount = 1 + (treeRng() % 3); break; // 1-3
+            case BiomeType::SWAMPLAND:
+                treeCount = 2 + (treeRng() % 3); break; // 2-4
+            default:
+                treeCount = 0; break; // Ocean, desert, beach, etc
+        }
+
+        for (int t = 0; t < treeCount; ++t) {
+            int bx = 2 + (treeRng() % 12); // 2-13 to avoid edge overflow
+            int bz = 2 + (treeRng() % 12);
+            int surfaceY = heightMap[bz * 16 + bx];
+
+            // Only place on land above sea level
+            if (surfaceY <= 63) continue;
+
+            BiomeType localBiome = biomeMap[bz * 16 + bx];
+            TreeType treeType = TreeGenerator::treeForBiome(static_cast<uint8_t>(localBiome));
+
+            auto getBlockFn = [&](int gx, int gy, int gz) -> uint16_t {
+                int lx = gx - cx * 16, lz = gz - cz * 16;
+                if (lx < 0 || lx > 15 || lz < 0 || lz > 15) return 0;
+                return getBlock(chunk, lx, gy, lz);
+            };
+            auto setBlockFn = [&](int gx, int gy, int gz, uint16_t id, uint8_t meta) {
+                int lx = gx - cx * 16, lz = gz - cz * 16;
+                if (lx < 0 || lx > 15 || lz < 0 || lz > 15) return;
+                setBlock(chunk, lx, gy, gz, id, meta);
+            };
+
+            TreeGenerator::generate(treeType,
+                cx * 16 + bx, surfaceY, cz * 16 + bz,
+                treeRng, getBlockFn, setBlockFn);
         }
     }
 
