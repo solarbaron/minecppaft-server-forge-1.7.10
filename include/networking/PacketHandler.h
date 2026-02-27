@@ -28,6 +28,7 @@
 #include "mechanics/EnchantmentRegistry.h"
 #include "world/WeatherManager.h"
 #include "mechanics/RedstoneEngine.h"
+#include "mechanics/Scoreboard.h"
 #include <functional>
 
 namespace mc {
@@ -484,6 +485,7 @@ private:
     BlockTickHandler blockTickHandler_;
     WeatherManager weatherManager_;
     RedstoneEngine redstoneEngine_;
+    Scoreboard scoreboard_;
 
     // Broadcast a packet to all Play-state connections
     static void broadcast(std::unordered_map<int, Connection>& connections,
