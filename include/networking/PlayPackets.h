@@ -504,5 +504,132 @@ struct EntityStatusPacket {
     }
 };
 
-} // namespace mc
+// ============================================================
+// S→C 0x15 Entity Relative Move — gj.java
+// ============================================================
+// Delta position in fixed-point (value * 32)
+struct EntityRelativeMovePacket {
+    int32_t entityId;
+    int8_t dx, dy, dz;  // Fixed-point delta (pixels = blocks * 32)
 
+    PacketBuffer serialize() const {
+        PacketBuffer buf;
+        buf.writeVarInt(0x15); // Packet ID
+        buf.writeVarInt(entityId);
+        buf.writeByte(static_cast<uint8_t>(dx));
+        buf.writeByte(static_cast<uint8_t>(dy));
+        buf.writeByte(static_cast<uint8_t>(dz));
+        return buf;
+    }
+};
+
+// ============================================================
+// S→C 0x16 Entity Look — gi.java
+// ============================================================
+struct EntityLookPacket {
+    int32_t entityId;
+    uint8_t yaw;    // Angle = degrees * 256 / 360
+    uint8_t pitch;
+
+    PacketBuffer serialize() const {
+        PacketBuffer buf;
+        buf.writeVarInt(0x16); // Packet ID
+        buf.writeVarInt(entityId);
+        buf.writeByte(yaw);
+        buf.writeByte(pitch);
+        return buf;
+    }
+
+    static uint8_t toAngle(float degrees) {
+        return static_cast<uint8_t>(static_cast<int>(degrees * 256.0f / 360.0f) & 0xFF);
+    }
+};
+
+// ============================================================
+// S→C 0x17 Entity Look and Relative Move — gk.java
+// ============================================================
+struct EntityLookAndRelativeMovePacket {
+    int32_t entityId;
+    int8_t dx, dy, dz;
+    uint8_t yaw, pitch;
+
+    PacketBuffer serialize() const {
+        PacketBuffer buf;
+        buf.writeVarInt(0x17); // Packet ID
+        buf.writeVarInt(entityId);
+        buf.writeByte(static_cast<uint8_t>(dx));
+        buf.writeByte(static_cast<uint8_t>(dy));
+        buf.writeByte(static_cast<uint8_t>(dz));
+        buf.writeByte(yaw);
+        buf.writeByte(pitch);
+        return buf;
+    }
+};
+
+// ============================================================
+// S→C 0x18 Entity Teleport — gn.java
+// ============================================================
+// Absolute position in fixed-point (value * 32)
+struct EntityTeleportPacket {
+    int32_t entityId;
+    int32_t x, y, z;  // Fixed-point absolute (blocks * 32)
+    uint8_t yaw, pitch;
+
+    PacketBuffer serialize() const {
+        PacketBuffer buf;
+        buf.writeVarInt(0x18); // Packet ID
+        buf.writeVarInt(entityId);
+        buf.writeInt(x);
+        buf.writeInt(y);
+        buf.writeInt(z);
+        buf.writeByte(yaw);
+        buf.writeByte(pitch);
+        return buf;
+    }
+
+    static EntityTeleportPacket fromPlayer(int32_t eid, double px, double py, double pz,
+                                            float yawDeg, float pitchDeg) {
+        EntityTeleportPacket pkt;
+        pkt.entityId = eid;
+        pkt.x = static_cast<int32_t>(px * 32.0);
+        pkt.y = static_cast<int32_t>(py * 32.0);
+        pkt.z = static_cast<int32_t>(pz * 32.0);
+        pkt.yaw = EntityLookPacket::toAngle(yawDeg);
+        pkt.pitch = EntityLookPacket::toAngle(pitchDeg);
+        return pkt;
+    }
+};
+
+// ============================================================
+// S→C 0x19 Entity Head Look — gl.java
+// ============================================================
+struct EntityHeadLookPacket {
+    int32_t entityId;
+    uint8_t headYaw;
+
+    PacketBuffer serialize() const {
+        PacketBuffer buf;
+        buf.writeVarInt(0x19); // Packet ID
+        buf.writeVarInt(entityId);
+        buf.writeByte(headYaw);
+        return buf;
+    }
+};
+
+// ============================================================
+// S→C 0x0B Animation — ge.java
+// ============================================================
+struct AnimationPacket {
+    int32_t entityId;
+    uint8_t animation; // 0=swing arm, 1=take damage, 2=leave bed, 3=eat, 4=crit, 5=magic crit
+
+    PacketBuffer serialize() const {
+        PacketBuffer buf;
+        buf.writeVarInt(0x0B); // Packet ID
+        buf.writeVarInt(entityId);
+        buf.writeByte(animation);
+        return buf;
+    }
+};
+
+} // namespace mc

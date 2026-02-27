@@ -42,6 +42,7 @@ int main(int argc, char* argv[]) {
     }
 
     mc::PacketHandler handler;
+    handler.setConnections(&server.connections());
 
     std::cout << "Server running. Press Ctrl+C to stop.\n";
 

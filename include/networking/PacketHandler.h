@@ -124,9 +124,13 @@ public:
 
     const std::unordered_map<int, Player>& players() const { return players_; }
 
+    // Set connections reference for movement/animation broadcast
+    void setConnections(std::unordered_map<int, Connection>* conns) { connections_ = conns; }
+
 private:
     std::unordered_map<int, Player> players_;
     std::atomic<int32_t> nextEntityId_{1};
+    std::unordered_map<int, Connection>* connections_ = nullptr;
 
     // === Handshake (state -1) ===
     void handleHandshake(Connection& conn, int32_t packetId, PacketBuffer& buf) {
@@ -321,6 +325,26 @@ private:
                   << ") joined the game\n";
     }
 
+    // Helper: broadcast entity movement to all other play-state connections
+    void broadcastMovement(const Player& player) {
+        if (!connections_) return;
+
+        auto tp = EntityTeleportPacket::fromPlayer(
+            player.entityId, player.posX, player.posY, player.posZ,
+            player.yaw, player.pitch);
+
+        EntityHeadLookPacket headLook;
+        headLook.entityId = player.entityId;
+        headLook.headYaw = EntityLookPacket::toAngle(player.yaw);
+
+        for (auto& [fd, conn] : *connections_) {
+            if (fd != player.connectionFd && conn.state() == ConnectionState::Play) {
+                conn.sendPacket(tp.serialize());
+                conn.sendPacket(headLook.serialize());
+            }
+        }
+    }
+
     // === Play (state 0) ===
     void handlePlay(Connection& conn, int32_t packetId, PacketBuffer& buf) {
         auto it = players_.find(conn.fd());
@@ -337,6 +361,10 @@ private:
                 std::string message = buf.readString(100);
                 if (player) {
                     std::cout << "[CHAT] <" << player->name << "> " << message << "\n";
+                    // Broadcast chat to all
+                    if (connections_) {
+                        broadcastChat(player->name, message, *connections_);
+                    }
                 }
                 break;
             }
@@ -353,6 +381,7 @@ private:
                     buf.readDouble(); // headY
                     player->posZ = buf.readDouble();
                     player->onGround = buf.readBoolean();
+                    broadcastMovement(*player);
                 }
                 break;
             }
@@ -362,6 +391,7 @@ private:
                     player->yaw = buf.readFloat();
                     player->pitch = buf.readFloat();
                     player->onGround = buf.readBoolean();
+                    broadcastMovement(*player);
                 }
                 break;
             }
@@ -375,6 +405,7 @@ private:
                     player->yaw = buf.readFloat();
                     player->pitch = buf.readFloat();
                     player->onGround = buf.readBoolean();
+                    broadcastMovement(*player);
                 }
                 break;
             }
@@ -435,9 +466,19 @@ private:
                 break;
             }
             case 0x0A: {
-                // C→S Animation
-                buf.readVarInt();
-                buf.readByte();
+                // C→S Animation — broadcast to other players
+                buf.readVarInt(); // entityId (unused in C→S)
+                buf.readByte();   // animation
+                if (player && connections_) {
+                    AnimationPacket anim;
+                    anim.entityId = player->entityId;
+                    anim.animation = 0; // swing arm
+                    for (auto& [fd, c] : *connections_) {
+                        if (fd != conn.fd() && c.state() == ConnectionState::Play) {
+                            c.sendPacket(anim.serialize());
+                        }
+                    }
+                }
                 break;
             }
             case 0x10: {
