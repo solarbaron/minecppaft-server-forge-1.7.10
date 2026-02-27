@@ -27,6 +27,7 @@
 #include "mechanics/BlockTickHandler.h"
 #include "mechanics/EnchantmentRegistry.h"
 #include "world/WeatherManager.h"
+#include "mechanics/RedstoneEngine.h"
 #include <functional>
 
 namespace mc {
@@ -398,6 +399,29 @@ public:
                 }
             }
         }
+
+        // Redstone scheduled ticks (repeater delays, button deactivation)
+        {
+            auto getBlock = [this](int bx, int by, int bz) -> uint16_t {
+                return world.getBlock(bx, by, bz);
+            };
+            auto getMeta = [this](int bx, int by, int bz) -> uint8_t {
+                return world.getBlockMeta(bx, by, bz);
+            };
+            auto setBlockFn = [this](int bx, int by, int bz, uint16_t bid, uint8_t bm) {
+                world.setBlock(bx, by, bz, bid, bm);
+            };
+            auto rsChanges = redstoneEngine_.tickScheduled(getBlock, getMeta, setBlockFn);
+            for (auto& change : rsChanges) {
+                BlockChangePacket bcp;
+                bcp.x = change.x;
+                bcp.y = change.y;
+                bcp.z = change.z;
+                bcp.blockId = change.blockId;
+                bcp.metadata = change.meta;
+                broadcast(connections, bcp.serialize());
+            }
+        }
     }
 
     // Save all world data (call on shutdown)
@@ -459,6 +483,7 @@ private:
     std::unordered_map<int32_t, MobAIState> mobAIStates_;
     BlockTickHandler blockTickHandler_;
     WeatherManager weatherManager_;
+    RedstoneEngine redstoneEngine_;
 
     // Broadcast a packet to all Play-state connections
     static void broadcast(std::unordered_map<int, Connection>& connections,

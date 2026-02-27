@@ -80,6 +80,17 @@ public:
         return it->second->getBlock(x & 0xF, y, z & 0xF);
     }
 
+    // Get block metadata at world coordinates
+    uint8_t getBlockMeta(int x, int y, int z) const {
+        int cx = x >> 4;
+        int cz = z >> 4;
+        auto it = chunks_.find(std::make_pair(cx, cz));
+        if (it == chunks_.end()) return 0;
+        int sy = y >> 4;
+        if (sy < 0 || sy >= 16 || !it->second->sections[sy]) return 0;
+        return it->second->sections[sy]->getMetadata(x & 0xF, y & 0xF, z & 0xF);
+    }
+
     // Set block at world coordinates
     void setBlock(int x, int y, int z, uint16_t blockId, uint8_t meta = 0) {
         int cx = x >> 4;
