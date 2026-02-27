@@ -1046,4 +1046,35 @@ struct RemoveEntityEffectPacket {
     }
 };
 
+// ============================================================
+// S→C 0x2C Spawn Global Entity — lightning bolt
+// Reference: fx.java (S2CPacketSpawnGlobalEntity)
+// ============================================================
+struct SpawnGlobalEntityPacket {
+    int32_t entityId;
+    int8_t type;       // 1 = lightning bolt
+    int32_t x, y, z;   // Fixed-point (1/32 blocks)
+
+    static SpawnGlobalEntityPacket lightning(int32_t eid, double px, double py, double pz) {
+        SpawnGlobalEntityPacket pkt;
+        pkt.entityId = eid;
+        pkt.type = 1;
+        pkt.x = static_cast<int32_t>(px * 32.0);
+        pkt.y = static_cast<int32_t>(py * 32.0);
+        pkt.z = static_cast<int32_t>(pz * 32.0);
+        return pkt;
+    }
+
+    PacketBuffer serialize() const {
+        PacketBuffer buf;
+        buf.writeVarInt(0x2C); // Packet ID
+        buf.writeVarInt(entityId);
+        buf.writeByte(type);
+        buf.writeInt(x);
+        buf.writeInt(y);
+        buf.writeInt(z);
+        return buf;
+    }
+};
+
 } // namespace mc

@@ -26,6 +26,7 @@
 #include "physics/Physics.h"
 #include "mechanics/BlockTickHandler.h"
 #include "mechanics/EnchantmentRegistry.h"
+#include "world/WeatherManager.h"
 #include <functional>
 
 namespace mc {
@@ -200,6 +201,59 @@ public:
                         conn2.sendPacket(pkt.serialize());
                     }
                 }
+            }
+        }
+
+        // Weather tick
+        WeatherState prevState = weatherManager_.state();
+        int32_t weatherEntityId = nextEntityId_.load();
+        bool weatherChanged = weatherManager_.tick(&weatherEntityId);
+        nextEntityId_.store(weatherEntityId);
+
+        if (weatherChanged) {
+            WeatherState newState = weatherManager_.state();
+
+            // Broadcast rain state change
+            if (prevState == WeatherState::CLEAR && newState != WeatherState::CLEAR) {
+                ChangeGameStatePacket pkt;
+                pkt.reason = 1; // Begin raining
+                pkt.value = 0;
+                broadcast(connections, pkt.serialize());
+            } else if (prevState != WeatherState::CLEAR && newState == WeatherState::CLEAR) {
+                ChangeGameStatePacket pkt;
+                pkt.reason = 2; // End raining
+                pkt.value = 0;
+                broadcast(connections, pkt.serialize());
+            }
+
+            // Broadcast rain/thunder levels every 20 ticks
+            if (world.worldTime % 20 == 0) {
+                ChangeGameStatePacket rainLvl;
+                rainLvl.reason = 7; // Rain level
+                rainLvl.value = weatherManager_.rainStrength();
+                broadcast(connections, rainLvl.serialize());
+
+                ChangeGameStatePacket thunderLvl;
+                thunderLvl.reason = 8; // Thunder level
+                thunderLvl.value = weatherManager_.thunderStrength();
+                broadcast(connections, thunderLvl.serialize());
+            }
+
+            // Broadcast lightning bolts
+            for (auto& bolt : weatherManager_.pendingLightning()) {
+                auto pkt = SpawnGlobalEntityPacket::lightning(
+                    bolt.entityId, bolt.x, bolt.y, bolt.z);
+                broadcast(connections, pkt.serialize());
+
+                // Play thunder sound
+                NamedSoundEffectPacket sound;
+                sound.soundName = "ambient.weather.thunder";
+                sound.x = static_cast<int32_t>(bolt.x * 8.0);
+                sound.y = static_cast<int32_t>(bolt.y * 8.0);
+                sound.z = static_cast<int32_t>(bolt.z * 8.0);
+                sound.volume = 10000.0f;
+                sound.pitch = 63;
+                broadcast(connections, sound.serialize());
             }
         }
 
@@ -404,6 +458,17 @@ private:
     MobSpawner mobSpawner_;
     std::unordered_map<int32_t, MobAIState> mobAIStates_;
     BlockTickHandler blockTickHandler_;
+    WeatherManager weatherManager_;
+
+    // Broadcast a packet to all Play-state connections
+    static void broadcast(std::unordered_map<int, Connection>& connections,
+                          const PacketBuffer& pkt) {
+        for (auto& [fd, conn] : connections) {
+            if (conn.state() == ConnectionState::Play) {
+                conn.sendPacket(pkt);
+            }
+        }
+    }
 
     // Helper: find a connection by fd
     static Connection* findConnection(std::unordered_map<int, Connection>& conns, int fd) {
