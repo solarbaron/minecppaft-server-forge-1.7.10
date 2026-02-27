@@ -1077,4 +1077,178 @@ struct SpawnGlobalEntityPacket {
     }
 };
 
+// ============================================================
+// S→C 0x31 Window Property — iw.java
+// ============================================================
+struct WindowPropertyPacket {
+    uint8_t windowId;
+    int16_t property;
+    int16_t value;
+
+    PacketBuffer serialize() const {
+        PacketBuffer buf;
+        buf.writeVarInt(0x31);
+        buf.writeByte(windowId);
+        buf.writeShort(property);
+        buf.writeShort(value);
+        return buf;
+    }
+
+    // Furnace properties
+    static constexpr int16_t FURNACE_COOK_PROGRESS = 0;
+    static constexpr int16_t FURNACE_FUEL_LEFT     = 1;
+    static constexpr int16_t FURNACE_MAX_FUEL      = 2;
+
+    // Enchantment table
+    static constexpr int16_t ENCHANT_SLOT_1 = 0;
+    static constexpr int16_t ENCHANT_SLOT_2 = 1;
+    static constexpr int16_t ENCHANT_SLOT_3 = 2;
+
+    // Beacon
+    static constexpr int16_t BEACON_POWER   = 0;
+    static constexpr int16_t BEACON_EFFECT1 = 1;
+    static constexpr int16_t BEACON_EFFECT2 = 2;
+};
+
+// ============================================================
+// S→C 0x34 Map Data — ix.java (S34PacketMaps)
+// ============================================================
+struct MapDataPacket {
+    int32_t mapId;      // VarInt — map item damage value
+    uint8_t scale;      // 0-4, world blocks per pixel (2^scale)
+
+    // Map icons (player markers, etc.)
+    struct Icon {
+        uint8_t directionAndType; // Upper 4 = direction (0-15), lower 4 = type (0-15)
+        int8_t  x;    // -128 to 127
+        int8_t  z;
+    };
+    std::vector<Icon> icons;
+
+    // Column update (partial map data)
+    uint8_t columns;    // Number of columns to update (0 = icons only)
+    uint8_t rows;
+    uint8_t xOffset;
+    uint8_t zOffset;
+    std::vector<uint8_t> data; // Color indices (columns * rows bytes)
+
+    PacketBuffer serialize() const {
+        PacketBuffer buf;
+        buf.writeVarInt(0x34);
+        buf.writeVarInt(mapId);
+        buf.writeShort(static_cast<int16_t>(data.size() + 3 + icons.size() * 3 + 1));
+
+        // Scale
+        buf.writeByte(scale);
+
+        // Icons
+        buf.writeVarInt(static_cast<int32_t>(icons.size()));
+        for (auto& icon : icons) {
+            buf.writeByte(icon.directionAndType);
+            buf.writeByte(static_cast<uint8_t>(icon.x));
+            buf.writeByte(static_cast<uint8_t>(icon.z));
+        }
+
+        // Column data
+        buf.writeByte(columns);
+        if (columns > 0) {
+            buf.writeByte(rows);
+            buf.writeByte(xOffset);
+            buf.writeByte(zOffset);
+            buf.writeVarInt(static_cast<int32_t>(data.size()));
+            for (auto b : data) {
+                buf.writeByte(b);
+            }
+        }
+
+        return buf;
+    }
+
+    // Icon type constants
+    static constexpr uint8_t ICON_WHITE_ARROW   = 0;
+    static constexpr uint8_t ICON_GREEN_ARROW   = 1;
+    static constexpr uint8_t ICON_RED_ARROW     = 2;
+    static constexpr uint8_t ICON_BLUE_ARROW    = 3;
+    static constexpr uint8_t ICON_WHITE_CROSS   = 4;
+    static constexpr uint8_t ICON_RED_POINTER   = 5;
+    static constexpr uint8_t ICON_WHITE_CIRCLE  = 6;
+
+    // Factory for full map update
+    static MapDataPacket fullUpdate(int32_t id, uint8_t mapScale,
+                                     const std::vector<uint8_t>& pixels) {
+        MapDataPacket pkt;
+        pkt.mapId = id;
+        pkt.scale = mapScale;
+        pkt.columns = 128;
+        pkt.rows = 128;
+        pkt.xOffset = 0;
+        pkt.zOffset = 0;
+        pkt.data = pixels;
+        return pkt;
+    }
+
+    // Factory for icons-only update
+    static MapDataPacket iconsOnly(int32_t id, uint8_t mapScale,
+                                    const std::vector<Icon>& mapIcons) {
+        MapDataPacket pkt;
+        pkt.mapId = id;
+        pkt.scale = mapScale;
+        pkt.icons = mapIcons;
+        pkt.columns = 0;
+        pkt.rows = 0;
+        pkt.xOffset = 0;
+        pkt.zOffset = 0;
+        return pkt;
+    }
+};
+
+// ============================================================
+// Map color palette — vanilla 1.7.10 base colors (4 shades each)
+// ============================================================
+namespace MapColor {
+    // Base color IDs (multiply by 4 to get first shade)
+    constexpr uint8_t NONE       = 0;   // Transparent
+    constexpr uint8_t GRASS      = 1;   // #7FB238
+    constexpr uint8_t SAND       = 2;   // #F7E9A3
+    constexpr uint8_t CLOTH      = 3;   // #C7C7C7 (wool)
+    constexpr uint8_t TNT        = 4;   // #FF0000
+    constexpr uint8_t ICE        = 5;   // #A0A0FF
+    constexpr uint8_t IRON       = 6;   // #A7A7A7
+    constexpr uint8_t FOLIAGE    = 7;   // #007C00
+    constexpr uint8_t SNOW       = 8;   // #FFFFFF
+    constexpr uint8_t CLAY       = 9;   // #A4A8B8
+    constexpr uint8_t DIRT       = 10;  // #976D4D
+    constexpr uint8_t STONE      = 11;  // #707070
+    constexpr uint8_t WATER      = 12;  // #4040FF
+    constexpr uint8_t WOOD       = 13;  // #8F7748
+    constexpr uint8_t QUARTZ     = 14;  // #FFFCF5
+    constexpr uint8_t ADOBE      = 15;  // #D87F33
+    constexpr uint8_t MAGENTA    = 16;  // #B24CD8
+    constexpr uint8_t LIGHT_BLUE = 17;  // #6699D8
+    constexpr uint8_t YELLOW     = 18;  // #E5E533
+    constexpr uint8_t LIME       = 19;  // #7FCC19
+    constexpr uint8_t PINK       = 20;  // #F27FA5
+    constexpr uint8_t GRAY       = 21;  // #4C4C4C
+    constexpr uint8_t SILVER     = 22;  // #999999
+    constexpr uint8_t CYAN       = 23;  // #4C7F99
+    constexpr uint8_t PURPLE     = 24;  // #7F3FB2
+    constexpr uint8_t BLUE       = 25;  // #334CB2
+    constexpr uint8_t BROWN      = 26;  // #664C33
+    constexpr uint8_t GREEN      = 27;  // #667F33
+    constexpr uint8_t RED        = 28;  // #993333
+    constexpr uint8_t BLACK      = 29;  // #191919
+    constexpr uint8_t GOLD       = 30;  // #FAEE4D
+    constexpr uint8_t DIAMOND    = 31;  // #5CDBD5
+    constexpr uint8_t LAPIS      = 32;  // #4A80FF
+    constexpr uint8_t EMERALD    = 33;  // #00D93A
+    constexpr uint8_t PODZOL     = 34;  // #815631
+    constexpr uint8_t NETHER     = 35;  // #700200
+
+    // Shade multiplier: shade 0 = 180/255, shade 1 = 220/255, shade 2 = 255/255, shade 3 = 135/255
+    inline uint8_t makeColor(uint8_t baseColor, uint8_t shade) {
+        return static_cast<uint8_t>(baseColor * 4 + shade);
+    }
+}
+
 } // namespace mc
+
