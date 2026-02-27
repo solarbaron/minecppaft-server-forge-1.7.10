@@ -22,6 +22,7 @@
 #include "world/Chunk.h"
 #include "world/TreeGenerator.h"
 #include "world/StructureGenerator.h"
+#include "world/LightEngine.h"
 
 namespace mc {
 
