@@ -408,7 +408,7 @@ struct UpdateHealthPacket {
         PacketBuffer buf;
         buf.writeVarInt(0x06); // Packet ID
         buf.writeFloat(health);
-        buf.writeVarInt(food);
+        buf.writeShort(static_cast<int16_t>(food)); // Protocol 5: Short, not VarInt
         buf.writeFloat(saturation);
         return buf;
     }
@@ -419,15 +419,15 @@ struct UpdateHealthPacket {
 // ============================================================
 struct SetExperiencePacket {
     float barProgress;   // 0.0-1.0
-    int32_t level;
-    int32_t totalExp;
+    int16_t level;
+    int16_t totalExp;
 
     PacketBuffer serialize() const {
         PacketBuffer buf;
         buf.writeVarInt(0x1F); // Packet ID
         buf.writeFloat(barProgress);
-        buf.writeVarInt(level);
-        buf.writeVarInt(totalExp);
+        buf.writeShort(level);     // Protocol 5: Short, not VarInt
+        buf.writeShort(totalExp);  // Protocol 5: Short, not VarInt
         return buf;
     }
 };
