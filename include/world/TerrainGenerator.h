@@ -21,6 +21,7 @@
 
 #include "world/Chunk.h"
 #include "world/TreeGenerator.h"
+#include "world/StructureGenerator.h"
 
 namespace mc {
 
@@ -234,6 +235,22 @@ public:
 
         // 6. Tree decoration
         generateTrees(*chunk, cx, cz, heightMap, biomeMap);
+
+        // 7. Structure generation (dungeons, mineshafts)
+        {
+            auto getBlockWorld = [&](int gx, int gy, int gz) -> uint16_t {
+                int lx = gx - cx * 16, lz = gz - cz * 16;
+                if (lx < 0 || lx > 15 || lz < 0 || lz > 15 || gy < 0 || gy > 255) return 1;
+                return getBlock(*chunk, lx, gy, lz);
+            };
+            auto setBlockWorld = [&](int gx, int gy, int gz, uint16_t id, uint8_t meta) {
+                int lx = gx - cx * 16, lz = gz - cz * 16;
+                if (lx < 0 || lx > 15 || lz < 0 || lz > 15 || gy < 0 || gy > 255) return;
+                setBlock(*chunk, lx, gy, gz, id, meta);
+            };
+            StructureGenerator::generateDungeons(cx, cz, seed_, getBlockWorld, setBlockWorld);
+            StructureGenerator::generateMineshafts(cx, cz, seed_, getBlockWorld, setBlockWorld);
+        }
 
         return chunk;
     }
