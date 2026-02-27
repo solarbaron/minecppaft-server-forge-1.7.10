@@ -19,6 +19,7 @@
 #include "networking/PlayPackets.h"
 #include "entity/Player.h"
 #include "entity/MobEntity.h"
+#include "entity/MobAI.h"
 #include "world/World.h"
 #include "command/CommandHandler.h"
 #include "persistence/PlayerDataIO.h"
@@ -188,6 +189,79 @@ public:
                 }
             }
         }
+
+        // Mob AI tick — every 2 ticks for performance
+        if (world.worldTime % 2 == 0 && !players_.empty()) {
+            // Build player position list for AI
+            std::vector<std::tuple<int32_t,double,double,double>> playerPositions;
+            for (auto& [fd, p] : players_) {
+                playerPositions.emplace_back(p.entityId, p.posX, p.posY, p.posZ);
+            }
+
+            // Tick each mob's AI
+            for (auto& [mobId, mob] : mobSpawner_.mobs()) {
+                auto& aiState = mobAIStates_[mobId];
+                auto result = MobAI::tick(mob, aiState, playerPositions);
+
+                // Broadcast movement
+                if (result.moved) {
+                    auto tp = EntityTeleportPacket::fromPlayer(
+                        mob.entityId, mob.posX, mob.posY, mob.posZ,
+                        mob.yaw, mob.pitch);
+
+                    EntityHeadLookPacket headLook;
+                    headLook.entityId = mob.entityId;
+                    headLook.headYaw = EntityLookPacket::toAngle(mob.yaw);
+
+                    for (auto& [fd, conn] : connections) {
+                        if (conn.state() == ConnectionState::Play) {
+                            conn.sendPacket(tp.serialize());
+                            conn.sendPacket(headLook.serialize());
+                        }
+                    }
+                }
+
+                // Handle mob attacks on players
+                if (result.attacked && result.attackedPlayerId >= 0) {
+                    for (auto& [fd, p] : players_) {
+                        if (p.entityId == result.attackedPlayerId) {
+                            p.health -= result.attackDamage;
+                            if (p.health < 0) p.health = 0;
+
+                            // Send damage animation
+                            AnimationPacket anim;
+                            anim.entityId = p.entityId;
+                            anim.animation = 1; // Swing arm / take damage
+                            for (auto& [fd2, conn2] : connections) {
+                                if (conn2.state() == ConnectionState::Play) {
+                                    conn2.sendPacket(anim.serialize());
+                                }
+                            }
+
+                            // Send updated health to victim
+                            auto* victimConn = findConnection(connections, fd);
+                            if (victimConn) {
+                                UpdateHealthPacket hp;
+                                hp.health = p.health;
+                                hp.food = p.foodStats.foodLevel;
+                                hp.saturation = p.foodStats.saturation;
+                                victimConn->sendPacket(hp.serialize());
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // Clean up AI states for deleted mobs
+            for (auto it = mobAIStates_.begin(); it != mobAIStates_.end(); ) {
+                if (mobSpawner_.mobs().count(it->first) == 0) {
+                    it = mobAIStates_.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
     }
 
     void onDisconnect(int fd, std::unordered_map<int, Connection>& connections) {
@@ -237,6 +311,13 @@ private:
     CommandHandler commandHandler_;
     PlayerDataIO playerDataIO_;
     MobSpawner mobSpawner_;
+    std::unordered_map<int32_t, MobAIState> mobAIStates_;
+
+    // Helper: find a connection by fd
+    static Connection* findConnection(std::unordered_map<int, Connection>& conns, int fd) {
+        auto it = conns.find(fd);
+        return it != conns.end() ? &it->second : nullptr;
+    }
 
     // Generate offline UUID from player name — simplified UUID v3 approach
     // Vanilla uses UUID.nameUUIDFromBytes("OfflinePlayer:" + name)
