@@ -18,6 +18,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_SOURCE_DIR}/include
 )
 
-# Future: threading, networking (asio), zlib, etc.
+# Future: threading, networking (asio), OpenSSL, etc.
 find_package(Threads REQUIRED)
-target_link_libraries(${PROJECT_NAME} PRIVATE Threads::Threads)
+find_package(ZLIB REQUIRED)
+target_link_libraries(${PROJECT_NAME} PRIVATE Threads::Threads ZLIB::ZLIB)

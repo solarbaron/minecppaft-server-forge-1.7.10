@@ -8,7 +8,10 @@
 #include <cstdint>
 #include <vector>
 #include <cstring>
+#include <stdexcept>
+#include <zlib.h>
 #include "networking/PacketBuffer.h"
+#include "world/Chunk.h"
 
 namespace mc {
 
@@ -129,10 +132,34 @@ struct ChunkDataPacket {
         pkt.groundUpContinuous = true;
         pkt.primaryBitmap = 0;
         pkt.addBitmap = 0;
-        // Empty zlib stream: just the zlib header for empty deflate
-        // In MC 1.7.10, even an "unload" needs a valid compressed payload
-        // with 0 sections. Minimal valid zlib: 78 9C 03 00 00 00 00 01
+        // Empty zlib stream for empty chunk
         pkt.compressedData = {0x78, 0x9C, 0x03, 0x00, 0x00, 0x00, 0x00, 0x01};
+        return pkt;
+    }
+
+    // Create from a ChunkColumn with real block data, zlib-compressed
+    static ChunkDataPacket fromChunkColumn(const ChunkColumn& col, bool groundUp) {
+        auto serialized = col.serialize(groundUp);
+
+        // Zlib compress the raw chunk data
+        uLongf compBound = compressBound(static_cast<uLong>(serialized.data.size()));
+        std::vector<uint8_t> compressed(compBound);
+        int ret = compress2(compressed.data(), &compBound,
+                            serialized.data.data(),
+                            static_cast<uLong>(serialized.data.size()),
+                            Z_DEFAULT_COMPRESSION);
+        if (ret != Z_OK) {
+            throw std::runtime_error("zlib compress failed for chunk data");
+        }
+        compressed.resize(compBound);
+
+        ChunkDataPacket pkt;
+        pkt.chunkX = col.chunkX;
+        pkt.chunkZ = col.chunkZ;
+        pkt.groundUpContinuous = groundUp;
+        pkt.primaryBitmap = serialized.primaryBitmap;
+        pkt.addBitmap = serialized.addBitmap;
+        pkt.compressedData = std::move(compressed);
         return pkt;
     }
 };

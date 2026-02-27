@@ -205,12 +205,12 @@ private:
         abilities.walkSpeed = 0.1f;
         conn.sendPacket(abilities.serialize());
 
-        // 5. Send empty chunks around spawn (7x7 grid = 49 chunks)
-        // The client needs chunk data before it shows the world
+        // 5. Send flat world chunks around spawn (7x7 grid = 49 chunks)
         for (int cx = -3; cx <= 3; ++cx) {
             for (int cz = -3; cz <= 3; ++cz) {
-                auto chunk = ChunkDataPacket::makeUnload(cx, cz);
-                conn.sendPacket(chunk.serialize());
+                auto chunk = generateFlatChunk(cx, cz);
+                auto pkt = ChunkDataPacket::fromChunkColumn(*chunk, true);
+                conn.sendPacket(pkt.serialize());
             }
         }
 
