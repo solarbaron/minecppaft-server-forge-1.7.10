@@ -29,6 +29,7 @@
 #include "world/WeatherManager.h"
 #include "mechanics/RedstoneEngine.h"
 #include "mechanics/Scoreboard.h"
+#include "mechanics/PistonHandler.h"
 #include <functional>
 
 namespace mc {
