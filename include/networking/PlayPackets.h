@@ -12,6 +12,7 @@
 #include <zlib.h>
 #include "networking/PacketBuffer.h"
 #include "world/Chunk.h"
+#include "inventory/ItemStack.h"
 
 namespace mc {
 
@@ -318,6 +319,79 @@ struct ChatMessagePacket {
         ChatMessagePacket pkt;
         pkt.jsonText = R"({"translate":"chat.type.text","with":[")" + player + R"(",")" + message + R"("]})";
         return pkt;
+    }
+};
+
+// ============================================================
+// S→C 0x2F Set Slot
+// ============================================================
+// Updates a single slot in a window
+struct SetSlotPacket {
+    int8_t windowId;   // 0 = player inventory
+    int16_t slotIndex;
+    ItemStack item;
+
+    PacketBuffer serialize() const {
+        PacketBuffer buf;
+        buf.writeVarInt(0x2F); // Packet ID
+        buf.writeByte(static_cast<uint8_t>(windowId));
+        buf.writeShort(slotIndex);
+        item.writeToPacket(buf);
+        return buf;
+    }
+};
+
+// ============================================================
+// S→C 0x30 Window Items
+// ============================================================
+// Sends entire window contents
+struct WindowItemsPacket {
+    int8_t windowId;
+    std::vector<ItemStack> items;
+
+    PacketBuffer serialize() const {
+        PacketBuffer buf;
+        buf.writeVarInt(0x30); // Packet ID
+        buf.writeByte(static_cast<uint8_t>(windowId));
+        buf.writeShort(static_cast<int16_t>(items.size()));
+        for (auto& item : items) {
+            item.writeToPacket(buf);
+        }
+        return buf;
+    }
+};
+
+// ============================================================
+// S→C 0x09 Held Item Change
+// ============================================================
+struct HeldItemChangePacket {
+    int8_t slot; // 0-8
+
+    PacketBuffer serialize() const {
+        PacketBuffer buf;
+        buf.writeVarInt(0x09); // Packet ID
+        buf.writeByte(static_cast<uint8_t>(slot));
+        return buf;
+    }
+};
+
+// ============================================================
+// S→C 0x23 Block Change
+// ============================================================
+struct BlockChangePacket {
+    int32_t x, y, z;
+    int32_t blockId;   // VarInt
+    uint8_t metadata;
+
+    PacketBuffer serialize() const {
+        PacketBuffer buf;
+        buf.writeVarInt(0x23); // Packet ID
+        buf.writeInt(x);
+        buf.writeByte(static_cast<uint8_t>(y));
+        buf.writeInt(z);
+        buf.writeVarInt(blockId);
+        buf.writeByte(metadata);
+        return buf;
     }
 };
 

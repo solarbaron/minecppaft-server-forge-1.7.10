@@ -271,19 +271,26 @@ private:
         // Store player BEFORE broadcasting (so we have the entity ID)
         players_[conn.fd()] = player;
 
+        // 8. Send player inventory contents
+        {
+            PacketBuffer invBuf;
+            invBuf.writeVarInt(0x30); // Window Items
+            invBuf.writeByte(0);      // Window ID 0 = player inventory
+            invBuf.writeShort(45);    // 45 slots
+            player.inventory.writeAllSlots(invBuf);
+            conn.sendPacket(invBuf);
+        }
+
         std::cout << "[PLAY] " << playerName << " (eid=" << eid
                   << ") joined the game\n";
 
-        // 8. Broadcast join message to all players
+        // 9. Broadcast join message to all players
         auto joinMsg = ChatMessagePacket::makeText(
             "\u00a7e" + playerName + " joined the game");
 
-        // 9. Spawn existing players for the new player, and new player for existing
+        // 10. Spawn existing players for the new player, and new player for existing
         for (auto& [otherFd, otherPlayer] : players_) {
             if (otherFd == conn.fd()) continue;
-
-            // Send SpawnPlayer of the new player to existing players
-            // (need access to connection — done via fd lookup in caller)
         }
     }
 
@@ -303,7 +310,6 @@ private:
                 std::string message = buf.readString(100);
                 if (player) {
                     std::cout << "[CHAT] <" << player->name << "> " << message << "\n";
-                    // Broadcast handled by caller via broadcastChat()
                 }
                 break;
             }
@@ -345,10 +351,79 @@ private:
                 }
                 break;
             }
+            case 0x07: {
+                // C→S Player Digging
+                int8_t status = static_cast<int8_t>(buf.readByte());
+                int32_t x = buf.readInt();
+                uint8_t y = buf.readByte();
+                int32_t z = buf.readInt();
+                uint8_t face = buf.readByte();
+                (void)face;
+
+                // Status 2 = finished digging (block breaks)
+                if (status == 2 && player) {
+                    world.setBlock(x, y, z, BlockID::AIR);
+                    // Send block change to all players later via broadcast
+                }
+                break;
+            }
+            case 0x08: {
+                // C→S Block Placement
+                int32_t x = buf.readInt();
+                uint8_t y = buf.readByte();
+                int32_t z = buf.readInt();
+                uint8_t face = buf.readByte();
+                auto heldItem = ItemStack::readFromPacket(buf);
+                buf.readByte(); // cursorX
+                buf.readByte(); // cursorY
+                buf.readByte(); // cursorZ
+                (void)heldItem;
+
+                // Adjust position based on face
+                if (player && !heldItem.isEmpty() && x != -1) {
+                    int32_t bx = x, bz = z;
+                    int32_t by = static_cast<int32_t>(y);
+                    switch (face) {
+                        case 0: --by; break; // Bottom
+                        case 1: ++by; break; // Top
+                        case 2: --bz; break; // North
+                        case 3: ++bz; break; // South
+                        case 4: --bx; break; // West
+                        case 5: ++bx; break; // East
+                        default: break;
+                    }
+                    // Place block if the held item is a block (ID < 256)
+                    if (heldItem.itemId > 0 && heldItem.itemId < 256) {
+                        world.setBlock(bx, by, bz, static_cast<uint16_t>(heldItem.itemId));
+                    }
+                }
+                break;
+            }
+            case 0x09: {
+                // C→S Held Item Change
+                int16_t slot = buf.readShort();
+                if (player && slot >= 0 && slot < 9) {
+                    player->inventory.currentSlot = static_cast<int8_t>(slot);
+                }
+                break;
+            }
             case 0x0A: {
                 // C→S Animation
                 buf.readVarInt();
                 buf.readByte();
+                break;
+            }
+            case 0x10: {
+                // C→S Creative Inventory Action
+                int16_t slotNum = buf.readShort();
+                auto clickedItem = ItemStack::readFromPacket(buf);
+                if (player) {
+                    if (clickedItem.isEmpty()) {
+                        player->inventory.setWindowSlot(slotNum, std::nullopt);
+                    } else {
+                        player->inventory.setWindowSlot(slotNum, clickedItem);
+                    }
+                }
                 break;
             }
             case 0x15: {

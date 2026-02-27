@@ -13,6 +13,7 @@
 #include <chrono>
 #include <array>
 #include "nbt/NBT.h"
+#include "inventory/Inventory.h"
 
 namespace mc {
 
@@ -76,6 +77,9 @@ struct Player {
     // Dimension
     int8_t dimension = 0;  // 0=overworld, -1=nether, 1=end
 
+    // Inventory
+    Inventory inventory;
+
     // Inventory — 36 main + 4 armor + 1 offhand (simplified)
     // Full inventory implementation will come later
     // For now just slot count for protocol packets
@@ -109,6 +113,9 @@ struct Player {
         tag->setInt("playerGameType", static_cast<int32_t>(gameMode));
         tag->setInt("Dimension", dimension);
         tag->setBoolean("OnGround", onGround);
+
+        // Inventory
+        inventory.saveToNBT(*tag);
 
         return tag;
     }
@@ -144,6 +151,9 @@ struct Player {
         if (tag.hasKey("playerGameType")) gameMode = static_cast<GameMode>(tag.getInt("playerGameType"));
         if (tag.hasKey("Dimension")) dimension = static_cast<int8_t>(tag.getInt("Dimension"));
         if (tag.hasKey("OnGround")) onGround = tag.getBoolean("OnGround");
+
+        // Inventory
+        inventory.loadFromNBT(tag);
     }
 
     // Get eye position Y (mw.g() = 1.62f)
