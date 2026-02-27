@@ -1,0 +1,15 @@
+# Build
+build/
+cmake-build-*/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Tools (downloaded JARs)
+tools/
+
+# OS
+.DS_Store

@@ -1,0 +1,262 @@
+/*
+ * Decompiled with CFR 0.152.
+ */
+package io.netty.handler.codec.spdy;
+
+import io.netty.channel.ChannelPromise;
+import io.netty.handler.codec.spdy.SpdyDataFrame;
+import io.netty.util.internal.PlatformDependent;
+import java.util.Comparator;
+import java.util.Map;
+import java.util.Queue;
+import java.util.Set;
+import java.util.TreeSet;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicInteger;
+
+final class SpdySession {
+    private final Map<Integer, StreamState> activeStreams = PlatformDependent.newConcurrentHashMap();
+
+    SpdySession() {
+    }
+
+    int numActiveStreams() {
+        return this.activeStreams.size();
+    }
+
+    boolean noActiveStreams() {
+        return this.activeStreams.isEmpty();
+    }
+
+    boolean isActiveStream(int streamId) {
+        return this.activeStreams.containsKey(streamId);
+    }
+
+    Set<Integer> getActiveStreams() {
+        TreeSet<Integer> streamIds = new TreeSet<Integer>(new PriorityComparator());
+        streamIds.addAll(this.activeStreams.keySet());
+        return streamIds;
+    }
+
+    void acceptStream(int streamId, byte priority, boolean remoteSideClosed, boolean localSideClosed, int sendWindowSize, int receiveWindowSize) {
+        if (!remoteSideClosed || !localSideClosed) {
+            this.activeStreams.put(streamId, new StreamState(priority, remoteSideClosed, localSideClosed, sendWindowSize, receiveWindowSize));
+        }
+    }
+
+    void removeStream(int streamId, Throwable cause) {
+        StreamState state = this.activeStreams.remove(streamId);
+        if (state != null) {
+            state.clearPendingWrites(cause);
+        }
+    }
+
+    boolean isRemoteSideClosed(int streamId) {
+        StreamState state = this.activeStreams.get(streamId);
+        return state == null || state.isRemoteSideClosed();
+    }
+
+    void closeRemoteSide(int streamId) {
+        StreamState state = this.activeStreams.get(streamId);
+        if (state != null) {
+            state.closeRemoteSide();
+            if (state.isLocalSideClosed()) {
+                this.activeStreams.remove(streamId);
+            }
+        }
+    }
+
+    boolean isLocalSideClosed(int streamId) {
+        StreamState state = this.activeStreams.get(streamId);
+        return state == null || state.isLocalSideClosed();
+    }
+
+    void closeLocalSide(int streamId) {
+        StreamState state = this.activeStreams.get(streamId);
+        if (state != null) {
+            state.closeLocalSide();
+            if (state.isRemoteSideClosed()) {
+                this.activeStreams.remove(streamId);
+            }
+        }
+    }
+
+    boolean hasReceivedReply(int streamId) {
+        StreamState state = this.activeStreams.get(streamId);
+        return state != null && state.hasReceivedReply();
+    }
+
+    void receivedReply(int streamId) {
+        StreamState state = this.activeStreams.get(streamId);
+        if (state != null) {
+            state.receivedReply();
+        }
+    }
+
+    int getSendWindowSize(int streamId) {
+        StreamState state = this.activeStreams.get(streamId);
+        return state != null ? state.getSendWindowSize() : -1;
+    }
+
+    int updateSendWindowSize(int streamId, int deltaWindowSize) {
+        StreamState state = this.activeStreams.get(streamId);
+        return state != null ? state.updateSendWindowSize(deltaWindowSize) : -1;
+    }
+
+    int updateReceiveWindowSize(int streamId, int deltaWindowSize) {
+        StreamState state = this.activeStreams.get(streamId);
+        if (deltaWindowSize > 0) {
+            state.setReceiveWindowSizeLowerBound(0);
+        }
+        return state != null ? state.updateReceiveWindowSize(deltaWindowSize) : -1;
+    }
+
+    int getReceiveWindowSizeLowerBound(int streamId) {
+        StreamState state = this.activeStreams.get(streamId);
+        return state != null ? state.getReceiveWindowSizeLowerBound() : 0;
+    }
+
+    void updateAllSendWindowSizes(int deltaWindowSize) {
+        for (StreamState state : this.activeStreams.values()) {
+            state.updateSendWindowSize(deltaWindowSize);
+        }
+    }
+
+    void updateAllReceiveWindowSizes(int deltaWindowSize) {
+        for (StreamState state : this.activeStreams.values()) {
+            state.updateReceiveWindowSize(deltaWindowSize);
+            if (deltaWindowSize >= 0) continue;
+            state.setReceiveWindowSizeLowerBound(deltaWindowSize);
+        }
+    }
+
+    boolean putPendingWrite(int streamId, PendingWrite pendingWrite) {
+        StreamState state = this.activeStreams.get(streamId);
+        return state != null && state.putPendingWrite(pendingWrite);
+    }
+
+    PendingWrite getPendingWrite(int streamId) {
+        StreamState state = this.activeStreams.get(streamId);
+        return state != null ? state.getPendingWrite() : null;
+    }
+
+    PendingWrite removePendingWrite(int streamId) {
+        StreamState state = this.activeStreams.get(streamId);
+        return state != null ? state.removePendingWrite() : null;
+    }
+
+    public static final class PendingWrite {
+        final SpdyDataFrame spdyDataFrame;
+        final ChannelPromise promise;
+
+        PendingWrite(SpdyDataFrame spdyDataFrame, ChannelPromise promise) {
+            this.spdyDataFrame = spdyDataFrame;
+            this.promise = promise;
+        }
+
+        void fail(Throwable cause) {
+            this.spdyDataFrame.release();
+            this.promise.setFailure(cause);
+        }
+    }
+
+    private final class PriorityComparator
+    implements Comparator<Integer> {
+        private PriorityComparator() {
+        }
+
+        @Override
+        public int compare(Integer id1, Integer id2) {
+            StreamState state1 = (StreamState)SpdySession.this.activeStreams.get(id1);
+            StreamState state2 = (StreamState)SpdySession.this.activeStreams.get(id2);
+            return state1.getPriority() - state2.getPriority();
+        }
+    }
+
+    private static final class StreamState {
+        private final byte priority;
+        private boolean remoteSideClosed;
+        private boolean localSideClosed;
+        private boolean receivedReply;
+        private final AtomicInteger sendWindowSize;
+        private final AtomicInteger receiveWindowSize;
+        private int receiveWindowSizeLowerBound;
+        private final Queue<PendingWrite> pendingWriteQueue = new ConcurrentLinkedQueue<PendingWrite>();
+
+        StreamState(byte priority, boolean remoteSideClosed, boolean localSideClosed, int sendWindowSize, int receiveWindowSize) {
+            this.priority = priority;
+            this.remoteSideClosed = remoteSideClosed;
+            this.localSideClosed = localSideClosed;
+            this.sendWindowSize = new AtomicInteger(sendWindowSize);
+            this.receiveWindowSize = new AtomicInteger(receiveWindowSize);
+        }
+
+        byte getPriority() {
+            return this.priority;
+        }
+
+        boolean isRemoteSideClosed() {
+            return this.remoteSideClosed;
+        }
+
+        void closeRemoteSide() {
+            this.remoteSideClosed = true;
+        }
+
+        boolean isLocalSideClosed() {
+            return this.localSideClosed;
+        }
+
+        void closeLocalSide() {
+            this.localSideClosed = true;
+        }
+
+        boolean hasReceivedReply() {
+            return this.receivedReply;
+        }
+
+        void receivedReply() {
+            this.receivedReply = true;
+        }
+
+        int getSendWindowSize() {
+            return this.sendWindowSize.get();
+        }
+
+        int updateSendWindowSize(int deltaWindowSize) {
+            return this.sendWindowSize.addAndGet(deltaWindowSize);
+        }
+
+        int updateReceiveWindowSize(int deltaWindowSize) {
+            return this.receiveWindowSize.addAndGet(deltaWindowSize);
+        }
+
+        int getReceiveWindowSizeLowerBound() {
+            return this.receiveWindowSizeLowerBound;
+        }
+
+        void setReceiveWindowSizeLowerBound(int receiveWindowSizeLowerBound) {
+            this.receiveWindowSizeLowerBound = receiveWindowSizeLowerBound;
+        }
+
+        boolean putPendingWrite(PendingWrite msg) {
+            return this.pendingWriteQueue.offer(msg);
+        }
+
+        PendingWrite getPendingWrite() {
+            return this.pendingWriteQueue.peek();
+        }
+
+        PendingWrite removePendingWrite() {
+            return this.pendingWriteQueue.poll();
+        }
+
+        void clearPendingWrites(Throwable cause) {
+            PendingWrite pendingWrite;
+            while ((pendingWrite = this.pendingWriteQueue.poll()) != null) {
+                pendingWrite.fail(cause);
+            }
+        }
+    }
+}
+
