@@ -42,6 +42,8 @@ struct Player {
 
     // Physical state
     bool onGround = false;
+    double motionY = 0.0;     // Vertical velocity (blocks/tick) — sv.java: w
+    float fallDistance = 0.0f; // Accumulated fall distance — sv.java: P
 
     // Player-specific (yz.java, mw.java)
     static constexpr float EYE_HEIGHT = 1.62f; // mw.g() returns 1.62f
@@ -113,6 +115,14 @@ struct Player {
         tag->setInt("playerGameType", static_cast<int32_t>(gameMode));
         tag->setInt("Dimension", dimension);
         tag->setBoolean("OnGround", onGround);
+        tag->setFloat("FallDistance", fallDistance);
+
+        // Motion — save vertical motion
+        auto motion = std::make_shared<nbt::NBTTagList>();
+        motion->add(std::make_shared<nbt::NBTTagDouble>(0.0));
+        motion->add(std::make_shared<nbt::NBTTagDouble>(motionY));
+        motion->add(std::make_shared<nbt::NBTTagDouble>(0.0));
+        tag->setList("Motion", motion);
 
         // Inventory
         inventory.saveToNBT(*tag);
@@ -151,6 +161,15 @@ struct Player {
         if (tag.hasKey("playerGameType")) gameMode = static_cast<GameMode>(tag.getInt("playerGameType"));
         if (tag.hasKey("Dimension")) dimension = static_cast<int8_t>(tag.getInt("Dimension"));
         if (tag.hasKey("OnGround")) onGround = tag.getBoolean("OnGround");
+        if (tag.hasKey("FallDistance")) fallDistance = tag.getFloat("FallDistance");
+
+        // Motion
+        if (tag.hasKey("Motion")) {
+            auto motion = tag.getList("Motion", nbt::TAG_Double);
+            if (motion->size() >= 3) {
+                motionY = std::dynamic_pointer_cast<nbt::NBTTagDouble>(motion->tags[1])->value;
+            }
+        }
 
         // Inventory
         inventory.loadFromNBT(tag);

@@ -21,6 +21,7 @@
 #include "world/World.h"
 #include "command/CommandHandler.h"
 #include "persistence/PlayerDataIO.h"
+#include "physics/Physics.h"
 #include <functional>
 
 namespace mc {
@@ -78,6 +79,43 @@ public:
     // Called each server tick for world updates
     void worldTick(std::unordered_map<int, Connection>& connections) {
         world.tick();
+
+        // Physics tick for each player
+        for (auto& [fd, player] : players_) {
+            double oldY = player.posY;
+            bool tookDamage = Physics::tickPlayer(player, world);
+
+            // If physics moved the player, broadcast new position
+            if (std::abs(player.posY - oldY) > 0.001) {
+                auto it = connections.find(fd);
+                if (it != connections.end() && it->second.state() == ConnectionState::Play) {
+                    // Send corrected position to the player
+                    PlayerPositionAndLookPacket posLook;
+                    posLook.x = player.posX;
+                    posLook.y = player.posY;
+                    posLook.z = player.posZ;
+                    posLook.yaw = player.yaw;
+                    posLook.pitch = player.pitch;
+                    posLook.onGround = player.onGround;
+                    it->second.sendPacket(posLook.serialize());
+                }
+
+                // Broadcast to other players
+                broadcastMovement(player);
+            }
+
+            // Send health update on damage
+            if (tookDamage) {
+                auto it = connections.find(fd);
+                if (it != connections.end()) {
+                    UpdateHealthPacket hp;
+                    hp.health = player.health;
+                    hp.food = player.foodLevel;
+                    hp.saturation = player.saturation;
+                    it->second.sendPacket(hp.serialize());
+                }
+            }
+        }
 
         // Send time update every 20 ticks (1 second)
         if (world.worldTime % 20 == 0) {
