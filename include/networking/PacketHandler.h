@@ -30,6 +30,7 @@
 #include "mechanics/RedstoneEngine.h"
 #include "mechanics/Scoreboard.h"
 #include "mechanics/PistonHandler.h"
+#include "mechanics/VillagerTrades.h"
 #include <functional>
 
 namespace mc {
