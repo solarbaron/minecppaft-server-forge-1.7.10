@@ -31,6 +31,7 @@
 #include "mechanics/Scoreboard.h"
 #include "mechanics/PistonHandler.h"
 #include "mechanics/VillagerTrades.h"
+#include "mechanics/ContainerManager.h"
 #include <functional>
 
 namespace mc {
@@ -488,6 +489,7 @@ private:
     WeatherManager weatherManager_;
     RedstoneEngine redstoneEngine_;
     Scoreboard scoreboard_;
+    ContainerManager containerManager_;
 
     // Broadcast a packet to all Play-state connections
     static void broadcast(std::unordered_map<int, Connection>& connections,
