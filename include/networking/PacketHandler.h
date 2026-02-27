@@ -156,6 +156,53 @@ public:
             }
         }
 
+        // Potion effect tick — every tick
+        for (auto& [fd, player] : players_) {
+            float oldHealth = player.health;
+
+            // Regeneration: heal 1 HP per interval
+            if (player.potionEffects.shouldRegenTick()) {
+                player.health = std::min(player.health + 1.0f, 20.0f);
+            }
+
+            // Poison: deal 1 HP damage (minimum 1 HP remaining)
+            if (player.potionEffects.shouldPoisonTick()) {
+                if (player.health > 1.0f) {
+                    player.health = std::max(player.health - 1.0f, 1.0f);
+                }
+            }
+
+            // Wither: deal 1 HP damage (can kill)
+            if (player.potionEffects.shouldWitherTick()) {
+                player.health = std::max(player.health - 1.0f, 0.0f);
+            }
+
+            // Send health update if changed
+            if (std::abs(player.health - oldHealth) > 0.01f) {
+                auto it2 = connections.find(fd);
+                if (it2 != connections.end() && it2->second.state() == ConnectionState::Play) {
+                    UpdateHealthPacket hp;
+                    hp.health = player.health;
+                    hp.food = player.foodStats.foodLevel;
+                    hp.saturation = player.foodStats.saturation;
+                    it2->second.sendPacket(hp.serialize());
+                }
+            }
+
+            // Tick all effects and remove expired
+            auto expired = player.potionEffects.tickAll();
+            for (auto eid : expired) {
+                RemoveEntityEffectPacket pkt;
+                pkt.entityId = player.entityId;
+                pkt.effectId = eid;
+                for (auto& [fd2, conn2] : connections) {
+                    if (conn2.state() == ConnectionState::Play) {
+                        conn2.sendPacket(pkt.serialize());
+                    }
+                }
+            }
+        }
+
         // Mob spawning — every 200 ticks (10 seconds)
         if (world.worldTime % 200 == 0 && !players_.empty()) {
             mobSpawner_.setNextEntityId(&nextEntityId_);

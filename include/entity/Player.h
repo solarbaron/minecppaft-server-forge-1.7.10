@@ -15,6 +15,7 @@
 #include "nbt/NBT.h"
 #include "inventory/Inventory.h"
 #include "mechanics/FoodStats.h"
+#include "mechanics/PotionEffect.h"
 
 namespace mc {
 
@@ -52,6 +53,7 @@ struct Player {
     // Health & food (sv.java)
     float health = 20.0f;     // Max 20.0
     FoodStats foodStats;      // zr.java — hunger system
+    PotionEffectManager potionEffects; // Active potion effects
 
     // Experience (yz.java)
     int32_t experienceLevel = 0;

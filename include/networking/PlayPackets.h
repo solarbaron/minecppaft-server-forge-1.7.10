@@ -1007,4 +1007,43 @@ struct ConfirmTransactionPacket {
     }
 };
 
+// ============================================================
+// S→C 0x1D Entity Effect — apply a potion effect to an entity
+// Reference: gq.java (S1DPacketEntityEffect)
+// ============================================================
+struct EntityEffectPacket {
+    int32_t entityId;
+    int8_t effectId;
+    int8_t amplifier;
+    int32_t duration;
+    bool hideParticles;
+
+    PacketBuffer serialize() const {
+        PacketBuffer buf;
+        buf.writeVarInt(0x1D); // Packet ID
+        buf.writeVarInt(entityId);
+        buf.writeByte(effectId);
+        buf.writeByte(amplifier);
+        buf.writeVarInt(duration);
+        return buf;
+    }
+};
+
+// ============================================================
+// S→C 0x1E Remove Entity Effect — remove a potion effect
+// Reference: gr.java (S1EPacketRemoveEntityEffect)
+// ============================================================
+struct RemoveEntityEffectPacket {
+    int32_t entityId;
+    int8_t effectId;
+
+    PacketBuffer serialize() const {
+        PacketBuffer buf;
+        buf.writeVarInt(0x1E); // Packet ID
+        buf.writeVarInt(entityId);
+        buf.writeByte(effectId);
+        return buf;
+    }
+};
+
 } // namespace mc
