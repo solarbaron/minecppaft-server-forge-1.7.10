@@ -11,6 +11,7 @@
 #include "world/Chunk.h"
 #include "world/RegionFile.h"
 #include "world/ChunkSerializer.h"
+#include "world/TerrainGenerator.h"
 #include "mechanics/FurnaceManager.h"
 
 namespace mc {
@@ -60,8 +61,8 @@ public:
             return ref;
         }
 
-        // Generate flat chunk
-        auto chunk = generateFlatChunk(cx, cz);
+        // Generate terrain chunk
+        auto chunk = terrainGen_.generateChunk(cx, cz);
         auto& ref = *chunk;
         chunks_[key] = std::move(chunk);
         return ref;
@@ -171,6 +172,8 @@ private:
     std::unordered_map<std::pair<int32_t, int32_t>,
                        std::unique_ptr<ChunkColumn>,
                        ChunkPosHash> chunks_;
+
+    TerrainGenerator terrainGen_{42}; // Seeded terrain generator
 
     // Furnace tile entities by position
     std::unordered_map<std::tuple<int,int,int>, FurnaceTileEntity,
