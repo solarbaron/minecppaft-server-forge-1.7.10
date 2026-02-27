@@ -14,6 +14,7 @@
 #include <array>
 #include "nbt/NBT.h"
 #include "inventory/Inventory.h"
+#include "mechanics/FoodStats.h"
 
 namespace mc {
 
@@ -50,9 +51,7 @@ struct Player {
 
     // Health & food (sv.java)
     float health = 20.0f;     // Max 20.0
-    int32_t foodLevel = 20;   // Max 20
-    float saturation = 5.0f;  // Starting saturation
-    float exhaustion = 0.0f;
+    FoodStats foodStats;      // zr.java — hunger system
 
     // Experience (yz.java)
     int32_t experienceLevel = 0;
@@ -106,9 +105,6 @@ struct Player {
 
         // Player data
         tag->setFloat("Health", health);
-        tag->setInt("foodLevel", foodLevel);
-        tag->setFloat("foodSaturationLevel", saturation);
-        tag->setFloat("foodExhaustionLevel", exhaustion);
         tag->setInt("XpLevel", experienceLevel);
         tag->setFloat("XpP", experienceProgress);
         tag->setInt("XpTotal", totalExperience);
@@ -116,6 +112,9 @@ struct Player {
         tag->setInt("Dimension", dimension);
         tag->setBoolean("OnGround", onGround);
         tag->setFloat("FallDistance", fallDistance);
+
+        // Food stats
+        foodStats.saveToNBT(*tag);
 
         // Motion — save vertical motion
         auto motion = std::make_shared<nbt::NBTTagList>();
@@ -152,9 +151,9 @@ struct Player {
 
         // Player data
         if (tag.hasKey("Health")) health = tag.getFloat("Health");
-        if (tag.hasKey("foodLevel")) foodLevel = tag.getInt("foodLevel");
-        if (tag.hasKey("foodSaturationLevel")) saturation = tag.getFloat("foodSaturationLevel");
-        if (tag.hasKey("foodExhaustionLevel")) exhaustion = tag.getFloat("foodExhaustionLevel");
+
+        // Food stats
+        foodStats.loadFromNBT(tag);
         if (tag.hasKey("XpLevel")) experienceLevel = tag.getInt("XpLevel");
         if (tag.hasKey("XpP")) experienceProgress = tag.getFloat("XpP");
         if (tag.hasKey("XpTotal")) totalExperience = tag.getInt("XpTotal");

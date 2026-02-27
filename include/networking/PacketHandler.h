@@ -110,8 +110,30 @@ public:
                 if (it != connections.end()) {
                     UpdateHealthPacket hp;
                     hp.health = player.health;
-                    hp.food = player.foodLevel;
-                    hp.saturation = player.saturation;
+                    hp.food = player.foodStats.foodLevel;
+                    hp.saturation = player.foodStats.saturation;
+                    it->second.sendPacket(hp.serialize());
+                }
+            }
+
+            // Hunger tick — zr.java tick logic
+            auto foodResult = player.foodStats.tick(player.health, 20.0f);
+            if (foodResult.healthChange > 0.0f) {
+                // Natural regen
+                player.health = std::min(player.health + foodResult.healthChange, 20.0f);
+            } else if (foodResult.healthChange < 0.0f) {
+                // Starvation damage
+                player.health = std::max(player.health + foodResult.healthChange, 0.0f);
+            }
+
+            // Send health update if food or health changed
+            if (foodResult.healthChange != 0.0f || foodResult.foodChanged) {
+                auto it = connections.find(fd);
+                if (it != connections.end()) {
+                    UpdateHealthPacket hp;
+                    hp.health = player.health;
+                    hp.food = player.foodStats.foodLevel;
+                    hp.saturation = player.foodStats.saturation;
                     it->second.sendPacket(hp.serialize());
                 }
             }
@@ -362,8 +384,8 @@ private:
         // 9. Update Health — ib.java
         UpdateHealthPacket hp;
         hp.health = player.health;
-        hp.food = player.foodLevel;
-        hp.saturation = player.saturation;
+        hp.food = player.foodStats.foodLevel;
+        hp.saturation = player.foodStats.saturation;
         conn.sendPacket(hp.serialize());
 
         // 10. Set Experience — ia.java
@@ -452,11 +474,22 @@ private:
             case 0x04: {
                 // C→S Player Position
                 if (player) {
+                    double oldX = player->posX, oldZ = player->posZ;
                     player->posX = buf.readDouble();
                     player->posY = buf.readDouble();
                     buf.readDouble(); // headY
                     player->posZ = buf.readDouble();
                     player->onGround = buf.readBoolean();
+
+                    // Walking exhaustion — 0.01 per meter moved (yz.java)
+                    double dx = player->posX - oldX;
+                    double dz = player->posZ - oldZ;
+                    double dist = std::sqrt(dx * dx + dz * dz);
+                    if (dist > 0.01) {
+                        player->foodStats.addExhaustion(
+                            static_cast<float>(dist) * Exhaustion::WALK);
+                    }
+
                     broadcastMovement(*player);
                 }
                 break;

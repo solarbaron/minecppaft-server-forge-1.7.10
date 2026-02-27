@@ -270,8 +270,8 @@ private:
 
         UpdateHealthPacket hp;
         hp.health = 0.0f;
-        hp.food = target->foodLevel;
-        hp.saturation = target->saturation;
+        hp.food = target->foodStats.foodLevel;
+        hp.saturation = target->foodStats.saturation;
         targetConn->sendPacket(hp.serialize());
 
         // Broadcast death to all
