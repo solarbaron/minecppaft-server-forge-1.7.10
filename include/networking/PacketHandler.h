@@ -20,6 +20,8 @@
 #include "entity/Player.h"
 #include "world/World.h"
 #include "command/CommandHandler.h"
+#include "persistence/PlayerDataIO.h"
+#include <functional>
 
 namespace mc {
 
@@ -98,6 +100,9 @@ public:
         auto& player = it->second;
         std::cout << "[PLAY] " << player.name << " left the game\n";
 
+        // Save player data before removing
+        playerDataIO_.savePlayer(player);
+
         // Notify other players to destroy this entity + remove from tab
         DestroyEntitiesPacket destroy;
         destroy.entityIds.push_back(player.entityId);
@@ -133,6 +138,27 @@ private:
     std::atomic<int32_t> nextEntityId_{1};
     std::unordered_map<int, Connection>* connections_ = nullptr;
     CommandHandler commandHandler_;
+    PlayerDataIO playerDataIO_;
+
+    // Generate offline UUID from player name — simplified UUID v3 approach
+    // Vanilla uses UUID.nameUUIDFromBytes("OfflinePlayer:" + name)
+    static std::string offlineUuid(const std::string& name) {
+        std::string input = "OfflinePlayer:" + name;
+        // Simple hash-based UUID generation (not cryptographic, but deterministic)
+        std::hash<std::string> hasher;
+        size_t h1 = hasher(input);
+        size_t h2 = hasher(input + "salt");
+
+        char buf[37];
+        snprintf(buf, sizeof(buf),
+                 "%08x-%04x-%04x-%04x-%012llx",
+                 static_cast<uint32_t>(h1 >> 32),
+                 static_cast<uint16_t>(h1 >> 16),
+                 static_cast<uint16_t>((h1 & 0xFFFF) | 0x3000), // version 3
+                 static_cast<uint16_t>((h2 >> 48) | 0x8000),     // variant 1
+                 static_cast<unsigned long long>(h2 & 0xFFFFFFFFFFFFULL));
+        return std::string(buf);
+    }
 
     // === Handshake (state -1) ===
     void handleHandshake(Connection& conn, int32_t packetId, PacketBuffer& buf) {
@@ -192,8 +218,8 @@ private:
             std::string playerName = buf.readString(16);
             std::cout << "[PKT] Login Start: " << playerName << "\n";
 
-            // Offline mode: Login Success
-            std::string uuid = "00000000-0000-0000-0000-000000000000";
+            // Offline mode: generate name-based UUID (matches vanilla OfflinePlayer)
+            std::string uuid = offlineUuid(playerName);
 
             PacketBuffer resp;
             resp.writeVarInt(0x02);
@@ -221,6 +247,9 @@ private:
         player.posY = 4.0;  // Spawn on top of flat world (bedrock+2dirt+grass = y=4)
         player.posZ = 0.5;
         player.lastKeepAlive = std::chrono::steady_clock::now();
+
+        // Try to load saved data (overrides defaults if file exists)
+        playerDataIO_.loadPlayer(player);
 
         // 1. Join Game — hd.java
         JoinGamePacket joinGame;
