@@ -395,4 +395,114 @@ struct BlockChangePacket {
     }
 };
 
+// ============================================================
+// S→C 0x06 Update Health — ib.java
+// ============================================================
+// Sends health, food, and saturation to the client
+struct UpdateHealthPacket {
+    float health;       // 0.0 = dead, 20.0 = full
+    int32_t food;       // 0-20
+    float saturation;   // 0.0-5.0
+
+    PacketBuffer serialize() const {
+        PacketBuffer buf;
+        buf.writeVarInt(0x06); // Packet ID
+        buf.writeFloat(health);
+        buf.writeVarInt(food);
+        buf.writeFloat(saturation);
+        return buf;
+    }
+};
+
+// ============================================================
+// S→C 0x1F Set Experience — ia.java
+// ============================================================
+struct SetExperiencePacket {
+    float barProgress;   // 0.0-1.0
+    int32_t level;
+    int32_t totalExp;
+
+    PacketBuffer serialize() const {
+        PacketBuffer buf;
+        buf.writeVarInt(0x1F); // Packet ID
+        buf.writeFloat(barProgress);
+        buf.writeVarInt(level);
+        buf.writeVarInt(totalExp);
+        return buf;
+    }
+};
+
+// ============================================================
+// S→C 0x38 Player List Item — id.java
+// ============================================================
+// Adds/removes a player from the tab list
+struct PlayerListItemPacket {
+    std::string playerName;
+    bool online;         // true=add, false=remove
+    int16_t ping;        // Latency in ms
+
+    PacketBuffer serialize() const {
+        PacketBuffer buf;
+        buf.writeVarInt(0x38); // Packet ID
+        buf.writeString(playerName);
+        buf.writeBoolean(online);
+        buf.writeShort(ping);
+        return buf;
+    }
+};
+
+// ============================================================
+// S→C 0x07 Respawn — gv.java
+// ============================================================
+struct RespawnPacket {
+    int32_t dimension;   // -1/0/1
+    uint8_t difficulty;  // 0-3
+    uint8_t gameMode;    // 0/1/2
+    std::string levelType; // "flat", "default", etc.
+
+    PacketBuffer serialize() const {
+        PacketBuffer buf;
+        buf.writeVarInt(0x07); // Packet ID
+        buf.writeInt(dimension);
+        buf.writeByte(difficulty);
+        buf.writeByte(gameMode);
+        buf.writeString(levelType);
+        return buf;
+    }
+};
+
+// ============================================================
+// S→C 0x2B Change Game State — gw.java
+// ============================================================
+// Used for rain, game mode changes, etc.
+struct ChangeGameStatePacket {
+    uint8_t reason;   // 1=rain start, 2=rain stop, 3=gamemode change, 4=credits
+    float value;
+
+    PacketBuffer serialize() const {
+        PacketBuffer buf;
+        buf.writeVarInt(0x2B); // Packet ID
+        buf.writeByte(reason);
+        buf.writeFloat(value);
+        return buf;
+    }
+};
+
+// ============================================================
+// S→C 0x1A Entity Status — gc.java
+// ============================================================
+struct EntityStatusPacket {
+    int32_t entityId;
+    int8_t status;    // 2=hurt, 3=dead, 9=eat complete
+
+    PacketBuffer serialize() const {
+        PacketBuffer buf;
+        buf.writeVarInt(0x1A); // Packet ID
+        buf.writeInt(entityId);
+        buf.writeByte(static_cast<uint8_t>(status));
+        return buf;
+    }
+};
+
 } // namespace mc
+

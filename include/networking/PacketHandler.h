@@ -97,18 +97,23 @@ public:
         auto& player = it->second;
         std::cout << "[PLAY] " << player.name << " left the game\n";
 
-        // Notify other players to destroy this entity
+        // Notify other players to destroy this entity + remove from tab
         DestroyEntitiesPacket destroy;
         destroy.entityIds.push_back(player.entityId);
 
-        // Send yellow leave message
         auto msg = ChatMessagePacket::makeText(
             "\u00a7e" + player.name + " left the game");
+
+        PlayerListItemPacket removeTab;
+        removeTab.playerName = player.name;
+        removeTab.online = false;
+        removeTab.ping = 0;
 
         for (auto& [otherFd, otherConn] : connections) {
             if (otherFd != fd && otherConn.state() == ConnectionState::Play) {
                 otherConn.sendPacket(destroy.serialize());
                 otherConn.sendPacket(msg.serialize());
+                otherConn.sendPacket(removeTab.serialize());
             }
         }
 
@@ -281,17 +286,39 @@ private:
             conn.sendPacket(invBuf);
         }
 
-        std::cout << "[PLAY] " << playerName << " (eid=" << eid
-                  << ") joined the game\n";
+        // 9. Update Health — ib.java
+        UpdateHealthPacket hp;
+        hp.health = player.health;
+        hp.food = player.foodLevel;
+        hp.saturation = player.saturation;
+        conn.sendPacket(hp.serialize());
 
-        // 9. Broadcast join message to all players
-        auto joinMsg = ChatMessagePacket::makeText(
-            "\u00a7e" + playerName + " joined the game");
+        // 10. Set Experience — ia.java
+        SetExperiencePacket xp;
+        xp.barProgress = player.experienceProgress;
+        xp.level = player.experienceLevel;
+        xp.totalExp = player.totalExperience;
+        conn.sendPacket(xp.serialize());
 
-        // 10. Spawn existing players for the new player, and new player for existing
+        // 11. Player List — add self to tab list
+        PlayerListItemPacket selfTab;
+        selfTab.playerName = playerName;
+        selfTab.online = true;
+        selfTab.ping = 0;
+        conn.sendPacket(selfTab.serialize());
+
+        // 12. Add all existing players to new player's tab list
         for (auto& [otherFd, otherPlayer] : players_) {
             if (otherFd == conn.fd()) continue;
+            PlayerListItemPacket otherTab;
+            otherTab.playerName = otherPlayer.name;
+            otherTab.online = true;
+            otherTab.ping = 50;
+            conn.sendPacket(otherTab.serialize());
         }
+
+        std::cout << "[PLAY] " << playerName << " (eid=" << eid
+                  << ") joined the game\n";
     }
 
     // === Play (state 0) ===
@@ -482,10 +509,17 @@ public:
         auto joinMsg = ChatMessagePacket::makeText(
             "\u00a7e" + player.name + " joined the game");
 
+        // Add new player to other players' tab lists
+        PlayerListItemPacket newTab;
+        newTab.playerName = player.name;
+        newTab.online = true;
+        newTab.ping = 0;
+
         for (auto& [fd, conn] : connections) {
             if (fd != player.connectionFd && conn.state() == ConnectionState::Play) {
                 conn.sendPacket(spawn.serialize());
                 conn.sendPacket(joinMsg.serialize());
+                conn.sendPacket(newTab.serialize());
             }
         }
 
