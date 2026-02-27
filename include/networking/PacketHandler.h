@@ -25,6 +25,7 @@
 #include "persistence/PlayerDataIO.h"
 #include "physics/Physics.h"
 #include "mechanics/BlockTickHandler.h"
+#include "mechanics/EnchantmentRegistry.h"
 #include <functional>
 
 namespace mc {
@@ -772,6 +773,18 @@ private:
                         win.inventoryType = 2; // Furnace
                         win.windowTitle = R"({"text":"Furnace"})";
                         win.slotCount = 3;
+                        win.useProvidedTitle = true;
+                        conn.sendPacket(win.serialize());
+                        break;
+                    }
+
+                    // Enchanting Table (ID 116) — open enchant window
+                    if (clickedBlock == 116) {
+                        OpenWindowPacket win;
+                        win.windowId = 4;
+                        win.inventoryType = 4; // Enchantment
+                        win.windowTitle = R"({"text":"Enchant"})";
+                        win.slotCount = 1;
                         win.useProvidedTitle = true;
                         conn.sendPacket(win.serialize());
                         break;
