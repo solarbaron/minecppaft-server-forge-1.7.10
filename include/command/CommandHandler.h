@@ -42,6 +42,8 @@ public:
             cmdGive(args, sender, conn);
         } else if (cmd == "kill") {
             cmdKill(args, sender, conn, players, connections);
+        } else if (cmd == "kick") {
+            cmdKick(args, sender, conn, players, connections);
         } else if (cmd == "time") {
             cmdTime(args, sender, conn, world, connections);
         } else if (cmd == "say") {
@@ -87,7 +89,7 @@ public:
 
 private:
     std::vector<std::string> commands_ = {
-        "gamemode", "tp", "give", "kill", "time", "say", "help", "list"
+        "gamemode", "tp", "give", "kill", "kick", "time", "say", "help", "list"
     };
 
     // /gamemode <mode> [player]
@@ -163,9 +165,6 @@ private:
 
         if (args.size() == 2) {
             // /tp <player> — teleport sender to target
-            auto [target, _] = findPlayer(args[1], players, *static_cast<std::unordered_map<int, Connection>*>(nullptr));
-            // We need connections to find player, but we only have players map
-            // Search by name
             Player* target2 = nullptr;
             for (auto& [fd, p] : players) {
                 if (p.name == args[1]) { target2 = &p; break; }
@@ -346,6 +345,38 @@ private:
         }
     }
 
+    // /kick <player> [reason]
+    void cmdKick(const std::vector<std::string>& args, Player& sender,
+                 Connection& conn,
+                 std::unordered_map<int, Player>& players,
+                 std::unordered_map<int, Connection>& connections) {
+        if (args.size() < 2) {
+            sendError(conn, "Usage: /kick <player> [reason]");
+            return;
+        }
+
+        auto [target, targetConn] = findPlayer(args[1], players, connections);
+        if (!target || !targetConn) {
+            sendError(conn, "Player not found: " + args[1]);
+            return;
+        }
+
+        std::string reason = "Kicked by " + sender.name;
+        if (args.size() >= 3) {
+            reason = "";
+            for (size_t i = 2; i < args.size(); ++i) {
+                if (i > 2) reason += " ";
+                reason += args[i];
+            }
+        }
+
+        auto pkt = DisconnectPacket::withMessage(reason);
+        targetConn->sendPacket(pkt.serialize());
+        targetConn->close();
+
+        sendSuccess(conn, "Kicked " + target->name);
+    }
+
     // /help
     void cmdHelp(Player& sender, Connection& conn) {
         sendInfo(conn, "\u00a76--- Help ---");
@@ -353,6 +384,7 @@ private:
         sendInfo(conn, "\u00a7e/tp <player> | /tp <x> <y> <z>");
         sendInfo(conn, "\u00a7e/give <item_id> [count] [damage]");
         sendInfo(conn, "\u00a7e/kill [player]");
+        sendInfo(conn, "\u00a7e/kick <player> [reason]");
         sendInfo(conn, "\u00a7e/time set <value> | /time query");
         sendInfo(conn, "\u00a7e/say <message>");
         sendInfo(conn, "\u00a7e/list");

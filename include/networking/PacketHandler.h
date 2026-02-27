@@ -427,10 +427,33 @@ private:
                 uint8_t face = buf.readByte();
                 (void)face;
 
+                // Status 0 = started digging (instant break in creative)
                 // Status 2 = finished digging (block breaks)
-                if (status == 2 && player) {
+                if ((status == 2 || (status == 0 && player &&
+                     player->gameMode == GameMode::Creative)) && player) {
+                    uint16_t oldBlock = world.getBlock(x, y, z);
                     world.setBlock(x, y, z, BlockID::AIR);
-                    // Send block change to all players later via broadcast
+
+                    // Broadcast block change to all players
+                    if (connections_) {
+                        BlockChangePacket bc;
+                        bc.x = x; bc.y = static_cast<int32_t>(y); bc.z = z;
+                        bc.blockId = 0; bc.metadata = 0;
+                        for (auto& [fd, c] : *connections_) {
+                            if (c.state() == ConnectionState::Play) {
+                                c.sendPacket(bc.serialize());
+                            }
+                        }
+
+                        // Play break sound
+                        auto sound = NamedSoundEffectPacket::at(
+                            "dig.stone", x + 0.5, y + 0.5, z + 0.5);
+                        for (auto& [fd, c] : *connections_) {
+                            if (c.state() == ConnectionState::Play) {
+                                c.sendPacket(sound.serialize());
+                            }
+                        }
+                    }
                 }
                 break;
             }
@@ -444,7 +467,6 @@ private:
                 buf.readByte(); // cursorX
                 buf.readByte(); // cursorY
                 buf.readByte(); // cursorZ
-                (void)heldItem;
 
                 // Adjust position based on face
                 if (player && !heldItem.isEmpty() && x != -1) {
@@ -462,6 +484,27 @@ private:
                     // Place block if the held item is a block (ID < 256)
                     if (heldItem.itemId > 0 && heldItem.itemId < 256) {
                         world.setBlock(bx, by, bz, static_cast<uint16_t>(heldItem.itemId));
+
+                        // Broadcast block change
+                        if (connections_) {
+                            BlockChangePacket bc;
+                            bc.x = bx; bc.y = by; bc.z = bz;
+                            bc.blockId = heldItem.itemId; bc.metadata = 0;
+                            for (auto& [fd, c] : *connections_) {
+                                if (c.state() == ConnectionState::Play) {
+                                    c.sendPacket(bc.serialize());
+                                }
+                            }
+
+                            // Play place sound
+                            auto sound = NamedSoundEffectPacket::at(
+                                "dig.stone", bx + 0.5, by + 0.5, bz + 0.5);
+                            for (auto& [fd, c] : *connections_) {
+                                if (c.state() == ConnectionState::Play) {
+                                    c.sendPacket(sound.serialize());
+                                }
+                            }
+                        }
                     }
                 }
                 break;

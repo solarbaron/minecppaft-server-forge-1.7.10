@@ -722,5 +722,235 @@ struct TabCompletePacket {
     }
 };
 
-} // namespace mc
+// ============================================================
+// S→C 0x3B Scoreboard Objective — hs.java
+// ============================================================
+struct ScoreboardObjectivePacket {
+    std::string name;       // Objective name (max 16)
+    std::string displayName; // Display text
+    uint8_t mode;           // 0=create, 1=remove, 2=update display
 
+    PacketBuffer serialize() const {
+        PacketBuffer buf;
+        buf.writeVarInt(0x3B); // Packet ID
+        buf.writeString(name);
+        buf.writeString(displayName);
+        buf.writeByte(mode);
+        return buf;
+    }
+};
+
+// ============================================================
+// S→C 0x3C Update Score — ht.java
+// ============================================================
+struct UpdateScorePacket {
+    std::string itemName;    // Score holder (player name)
+    uint8_t action;          // 0=update, 1=remove
+    std::string objectiveName;
+    int32_t value = 0;
+
+    PacketBuffer serialize() const {
+        PacketBuffer buf;
+        buf.writeVarInt(0x3C); // Packet ID
+        buf.writeString(itemName);
+        buf.writeByte(action);
+        if (action != 1) {
+            buf.writeString(objectiveName);
+            buf.writeVarInt(value);
+        }
+        return buf;
+    }
+};
+
+// ============================================================
+// S→C 0x3D Display Scoreboard — hp.java
+// ============================================================
+struct DisplayScoreboardPacket {
+    uint8_t position;     // 0=list, 1=sidebar, 2=below name
+    std::string scoreName; // Objective name
+
+    PacketBuffer serialize() const {
+        PacketBuffer buf;
+        buf.writeVarInt(0x3D); // Packet ID
+        buf.writeByte(position);
+        buf.writeString(scoreName);
+        return buf;
+    }
+};
+
+// ============================================================
+// S→C 0x12 Entity Velocity — gm.java
+// ============================================================
+struct EntityVelocityPacket {
+    int32_t entityId;
+    int16_t vx, vy, vz;  // Velocity in 1/8000 blocks per tick
+
+    PacketBuffer serialize() const {
+        PacketBuffer buf;
+        buf.writeVarInt(0x12); // Packet ID
+        buf.writeVarInt(entityId);
+        buf.writeShort(vx);
+        buf.writeShort(vy);
+        buf.writeShort(vz);
+        return buf;
+    }
+
+    // Helper: convert blocks/tick to protocol units (1/8000)
+    static int16_t toProtocol(double blocksPerTick) {
+        double clamped = std::max(-3.9, std::min(3.9, blocksPerTick));
+        return static_cast<int16_t>(clamped * 8000.0);
+    }
+};
+
+// ============================================================
+// S→C 0x29 Sound Effect (named) — gq.java
+// ============================================================
+struct NamedSoundEffectPacket {
+    std::string soundName;  // e.g. "random.click", "mob.zombie.say"
+    int32_t x, y, z;       // Fixed-point (value * 8)
+    float volume;
+    uint8_t pitch;         // 63 = normal
+
+    PacketBuffer serialize() const {
+        PacketBuffer buf;
+        buf.writeVarInt(0x29); // Packet ID
+        buf.writeString(soundName);
+        buf.writeInt(x);
+        buf.writeInt(y);
+        buf.writeInt(z);
+        buf.writeFloat(volume);
+        buf.writeByte(pitch);
+        return buf;
+    }
+
+    static NamedSoundEffectPacket at(const std::string& sound,
+                                      double bx, double by, double bz,
+                                      float vol = 1.0f, uint8_t p = 63) {
+        NamedSoundEffectPacket pkt;
+        pkt.soundName = sound;
+        pkt.x = static_cast<int32_t>(bx * 8.0);
+        pkt.y = static_cast<int32_t>(by * 8.0);
+        pkt.z = static_cast<int32_t>(bz * 8.0);
+        pkt.volume = vol;
+        pkt.pitch = p;
+        return pkt;
+    }
+};
+
+// ============================================================
+// S→C 0x2A Particle — go.java
+// ============================================================
+struct ParticlePacket {
+    std::string particleName; // e.g. "flame", "smoke", "heart"
+    float x, y, z;
+    float offsetX, offsetY, offsetZ;
+    float speed;
+    int32_t count;
+
+    PacketBuffer serialize() const {
+        PacketBuffer buf;
+        buf.writeVarInt(0x2A); // Packet ID
+        buf.writeString(particleName);
+        buf.writeFloat(x);
+        buf.writeFloat(y);
+        buf.writeFloat(z);
+        buf.writeFloat(offsetX);
+        buf.writeFloat(offsetY);
+        buf.writeFloat(offsetZ);
+        buf.writeFloat(speed);
+        buf.writeInt(count);
+        return buf;
+    }
+};
+
+// ============================================================
+// S→C 0x40 Disconnect (Play) — gx.java
+// ============================================================
+struct DisconnectPacket {
+    std::string reason; // JSON text
+
+    PacketBuffer serialize() const {
+        PacketBuffer buf;
+        buf.writeVarInt(0x40); // Packet ID
+        buf.writeString(reason);
+        return buf;
+    }
+
+    static DisconnectPacket withMessage(const std::string& text) {
+        DisconnectPacket pkt;
+        pkt.reason = R"({"text":")" + text + R"("})";
+        return pkt;
+    }
+};
+
+// ============================================================
+// S→C 0x0D Collect Item — gb.java
+// ============================================================
+struct CollectItemPacket {
+    int32_t collectedEntityId;
+    int32_t collectorEntityId;
+
+    PacketBuffer serialize() const {
+        PacketBuffer buf;
+        buf.writeVarInt(0x0D); // Packet ID
+        buf.writeVarInt(collectedEntityId);
+        buf.writeVarInt(collectorEntityId);
+        return buf;
+    }
+};
+
+// ============================================================
+// S→C 0x27 Explosion — gr.java
+// ============================================================
+struct ExplosionPacket {
+    float x, y, z;
+    float radius;
+    std::vector<std::array<int8_t, 3>> affectedBlocks;
+    float playerMotionX, playerMotionY, playerMotionZ;
+
+    PacketBuffer serialize() const {
+        PacketBuffer buf;
+        buf.writeVarInt(0x27); // Packet ID
+        buf.writeFloat(x);
+        buf.writeFloat(y);
+        buf.writeFloat(z);
+        buf.writeFloat(radius);
+        buf.writeInt(static_cast<int32_t>(affectedBlocks.size()));
+        for (auto& block : affectedBlocks) {
+            buf.writeByte(static_cast<uint8_t>(block[0]));
+            buf.writeByte(static_cast<uint8_t>(block[1]));
+            buf.writeByte(static_cast<uint8_t>(block[2]));
+        }
+        buf.writeFloat(playerMotionX);
+        buf.writeFloat(playerMotionY);
+        buf.writeFloat(playerMotionZ);
+        return buf;
+    }
+};
+
+// ============================================================
+// S→C 0x28 Effect — gp.java
+// ============================================================
+// World effects (door sounds, block break particles, etc.)
+struct EffectPacket {
+    int32_t effectId;
+    int32_t x;
+    uint8_t y;
+    int32_t z;
+    int32_t data;
+    bool disableRelativeVolume = false;
+
+    PacketBuffer serialize() const {
+        PacketBuffer buf;
+        buf.writeVarInt(0x28); // Packet ID
+        buf.writeInt(effectId);
+        buf.writeInt(x);
+        buf.writeByte(y);
+        buf.writeInt(z);
+        buf.writeInt(data);
+        buf.writeBoolean(disableRelativeVolume);
+        return buf;
+    }
+};
+
+} // namespace mc
