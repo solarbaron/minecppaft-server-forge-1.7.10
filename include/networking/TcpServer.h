@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cerrno>
 #include <cstring>
+#include <unordered_map>
 
 #include <sys/socket.h>
 #include <sys/select.h>
@@ -24,8 +25,10 @@
 
 namespace mc {
 
-// Callback type for handling a newly extracted packet on a connection
+// Callback types
 using PacketCallback = std::function<void(Connection&, PacketBuffer&)>;
+using DisconnectCallback = std::function<void(int fd)>;
+using TickCallback = std::function<void(Connection&)>;
 
 class TcpServer {
 public:
@@ -89,57 +92,75 @@ public:
     }
 
     // Called once per server tick (~50ms). Accepts new connections,
-    // reads data, extracts packets, and flushes send queues.
-    void tick(PacketCallback handler) {
+    // reads data, extracts packets, calls per-connection tick, and flushes.
+    void tick(PacketCallback packetHandler,
+              TickCallback connectionTick = nullptr,
+              DisconnectCallback disconnectHandler = nullptr) {
         if (!running_) return;
 
         acceptNewConnections();
 
-        for (auto it = connections_.begin(); it != connections_.end();) {
-            auto& conn = *it;
+        // Collect fds to process (iterate copy to allow safe removal)
+        std::vector<int> fds;
+        fds.reserve(connections_.size());
+        for (auto& [fd, _] : connections_) {
+            fds.push_back(fd);
+        }
+
+        for (int fd : fds) {
+            auto it = connections_.find(fd);
+            if (it == connections_.end()) continue;
+            auto& conn = it->second;
 
             // Receive
-            if (!conn->recv()) {
-                // recv returned 0 or error on a non-blocking socket
-                // For EAGAIN/EWOULDBLOCK this is fine, check errno
+            if (!conn.recv()) {
                 if (errno != EAGAIN && errno != EWOULDBLOCK) {
-                    conn->close();
-                    it = connections_.erase(it);
+                    conn.close();
+                    if (disconnectHandler) disconnectHandler(fd);
+                    connections_.erase(it);
                     continue;
                 }
             }
 
             // Extract and handle packets
             PacketBuffer packet;
-            while (conn->tryReadPacket(packet)) {
+            while (conn.tryReadPacket(packet)) {
                 try {
-                    handler(*conn, packet);
+                    packetHandler(conn, packet);
                 } catch (const std::exception& e) {
                     std::cerr << "[NET] Error handling packet from "
-                              << conn->address() << ": " << e.what() << "\n";
-                    conn->close();
+                              << conn.address() << ": " << e.what() << "\n";
+                    conn.close();
                     break;
                 }
             }
 
+            // Per-connection tick (keep alive, etc.)
+            if (!conn.isClosed() && connectionTick) {
+                connectionTick(conn);
+            }
+
             // Flush send queue
-            if (!conn->isClosed()) {
-                if (!conn->flush()) {
-                    conn->close();
+            if (!conn.isClosed()) {
+                if (!conn.flush()) {
+                    conn.close();
                 }
             }
 
             // Remove closed connections
-            if (conn->isClosed()) {
-                it = connections_.erase(it);
-            } else {
-                ++it;
+            if (conn.isClosed()) {
+                if (disconnectHandler) disconnectHandler(fd);
+                connections_.erase(fd);
             }
         }
     }
 
     size_t connectionCount() const { return connections_.size(); }
     bool isRunning() const { return running_; }
+
+    // Access connections map (for broadcasting)
+    std::unordered_map<int, Connection>& connections() { return connections_; }
+    const std::unordered_map<int, Connection>& connections() const { return connections_; }
 
 private:
     void acceptNewConnections() {
@@ -157,17 +178,18 @@ private:
             int opt = 1;
             setsockopt(clientFd, IPPROTO_TCP, TCP_NODELAY, &opt, sizeof(opt));
 
+            // Non-blocking client socket
+            int flags = fcntl(clientFd, F_GETFL, 0);
+            fcntl(clientFd, F_SETFL, flags | O_NONBLOCK);
+
             // Build address string
             char addrStr[INET_ADDRSTRLEN];
             inet_ntop(AF_INET, &clientAddr.sin_addr, addrStr, sizeof(addrStr));
             std::string address = std::string(addrStr) + ":" +
                                   std::to_string(ntohs(clientAddr.sin_port));
 
-            auto conn = std::make_unique<Connection>(clientFd, address);
-            conn->setNonBlocking();
-
             std::cout << "[NET] New connection from " << address << "\n";
-            connections_.push_back(std::move(conn));
+            connections_.emplace(clientFd, Connection(clientFd, address));
         }
     }
 
@@ -175,7 +197,7 @@ private:
     uint16_t port_;
     int listenFd_ = -1;
     bool running_ = false;
-    std::vector<std::unique_ptr<Connection>> connections_;
+    std::unordered_map<int, Connection> connections_;
 };
 
 } // namespace mc

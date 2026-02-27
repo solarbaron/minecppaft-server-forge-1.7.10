@@ -35,13 +35,28 @@ public:
     Connection(const Connection&) = delete;
     Connection& operator=(const Connection&) = delete;
 
-    // Move constructible
+    // Move constructible + assignable
     Connection(Connection&& other) noexcept
         : fd_(other.fd_), address_(std::move(other.address_)),
           state_(other.state_), recvBuf_(std::move(other.recvBuf_)),
           sendQueue_(std::move(other.sendQueue_)), closed_(other.closed_) {
         other.fd_ = -1;
         other.closed_ = true;
+    }
+
+    Connection& operator=(Connection&& other) noexcept {
+        if (this != &other) {
+            close();
+            fd_ = other.fd_;
+            address_ = std::move(other.address_);
+            state_ = other.state_;
+            recvBuf_ = std::move(other.recvBuf_);
+            sendQueue_ = std::move(other.sendQueue_);
+            closed_ = other.closed_;
+            other.fd_ = -1;
+            other.closed_ = true;
+        }
+        return *this;
     }
 
     // Receive data from socket into internal buffer. Returns false if connection closed/error.

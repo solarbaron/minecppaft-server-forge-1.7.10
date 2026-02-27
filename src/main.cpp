@@ -31,8 +31,8 @@ int main(int argc, char* argv[]) {
     }
 
     std::cout << "========================================\n";
-    std::cout << "  MineCPPaft Server v0.1.0\n";
-    std::cout << "  Minecraft 1.7.10 Protocol (47)\n";
+    std::cout << "  MineCPPaft Server v0.2.0\n";
+    std::cout << "  Minecraft 1.7.10 Protocol (5)\n";
     std::cout << "========================================\n";
 
     mc::TcpServer server(bindAddr, port);
@@ -45,13 +45,32 @@ int main(int argc, char* argv[]) {
 
     std::cout << "Server running. Press Ctrl+C to stop.\n";
 
+    int tickCount = 0;
+
     // Main tick loop — mirrors MinecraftServer.run() at 50ms/tick
     while (g_running) {
         auto tickStart = std::chrono::steady_clock::now();
 
-        server.tick([&handler](mc::Connection& conn, mc::PacketBuffer& buf) {
-            handler.handle(conn, buf);
-        });
+        // Network tick: accept, recv, handle packets, per-conn tick, flush
+        server.tick(
+            // Packet handler
+            [&handler](mc::Connection& conn, mc::PacketBuffer& buf) {
+                handler.handle(conn, buf);
+            },
+            // Per-connection tick (keep alive)
+            [&handler](mc::Connection& conn) {
+                handler.tick(conn);
+            },
+            // Disconnect handler
+            [&handler, &server](int fd) {
+                handler.onDisconnect(fd, server.connections());
+            }
+        );
+
+        // World tick (time, broadcasting)
+        handler.worldTick(server.connections());
+
+        ++tickCount;
 
         auto tickEnd = std::chrono::steady_clock::now();
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(tickEnd - tickStart);

@@ -216,4 +216,109 @@ struct PluginMessagePacket {
     }
 };
 
+// ============================================================
+// S→C 0x0C Spawn Player
+// ============================================================
+// Spawns another player entity for the client
+struct SpawnPlayerPacket {
+    int32_t entityId;
+    std::string uuid;     // Player UUID (with dashes)
+    std::string name;     // Player name
+    int32_t dataCount = 0;// Number of data entries (simplified: 0)
+    double x, y, z;
+    float yaw, pitch;
+    int16_t currentItem;  // Item in hand (0 = empty)
+
+    PacketBuffer serialize() const {
+        PacketBuffer buf;
+        buf.writeVarInt(0x0C); // Packet ID
+        buf.writeVarInt(entityId);
+
+        // In protocol 5, UUID is sent as a string
+        buf.writeString(uuid);
+        buf.writeString(name);
+
+        // Data count (VarInt) — properties like skin etc, 0 for now
+        buf.writeVarInt(0);
+
+        // Fixed-point position (absolute int = value * 32)
+        buf.writeInt(static_cast<int32_t>(x * 32.0));
+        buf.writeInt(static_cast<int32_t>(y * 32.0));
+        buf.writeInt(static_cast<int32_t>(z * 32.0));
+
+        // Rotation (angle = value * 256 / 360)
+        buf.writeByte(static_cast<uint8_t>(static_cast<int>(yaw * 256.0f / 360.0f) & 0xFF));
+        buf.writeByte(static_cast<uint8_t>(static_cast<int>(pitch * 256.0f / 360.0f) & 0xFF));
+
+        buf.writeShort(currentItem);
+
+        // Entity metadata terminator (0x7F)
+        buf.writeByte(0x7F);
+
+        return buf;
+    }
+};
+
+// ============================================================
+// S→C 0x13 Destroy Entities
+// ============================================================
+struct DestroyEntitiesPacket {
+    std::vector<int32_t> entityIds;
+
+    PacketBuffer serialize() const {
+        PacketBuffer buf;
+        buf.writeVarInt(0x13); // Packet ID
+        buf.writeByte(static_cast<uint8_t>(entityIds.size()));
+        for (int32_t id : entityIds) {
+            buf.writeInt(id);
+        }
+        return buf;
+    }
+};
+
+// ============================================================
+// S→C 0x03 Time Update
+// ============================================================
+// Sends world age and time of day
+struct TimeUpdatePacket {
+    int64_t worldAge;   // Total ticks since world creation
+    int64_t timeOfDay;  // Time of day (0-24000), negative = fixed time
+
+    PacketBuffer serialize() const {
+        PacketBuffer buf;
+        buf.writeVarInt(0x03); // Packet ID
+        buf.writeLong(worldAge);
+        buf.writeLong(timeOfDay);
+        return buf;
+    }
+};
+
+// ============================================================
+// S→C 0x02 Chat Message
+// ============================================================
+struct ChatMessagePacket {
+    std::string jsonText;
+
+    PacketBuffer serialize() const {
+        PacketBuffer buf;
+        buf.writeVarInt(0x02); // Packet ID
+        buf.writeString(jsonText);
+        return buf;
+    }
+
+    // Helper: create a simple text chat message
+    static ChatMessagePacket makeText(const std::string& text) {
+        ChatMessagePacket pkt;
+        pkt.jsonText = R"({"text":")" + text + R"("})";
+        return pkt;
+    }
+
+    // Helper: create a player chat message
+    static ChatMessagePacket makeChat(const std::string& player, const std::string& message) {
+        ChatMessagePacket pkt;
+        pkt.jsonText = R"({"translate":"chat.type.text","with":[")" + player + R"(",")" + message + R"("]})";
+        return pkt;
+    }
+};
+
 } // namespace mc
