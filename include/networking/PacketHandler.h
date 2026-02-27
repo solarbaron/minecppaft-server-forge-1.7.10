@@ -32,6 +32,7 @@
 #include "mechanics/PistonHandler.h"
 #include "mechanics/VillagerTrades.h"
 #include "mechanics/ContainerManager.h"
+#include "mechanics/WindowInteraction.h"
 #include <functional>
 
 namespace mc {
@@ -490,6 +491,7 @@ private:
     RedstoneEngine redstoneEngine_;
     Scoreboard scoreboard_;
     ContainerManager containerManager_;
+    SignManager signManager_;
 
     // Broadcast a packet to all Play-state connections
     static void broadcast(std::unordered_map<int, Connection>& connections,
@@ -1042,6 +1044,38 @@ private:
                     TabCompletePacket tc;
                     tc.matches = completions;
                     conn.sendPacket(tc.serialize());
+                }
+                break;
+            }
+            case 0x0D: {
+                // C→S Close Window
+                auto cwPkt = CloseWindowC2S::read(buf);
+                // If it's a container window (not player inv), remove viewer
+                if (cwPkt.windowId != 0 && player) {
+                    // Closing container interaction
+                }
+                break;
+            }
+            case 0x0E: {
+                // C→S Click Window
+                auto click = ClickWindowC2S::read(buf);
+                // Confirm the transaction (always accept for now)
+                ConfirmTransactionPacket confirm;
+                confirm.windowId = click.windowId;
+                confirm.actionNumber = click.actionNumber;
+                confirm.accepted = true;
+                conn.sendPacket(confirm.serialize());
+                break;
+            }
+            case 0x12: {
+                // C→S Update Sign
+                auto signPkt = UpdateSignC2S::read(buf);
+                signManager_.setSign(signPkt.x, signPkt.y, signPkt.z,
+                                     signPkt.line1, signPkt.line2, signPkt.line3, signPkt.line4);
+                // Broadcast to all players
+                if (connections_) {
+                    auto sPkt = signManager_.makePacket(signPkt.x, signPkt.y, signPkt.z);
+                    broadcast(*connections_, sPkt.serialize());
                 }
                 break;
             }
