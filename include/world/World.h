@@ -4,12 +4,14 @@
 
 #include <cstdint>
 #include <memory>
+#include <tuple>
 #include <unordered_map>
 #include <functional>
 #include <iostream>
 #include "world/Chunk.h"
 #include "world/RegionFile.h"
 #include "world/ChunkSerializer.h"
+#include "mechanics/FurnaceManager.h"
 
 namespace mc {
 
@@ -19,6 +21,16 @@ struct ChunkPosHash {
         auto h1 = std::hash<int32_t>{}(p.first);
         auto h2 = std::hash<int32_t>{}(p.second);
         return h1 ^ (h2 << 16) ^ (h2 >> 16);
+    }
+};
+
+// Hash for 3D block positions (tile entities)
+struct BlockPosHash {
+    size_t operator()(const std::tuple<int,int,int>& p) const {
+        auto h1 = std::hash<int>{}(std::get<0>(p));
+        auto h2 = std::hash<int>{}(std::get<1>(p));
+        auto h3 = std::hash<int>{}(std::get<2>(p));
+        return h1 ^ (h2 << 11) ^ (h3 << 22);
     }
 };
 
@@ -81,9 +93,36 @@ public:
         ++worldTime;
         ++dayTime;
         if (dayTime >= 24000) dayTime -= 24000;
+
+        // Tick furnaces every tick
+        for (auto& [pos, furnace] : furnaces_) {
+            furnace.tick();
+        }
     }
 
     size_t loadedChunkCount() const { return chunks_.size(); }
+
+    // === Furnace tile entities ===
+    FurnaceTileEntity* getFurnace(int x, int y, int z) {
+        auto key = std::make_tuple(x, y, z);
+        auto it = furnaces_.find(key);
+        return it != furnaces_.end() ? &it->second : nullptr;
+    }
+
+    FurnaceTileEntity& getOrCreateFurnace(int x, int y, int z) {
+        auto key = std::make_tuple(x, y, z);
+        auto it = furnaces_.find(key);
+        if (it != furnaces_.end()) return it->second;
+        auto& f = furnaces_[key];
+        f.x = x; f.y = y; f.z = z;
+        return f;
+    }
+
+    void removeFurnace(int x, int y, int z) {
+        furnaces_.erase(std::make_tuple(x, y, z));
+    }
+
+    const auto& furnaces() const { return furnaces_; }
 
     // Save a single chunk to its region file
     void saveChunk(int cx, int cz) {
@@ -121,6 +160,10 @@ private:
     std::unordered_map<std::pair<int32_t, int32_t>,
                        std::unique_ptr<ChunkColumn>,
                        ChunkPosHash> chunks_;
+
+    // Furnace tile entities by position
+    std::unordered_map<std::tuple<int,int,int>, FurnaceTileEntity,
+                       BlockPosHash> furnaces_;
 
     // Region file cache
     std::unordered_map<std::pair<int32_t, int32_t>,
