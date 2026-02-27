@@ -19,6 +19,7 @@
 #include "networking/PlayPackets.h"
 #include "entity/Player.h"
 #include "world/World.h"
+#include "command/CommandHandler.h"
 
 namespace mc {
 
@@ -131,6 +132,7 @@ private:
     std::unordered_map<int, Player> players_;
     std::atomic<int32_t> nextEntityId_{1};
     std::unordered_map<int, Connection>* connections_ = nullptr;
+    CommandHandler commandHandler_;
 
     // === Handshake (state -1) ===
     void handleHandshake(Connection& conn, int32_t packetId, PacketBuffer& buf) {
@@ -360,10 +362,17 @@ private:
                 // C→S Chat Message
                 std::string message = buf.readString(100);
                 if (player) {
-                    std::cout << "[CHAT] <" << player->name << "> " << message << "\n";
-                    // Broadcast chat to all
-                    if (connections_) {
-                        broadcastChat(player->name, message, *connections_);
+                    if (!message.empty() && message[0] == '/' && connections_) {
+                        // Command
+                        std::cout << "[CMD] " << player->name << ": " << message << "\n";
+                        commandHandler_.handleCommand(message, *player, conn,
+                            players_, *connections_, world);
+                    } else {
+                        // Normal chat
+                        std::cout << "[CHAT] <" << player->name << "> " << message << "\n";
+                        if (connections_) {
+                            broadcastChat(player->name, message, *connections_);
+                        }
                     }
                 }
                 break;
@@ -514,6 +523,17 @@ private:
                 std::string channel = buf.readString(20);
                 int16_t len = buf.readShort();
                 if (len > 0) buf.readBytes(static_cast<size_t>(len));
+                break;
+            }
+            case 0x14: {
+                // C→S Tab Complete
+                std::string text = buf.readString(256);
+                if (player && !text.empty() && text[0] == '/') {
+                    auto completions = commandHandler_.getCompletions(text, players_);
+                    TabCompletePacket tc;
+                    tc.matches = completions;
+                    conn.sendPacket(tc.serialize());
+                }
                 break;
             }
             default:

@@ -632,4 +632,95 @@ struct AnimationPacket {
     }
 };
 
+// ============================================================
+// S→C 0x1C Entity Metadata — gg.java
+// ============================================================
+// Simplified entity metadata for player entities.
+// Full implementation would use the DataWatcher system (dn.java),
+// but for now we send the minimum: entity flags + health.
+struct EntityMetadataPacket {
+    int32_t entityId;
+    // Simplified: we'll build the metadata bytes inline
+
+    // Build a basic player metadata with just entity flags
+    PacketBuffer serialize() const {
+        PacketBuffer buf;
+        buf.writeVarInt(0x1C); // Packet ID
+        buf.writeVarInt(entityId);
+        // Metadata terminator (0x7F = end)
+        buf.writeByte(0x7F);
+        return buf;
+    }
+
+    // Build metadata with entity flags and health
+    static PacketBuffer serializePlayerMetadata(int32_t eid, float health, bool onFire = false,
+                                                 bool crouching = false, bool sprinting = false) {
+        PacketBuffer buf;
+        buf.writeVarInt(0x1C); // Packet ID
+        buf.writeVarInt(eid);
+
+        // Index 0, Type Byte (0 << 5 | 0): Entity flags
+        uint8_t flags = 0;
+        if (onFire) flags |= 0x01;
+        if (crouching) flags |= 0x02;
+        if (sprinting) flags |= 0x08;
+        buf.writeByte(0x00); // index 0, type byte
+        buf.writeByte(flags);
+
+        // Index 6, Type Float (3 << 5 | 6): Health
+        buf.writeByte((3 << 5) | 6); // index 6, type float
+        buf.writeFloat(health);
+
+        // Terminator
+        buf.writeByte(0x7F);
+        return buf;
+    }
+};
+
+// ============================================================
+// S→C 0x04 Entity Equipment — gf.java
+// ============================================================
+// Shows held item or armor on an entity
+struct EntityEquipmentPacket {
+    int32_t entityId;
+    int16_t slot;      // 0=held, 1=boots, 2=legs, 3=chest, 4=helm
+    // Slot data (item)
+    int16_t itemId = -1;   // -1 = empty
+    int8_t  count = 0;
+    int16_t damage = 0;
+
+    PacketBuffer serialize() const {
+        PacketBuffer buf;
+        buf.writeVarInt(0x04); // Packet ID
+        buf.writeVarInt(entityId);
+        buf.writeShort(slot);
+        // Slot data
+        buf.writeShort(itemId);
+        if (itemId >= 0) {
+            buf.writeByte(static_cast<uint8_t>(count));
+            buf.writeShort(damage);
+            buf.writeShort(-1); // No NBT
+        }
+        return buf;
+    }
+};
+
+// ============================================================
+// S→C 0x3A Tab Complete (response) — hu.java
+// ============================================================
+struct TabCompletePacket {
+    std::vector<std::string> matches;
+
+    PacketBuffer serialize() const {
+        PacketBuffer buf;
+        buf.writeVarInt(0x3A); // Packet ID
+        buf.writeVarInt(static_cast<int32_t>(matches.size()));
+        for (auto& m : matches) {
+            buf.writeString(m);
+        }
+        return buf;
+    }
+};
+
 } // namespace mc
+
