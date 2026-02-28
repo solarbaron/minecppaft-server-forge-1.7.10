@@ -31,6 +31,11 @@ add_executable(${PROJECT_NAME}
     src/redstone/Redstone.cpp
     src/enchantment/Enchantment.cpp
     src/potion/PotionEffect.cpp
+    src/scoreboard/Scoreboard.cpp
+    src/biome/BiomeRegistry.cpp
+    src/stats/StatAchievement.cpp
+    src/worldgen/NoiseGen.cpp
+    src/material/Material.cpp
     src/types/Chat.cpp
 )
 
