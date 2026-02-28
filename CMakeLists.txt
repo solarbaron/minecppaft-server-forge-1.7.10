@@ -28,6 +28,9 @@ add_executable(${PROJECT_NAME}
     src/ai/EntityAI.cpp
     src/command/CommandSystem.cpp
     src/forge/JNIBridge.cpp
+    src/redstone/Redstone.cpp
+    src/enchantment/Enchantment.cpp
+    src/potion/PotionEffect.cpp
     src/types/Chat.cpp
 )
 
