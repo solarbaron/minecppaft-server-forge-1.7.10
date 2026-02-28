@@ -1,183 +1,145 @@
 /**
- * Scoreboard.h — Server scoreboard system.
+ * Scoreboard.h — Complete scoreboard system.
  *
  * Java references:
- *   - net.minecraft.scoreboard.Scoreboard — Main scoreboard container
- *   - net.minecraft.scoreboard.ScoreObjective — Named objective with criteria
- *   - net.minecraft.scoreboard.Score — Player-objective value pair
- *   - net.minecraft.scoreboard.ScorePlayerTeam — Team with prefix/suffix
- *   - net.minecraft.scoreboard.IScoreObjectiveCriteria — Criteria interface
- *   - net.minecraft.scoreboard.Team — Base team class
+ *   net.minecraft.scoreboard.Scoreboard
+ *   net.minecraft.scoreboard.ScoreObjective
+ *   net.minecraft.scoreboard.ScorePlayerTeam
+ *   net.minecraft.scoreboard.Score
+ *   net.minecraft.scoreboard.IScoreObjectiveCriteria
  *
- * Thread safety:
- *   - Scoreboard uses std::shared_mutex for concurrent read, exclusive write.
- *   - Lock hierarchy: L20 (scoreboard mutex)
- *   - Score modifications are atomic within the scoreboard lock.
+ * Implements objectives with criteria, teams with prefix/suffix,
+ * player scores, 3 display slots, and sorted score retrieval.
  *
- * JNI readiness: String-based lookups, integer scores, simple struct layout.
+ * Thread safety: All mutating operations lock internal mutex.
+ *
+ * JNI readiness: String-keyed maps, simple types.
  */
 #pragma once
 
 #include <algorithm>
 #include <cstdint>
 #include <functional>
-#include <map>
 #include <memory>
 #include <mutex>
-#include <optional>
 #include <set>
-#include <shared_mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
 namespace mccpp {
 
-// Forward declarations
-class Scoreboard;
-
 // ═══════════════════════════════════════════════════════════════════════════
-// IScoreObjectiveCriteria — Criteria type for objectives.
+// ScoreCriteria — Objective criteria type.
 // Java reference: net.minecraft.scoreboard.IScoreObjectiveCriteria
 // ═══════════════════════════════════════════════════════════════════════════
 
 struct ScoreCriteria {
     std::string name;
-    bool readOnly;  // Java: isReadOnly()
+    bool readOnly = false;
 
-    // Java: IScoreObjectiveCriteria.func_96635_a — aggregate score from list
-    // For "dummy" criteria, returns 0; for health, returns current health, etc.
-    int32_t aggregateScore(const std::vector<int32_t>& /*values*/) const {
-        return 0; // Dummy/trigger criteria
-    }
+    // Java: INSTANCES static map — known criteria
+    static const std::string DUMMY;
+    static const std::string TRIGGER;
+    static const std::string DEATH_COUNT;
+    static const std::string PLAYER_KILL_COUNT;
+    static const std::string TOTAL_KILL_COUNT;
+    static const std::string HEALTH;
 };
 
-// Built-in criteria types
-// Java: IScoreObjectiveCriteria static fields
-namespace Criteria {
-    inline const ScoreCriteria DUMMY     = {"dummy", false};
-    inline const ScoreCriteria TRIGGER   = {"trigger", false};
-    inline const ScoreCriteria DEATH_COUNT = {"deathCount", true};
-    inline const ScoreCriteria PLAYER_KILL_COUNT = {"playerKillCount", true};
-    inline const ScoreCriteria TOTAL_KILL_COUNT = {"totalKillCount", true};
-    inline const ScoreCriteria HEALTH    = {"health", true};
-}
+// Static criteria names
+inline const std::string ScoreCriteria::DUMMY = "dummy";
+inline const std::string ScoreCriteria::TRIGGER = "trigger";
+inline const std::string ScoreCriteria::DEATH_COUNT = "deathCount";
+inline const std::string ScoreCriteria::PLAYER_KILL_COUNT = "playerKillCount";
+inline const std::string ScoreCriteria::TOTAL_KILL_COUNT = "totalKillCount";
+inline const std::string ScoreCriteria::HEALTH = "health";
 
 // ═══════════════════════════════════════════════════════════════════════════
-// ScoreObjective — Named objective with a criteria type.
+// ScoreObjective — A named scoreboard objective.
 // Java reference: net.minecraft.scoreboard.ScoreObjective
 // ═══════════════════════════════════════════════════════════════════════════
 
 struct ScoreObjective {
     std::string name;
     std::string displayName;
-    const ScoreCriteria* criteria;
+    ScoreCriteria criteria;
+    int32_t renderType = 0; // 0=integer, 1=hearts
 
-    ScoreObjective() : criteria(nullptr) {}
-    ScoreObjective(const std::string& n, const ScoreCriteria* c)
-        : name(n), displayName(n), criteria(c) {}
+    ScoreObjective() = default;
+    ScoreObjective(const std::string& n, const std::string& dn, const ScoreCriteria& c)
+        : name(n), displayName(dn), criteria(c) {}
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Score — Player-objective value pair.
-// Java reference: net.minecraft.scoreboard.Score
-//
-// Comparator sorts descending by score points (higher first).
-// ═══════════════════════════════════════════════════════════════════════════
-
-struct Score {
-    std::string playerName;
-    std::string objectiveName;
-    int32_t scorePoints = 0;
-
-    // Java: Score.increseScore [sic] — add to score
-    void increaseScore(int32_t amount, bool readOnly) {
-        if (readOnly) return; // Java throws, we silently skip
-        scorePoints += amount;
-    }
-
-    // Java: Score.decreaseScore
-    void decreaseScore(int32_t amount, bool readOnly) {
-        if (readOnly) return;
-        scorePoints -= amount;
-    }
-
-    // Comparator: descending by score
-    static bool compare(const Score& a, const Score& b) {
-        return a.scorePoints > b.scorePoints;
-    }
-};
-
-// ═══════════════════════════════════════════════════════════════════════════
-// ScorePlayerTeam — Team with name formatting and rules.
+// ScorePlayerTeam — A named team with members.
 // Java reference: net.minecraft.scoreboard.ScorePlayerTeam
-//
-// Features:
-//   - Color prefix and suffix for name formatting
-//   - Friendly fire toggle
-//   - See friendly invisibles toggle
-//   - Bitfield encoding: bit 0 = friendly fire, bit 1 = see invisibles
 // ═══════════════════════════════════════════════════════════════════════════
 
 struct ScorePlayerTeam {
-    std::string registeredName;   // Internal name (immutable)
-    std::string displayName;      // Display name
-    std::string namePrefix;       // Color prefix (e.g. "§c")
-    std::string nameSuffix;       // Color suffix (e.g. "§r")
-    std::set<std::string> members;
+    std::string registeredName;
+    std::string displayName;
+    std::string prefix;
+    std::string suffix;
     bool allowFriendlyFire = true;
-    bool seeFriendlyInvisibles = true;
+    bool canSeeFriendlyInvisibles = true;
+    std::set<std::string> members;
 
     ScorePlayerTeam() = default;
     ScorePlayerTeam(const std::string& name)
         : registeredName(name), displayName(name) {}
 
-    // Java: ScorePlayerTeam.formatString — prefix + name + suffix
-    std::string formatPlayerName(const std::string& playerName) const {
-        return namePrefix + playerName + nameSuffix;
+    // Java: formatString
+    std::string formatString(const std::string& playerName) const {
+        return prefix + playerName + suffix;
     }
 
-    // Java: ScorePlayerTeam.formatPlayerName(Team, String) — static version
-    static std::string formatWithTeam(const ScorePlayerTeam* team,
-                                        const std::string& playerName) {
-        if (!team) return playerName;
-        return team->formatPlayerName(playerName);
-    }
-
-    // Java: ScorePlayerTeam.func_98299_i — bitfield encoding
-    int32_t getFlagBits() const {
+    // Java: func_98299_i — pack flags as bitmask
+    int32_t getFriendlyFlags() const {
         int32_t flags = 0;
         if (allowFriendlyFire) flags |= 1;
-        if (seeFriendlyInvisibles) flags |= 2;
+        if (canSeeFriendlyInvisibles) flags |= 2;
         return flags;
     }
 
-    // Set flags from bitfield
-    void setFlagBits(int32_t flags) {
+    // Java: setFriendlyFlags
+    void setFriendlyFlags(int32_t flags) {
         allowFriendlyFire = (flags & 1) != 0;
-        seeFriendlyInvisibles = (flags & 2) != 0;
+        canSeeFriendlyInvisibles = (flags & 2) != 0;
+    }
+
+    // Java: static formatPlayerName
+    static std::string formatPlayerName(const ScorePlayerTeam* team, const std::string& name) {
+        return team ? team->formatString(name) : name;
     }
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Display slots — Where objectives are shown to players.
-// Java reference: net.minecraft.scoreboard.Scoreboard.objectiveDisplaySlots
+// ScoreEntry — A player's score for an objective.
+// Java reference: net.minecraft.scoreboard.Score
 // ═══════════════════════════════════════════════════════════════════════════
 
-enum class DisplaySlot : int32_t {
-    LIST       = 0,  // Tab player list
-    SIDEBAR    = 1,  // Right side of screen
-    BELOW_NAME = 2   // Below player name tags
+struct ScoreEntry {
+    std::string playerName;
+    std::string objectiveName;
+    int32_t points = 0;
+
+    ScoreEntry() = default;
+    ScoreEntry(const std::string& player, const std::string& obj)
+        : playerName(player), objectiveName(obj) {}
+
+    void increaseScore(int32_t n) { points += n; }
+    void decreaseScore(int32_t n) { points -= n; }
+
+    // Java: scoreComparator — sort by score descending
+    static bool compareDescending(const ScoreEntry& a, const ScoreEntry& b) {
+        return a.points > b.points;
+    }
 };
 
-constexpr int32_t NUM_DISPLAY_SLOTS = 3;
-
 // ═══════════════════════════════════════════════════════════════════════════
-// Scoreboard — Main scoreboard system.
+// Scoreboard — Full scoreboard state.
 // Java reference: net.minecraft.scoreboard.Scoreboard
-//
-// Thread safety: std::shared_mutex at lock hierarchy L20.
-// Read operations take shared lock, write operations take exclusive lock.
 // ═══════════════════════════════════════════════════════════════════════════
 
 class Scoreboard {
@@ -186,96 +148,219 @@ public:
 
     // ─── Objectives ───
 
-    // Java: Scoreboard.addScoreObjective
-    bool addObjective(const std::string& name, const ScoreCriteria* criteria);
+    // Java: getObjective
+    const ScoreObjective* getObjective(const std::string& name) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = objectives_.find(name);
+        return it != objectives_.end() ? &it->second : nullptr;
+    }
 
-    // Java: Scoreboard.getObjective
-    const ScoreObjective* getObjective(const std::string& name) const;
+    // Java: addScoreObjective
+    ScoreObjective* addObjective(const std::string& name, const std::string& displayName,
+                                  const ScoreCriteria& criteria) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (objectives_.count(name)) return nullptr; // Already exists
+        objectives_[name] = ScoreObjective(name, displayName, criteria);
+        criteriaObjectives_[criteria.name].push_back(name);
+        return &objectives_[name];
+    }
 
-    // Java: Scoreboard.func_96519_k — Remove objective
-    bool removeObjective(const std::string& name);
+    // Java: func_96519_k — remove objective
+    void removeObjective(const std::string& name) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = objectives_.find(name);
+        if (it == objectives_.end()) return;
 
-    // Java: Scoreboard.getScoreObjectives
-    std::vector<ScoreObjective> getObjectives() const;
+        // Clear display slots
+        for (int i = 0; i < 3; ++i) {
+            if (displaySlots_[i] == name) displaySlots_[i].clear();
+        }
+
+        // Remove from criteria index
+        auto& critList = criteriaObjectives_[it->second.criteria.name];
+        critList.erase(std::remove(critList.begin(), critList.end(), name), critList.end());
+
+        // Remove all scores for this objective
+        for (auto& [player, scores] : playerScores_) {
+            scores.erase(name);
+        }
+
+        objectives_.erase(it);
+    }
+
+    // Java: getScoreObjectives
+    std::vector<std::string> getObjectiveNames() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::vector<std::string> names;
+        names.reserve(objectives_.size());
+        for (const auto& [k, v] : objectives_) names.push_back(k);
+        return names;
+    }
+
+    // ─── Display Slots ───
+    // Java: 0=list, 1=sidebar, 2=belowName
+
+    void setDisplaySlot(int32_t slot, const std::string& objectiveName) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (slot >= 0 && slot < 3) displaySlots_[slot] = objectiveName;
+    }
+
+    std::string getDisplaySlot(int32_t slot) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return (slot >= 0 && slot < 3) ? displaySlots_[slot] : "";
+    }
+
+    // Java: getObjectiveDisplaySlot — slot number to name
+    static std::string getDisplaySlotName(int32_t slot) {
+        switch (slot) {
+            case 0: return "list";
+            case 1: return "sidebar";
+            case 2: return "belowName";
+            default: return "";
+        }
+    }
+
+    // Java: getObjectiveDisplaySlotNumber — name to slot number
+    static int32_t getDisplaySlotNumber(const std::string& name) {
+        if (name == "list") return 0;
+        if (name == "sidebar") return 1;
+        if (name == "belowName") return 2;
+        return -1;
+    }
 
     // ─── Scores ───
 
-    // Java: Scoreboard.getValueFromObjective
-    Score& getOrCreateScore(const std::string& playerName,
-                             const std::string& objectiveName);
+    // Java: getValueFromObjective
+    ScoreEntry& getOrCreateScore(const std::string& playerName, const std::string& objectiveName) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto& playerMap = playerScores_[playerName];
+        auto it = playerMap.find(objectiveName);
+        if (it == playerMap.end()) {
+            playerMap[objectiveName] = ScoreEntry(playerName, objectiveName);
+        }
+        return playerMap[objectiveName];
+    }
 
-    // Java: Scoreboard.getSortedScores
-    std::vector<Score> getSortedScores(const std::string& objectiveName) const;
+    // Java: getSortedScores — all scores for an objective, sorted descending
+    std::vector<ScoreEntry> getSortedScores(const std::string& objectiveName) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::vector<ScoreEntry> result;
+        for (const auto& [player, scores] : playerScores_) {
+            auto it = scores.find(objectiveName);
+            if (it != scores.end()) {
+                result.push_back(it->second);
+            }
+        }
+        std::sort(result.begin(), result.end(), ScoreEntry::compareDescending);
+        return result;
+    }
 
-    // Java: Scoreboard.func_96515_c — Remove all scores for a player
-    void removePlayer(const std::string& playerName);
-
-    // Java: Scoreboard.func_96510_d — Get all scores for a player
-    std::vector<Score> getPlayerScores(const std::string& playerName) const;
-
-    // ─── Display Slots ───
-
-    // Java: Scoreboard.setObjectiveInDisplaySlot
-    void setDisplaySlot(DisplaySlot slot, const std::string& objectiveName);
-
-    // Java: Scoreboard.getObjectiveInDisplaySlot
-    std::optional<std::string> getDisplaySlot(DisplaySlot slot) const;
-
-    // Java: Scoreboard.getObjectiveDisplaySlot — slot index to name
-    static std::string getDisplaySlotName(int32_t slot);
-
-    // Java: Scoreboard.getObjectiveDisplaySlotNumber — name to index
-    static int32_t getDisplaySlotNumber(const std::string& name);
+    // Java: func_96515_c — remove all scores for a player
+    void removePlayerScores(const std::string& playerName) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        playerScores_.erase(playerName);
+    }
 
     // ─── Teams ───
 
-    // Java: Scoreboard.createTeam
-    bool createTeam(const std::string& name);
+    // Java: getTeam
+    const ScorePlayerTeam* getTeam(const std::string& name) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = teams_.find(name);
+        return it != teams_.end() ? &it->second : nullptr;
+    }
 
-    // Java: Scoreboard.getTeam
-    const ScorePlayerTeam* getTeam(const std::string& name) const;
-    ScorePlayerTeam* getTeamMutable(const std::string& name);
+    // Java: createTeam
+    ScorePlayerTeam* createTeam(const std::string& name) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (teams_.count(name)) return nullptr; // Already exists
+        teams_[name] = ScorePlayerTeam(name);
+        return &teams_[name];
+    }
 
-    // Java: Scoreboard.removeTeam
-    bool removeTeam(const std::string& name);
+    // Java: removeTeam
+    void removeTeam(const std::string& name) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = teams_.find(name);
+        if (it == teams_.end()) return;
 
-    // Java: Scoreboard.getTeams
-    std::vector<ScorePlayerTeam> getTeams() const;
+        // Remove all member->team mappings
+        for (const auto& member : it->second.members) {
+            teamMemberships_.erase(member);
+        }
+        teams_.erase(it);
+    }
 
-    // Java: Scoreboard.getPlayersTeam
-    const ScorePlayerTeam* getPlayersTeam(const std::string& playerName) const;
+    // Java: func_151392_a — add player to team
+    bool addPlayerToTeam(const std::string& playerName, const std::string& teamName) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = teams_.find(teamName);
+        if (it == teams_.end()) return false;
 
-    // Java: Scoreboard.func_151392_a — Add player to team
-    bool addPlayerToTeam(const std::string& playerName,
-                          const std::string& teamName);
+        // Remove from current team first
+        auto curTeam = teamMemberships_.find(playerName);
+        if (curTeam != teamMemberships_.end()) {
+            auto oldIt = teams_.find(curTeam->second);
+            if (oldIt != teams_.end()) {
+                oldIt->second.members.erase(playerName);
+            }
+        }
 
-    // Java: Scoreboard.removePlayerFromTeams
-    bool removePlayerFromTeams(const std::string& playerName);
+        teamMemberships_[playerName] = teamName;
+        it->second.members.insert(playerName);
+        return true;
+    }
 
-    // Java: Scoreboard.removePlayerFromTeam
-    bool removePlayerFromTeam(const std::string& playerName,
-                               const std::string& teamName);
+    // Java: removePlayerFromTeams
+    bool removePlayerFromTeams(const std::string& playerName) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = teamMemberships_.find(playerName);
+        if (it == teamMemberships_.end()) return false;
 
-    // Java: Scoreboard.getTeamNames
-    std::vector<std::string> getTeamNames() const;
+        auto teamIt = teams_.find(it->second);
+        if (teamIt != teams_.end()) {
+            teamIt->second.members.erase(playerName);
+        }
+        teamMemberships_.erase(it);
+        return true;
+    }
+
+    // Java: getPlayersTeam
+    std::string getPlayersTeam(const std::string& playerName) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = teamMemberships_.find(playerName);
+        return it != teamMemberships_.end() ? it->second : "";
+    }
+
+    // Java: getTeamNames
+    std::vector<std::string> getTeamNames() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::vector<std::string> names;
+        names.reserve(teams_.size());
+        for (const auto& [k, v] : teams_) names.push_back(k);
+        return names;
+    }
 
 private:
-    mutable std::shared_mutex mutex_;  // Lock hierarchy L20
+    mutable std::mutex mutex_;
 
-    // Java: scoreObjectives — name → objective
+    // Java: scoreObjectives — name -> objective
     std::unordered_map<std::string, ScoreObjective> objectives_;
 
-    // Java: field_96544_c — playerName → {objectiveName → Score}
+    // Java: scoreObjectiveCriterias — criteria name -> list of objective names
+    std::unordered_map<std::string, std::vector<std::string>> criteriaObjectives_;
+
+    // Java: field_96544_c — player name -> (objective name -> score)
     std::unordered_map<std::string,
-        std::unordered_map<std::string, Score>> playerScores_;
+        std::unordered_map<std::string, ScoreEntry>> playerScores_;
 
-    // Java: objectiveDisplaySlots[3]
-    std::string displaySlots_[NUM_DISPLAY_SLOTS];
+    // Java: objectiveDisplaySlots[3] — 0=list, 1=sidebar, 2=belowName
+    std::string displaySlots_[3];
 
-    // Java: teams — name → team
+    // Java: teams — team name -> team
     std::unordered_map<std::string, ScorePlayerTeam> teams_;
 
-    // Java: teamMemberships — playerName → team name
+    // Java: teamMemberships — player name -> team name
     std::unordered_map<std::string, std::string> teamMemberships_;
 };
 
