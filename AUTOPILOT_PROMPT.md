@@ -6,8 +6,8 @@ The project uses:
 
 * **C++17**, CMake 3.20+
 * Source in `src/`, headers in `include/`
-* Reference Java in `reference-java/` (3,755 decompiled `.java` files from the vanilla 1.7.10 server JAR)
-* The obfuscated class names map to vanilla Minecraft internals; `reference-java/net/minecraft/server/MinecraftServer.java` is the main server class
+* Reference Java in `reference-java/` (3,755 decompiled `.java` files from the vanilla 1.7.10 server JAR, deobfuscated with MCP stable-12 mappings)
+* Classes, methods, and fields use human-readable MCP names (e.g. `WorldServer`, `NetworkSystem`, `EntityPlayerMP`, `serverRunning`); `reference-java/net/minecraft/server/MinecraftServer.java` is the main server class
 * **Multi-threaded Architecture:** Unlike the original single-threaded Java server, this implementation must be heavily multi-threaded from the ground up (e.g., asynchronous networking, parallel chunk loading/generation, and concurrent entity ticking where possible) using modern C++ concurrency (`std::thread`, `std::atomic`, `std::mutex`, `std::shared_mutex`).
 * **JNI Forge Bridge (End Goal):** The final architecture will support Minecraft 1.7.10 Forge mods via a Java Native Interface (JNI) bridge. All core game objects (Blocks, Entities, World, Registries) must be designed with predictable memory layouts and clear lifecycle hooks to allow seamless future binding to a JVM.
 
