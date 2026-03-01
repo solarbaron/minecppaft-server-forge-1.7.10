@@ -16,6 +16,7 @@
 #include "command/CommandSystem.h"
 #include "types/VarInt.h"
 #include "world/World.h"
+#include "crafting/Crafting.h"
 
 #include <cmath>
 
@@ -633,6 +634,11 @@ void PlayHandler::handlePacket(int32_t packetId,
             handlePlayerBlockPlace(data, length, conn);
             break;
         case ServerboundPacket::CloseWindow:
+            // Close any open container window (workbench, chest, etc.)
+            if (openWindowId_ > 0) {
+                closeOpenWindow(conn);
+                break;
+            }
             // Drop cursor item if any — Java: Container.onContainerClosed
             if (cursorItem_) {
                 server_.spawnItemDrop(playerX_, playerY_ + 1.5, playerZ_,
@@ -1055,6 +1061,89 @@ void PlayHandler::sendSetSlot(Connection& conn, int8_t windowId, int16_t slot,
     writeShort(pkt, slot);
     writeItemStack(pkt, stack);
     conn.sendPacket(std::move(pkt));
+}
+
+void PlayHandler::sendOpenWindow(Connection& conn, int8_t windowId, int8_t windowType,
+                                  const std::string& windowTitle, int8_t slotCount) {
+    // Java reference: S2DPacketOpenWindow.writePacketData()
+    // Format: UByte windowId, UByte invType, String windowTitle, UByte numSlots, Bool useProvidedTitle
+    std::vector<uint8_t> pkt;
+    writeVarInt(pkt, ClientboundPacket::OpenWindow);
+    writeByte(pkt, static_cast<uint8_t>(windowId));
+    writeByte(pkt, static_cast<uint8_t>(windowType));
+    writeString(pkt, windowTitle);
+    writeByte(pkt, static_cast<uint8_t>(slotCount));
+    writeByte(pkt, 1); // useProvidedTitle = true
+    conn.sendPacket(std::move(pkt));
+}
+
+void PlayHandler::openWorkbench(Connection& conn, int32_t blockX, int32_t blockY, int32_t blockZ) {
+    // Java: EntityPlayerMP.displayGUIWorkbench → S2D OpenWindow type 1 "minecraft:crafting_table"
+    // Close any existing open window first
+    if (openWindowId_ > 0) {
+        closeOpenWindow(conn);
+    }
+
+    // Assign new window ID
+    openWindowId_ = nextWindowId_++;
+    if (nextWindowId_ > 100) nextWindowId_ = 1; // Wrap around
+    openWindowType_ = 1; // crafting_table
+
+    // Clear workbench grid
+    for (int i = 0; i < 9; ++i) workbenchGrid_[i] = std::nullopt;
+    workbenchResult_ = std::nullopt;
+
+    // Send S2D OpenWindow (type 1 = workbench)
+    sendOpenWindow(conn, openWindowId_, 1, "Crafting", 0);
+
+    // Send empty window contents — 10 slots (result + 9 grid) + 36 player inv
+    // Java: ContainerWorkbench has 46 slots total (0=result, 1-9=grid, 10-36=main, 37-45=hotbar)
+    std::vector<uint8_t> pkt;
+    writeVarInt(pkt, ClientboundPacket::WindowItems);
+    writeByte(pkt, static_cast<uint8_t>(openWindowId_));
+    writeShort(pkt, 46); // 46 slots total
+
+    // Slot 0: crafting output (empty)
+    writeShort(pkt, -1);
+    // Slots 1-9: crafting grid (empty)
+    for (int i = 0; i < 9; ++i) writeShort(pkt, -1);
+    // Slots 10-36: main inventory (rows 1-3 of player inventory, slots 9-35)
+    for (int i = 9; i < 36; ++i) {
+        writeItemStack(pkt, inventory_.getStackInSlot(i));
+    }
+    // Slots 37-45: hotbar (player inventory slots 0-8)
+    for (int i = 0; i < 9; ++i) {
+        writeItemStack(pkt, inventory_.getStackInSlot(i));
+    }
+
+    conn.sendPacket(std::move(pkt));
+}
+
+void PlayHandler::closeOpenWindow(Connection& conn) {
+    if (openWindowId_ <= 0) return;
+
+    // Java: ContainerWorkbench.onContainerClosed — drop items from crafting grid
+    if (openWindowType_ == 1) { // crafting_table
+        for (int i = 0; i < 9; ++i) {
+            if (workbenchGrid_[i]) {
+                server_.spawnItemDrop(playerX_, playerY_ + 1.5, playerZ_,
+                    workbenchGrid_[i]->getItemId(), workbenchGrid_[i]->getDamage(),
+                    workbenchGrid_[i]->getStackSize());
+                workbenchGrid_[i] = std::nullopt;
+            }
+        }
+        workbenchResult_ = std::nullopt;
+    }
+
+    // Drop cursor item
+    if (cursorItem_) {
+        server_.spawnItemDrop(playerX_, playerY_ + 1.5, playerZ_,
+            cursorItem_->getItemId(), cursorItem_->getDamage(), cursorItem_->getStackSize());
+        cursorItem_ = std::nullopt;
+    }
+
+    openWindowId_ = 0;
+    openWindowType_ = -1;
 }
 
 void PlayHandler::sendEntityEquipment(Connection& conn, int32_t entityId, int16_t equipSlot,
@@ -1794,6 +1883,18 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
     if (worlds.empty()) return;
     WorldServer* world = worlds[0].get();
 
+    // ─── Block activation check ──────────────────────────────────────────
+    // Java: onBlockActivated() — crafting table, chests, furnaces, etc.
+    Block* clickedBlock = world->getBlock(blockX, static_cast<int32_t>(blockY), blockZ);
+    int32_t clickedBlockId = clickedBlock ? Block::getIdFromBlock(clickedBlock) : 0;
+
+    // Crafting table (block ID 58) — Java: BlockWorkbench.onBlockActivated()
+    // Sneaking players bypass activation to place blocks
+    if (clickedBlockId == 58 && !isSneaking_) {
+        openWorkbench(conn, blockX, static_cast<int32_t>(blockY), blockZ);
+        return;
+    }
+
     // Calculate the position of the new block based on the face clicked
     // Java reference: same offset logic as processPlayerBlockPlacement
     int32_t placeX = blockX;
@@ -2109,6 +2210,202 @@ void PlayHandler::handleClickWindow(const uint8_t* data, size_t length, Connecti
         // Sync cursor item — slot -1
         sendSetSlot(conn, -1, -1, cursorItem_);
     };
+
+    // ═══════════════════════════════════════════════════════════════════
+    // Workbench (3×3 crafting table) window handler
+    // ═══════════════════════════════════════════════════════════════════
+    if (windowId > 0 && windowId == openWindowId_ && openWindowType_ == 1) {
+        // Workbench slot layout (Java: ContainerWorkbench):
+        //   0       = crafting result
+        //   1-9     = crafting grid (3×3)
+        //   10-36   = main inventory (player slots 9-35)
+        //   37-45   = hotbar (player slots 0-8)
+
+        // Helper: map workbench window slot to get/set reference
+        auto getWbSlot = [&](int16_t s) -> std::optional<ItemStack>* {
+            if (s == 0) return &workbenchResult_;
+            if (s >= 1 && s <= 9) return &workbenchGrid_[s - 1];
+            return nullptr;
+        };
+
+        // Helper: map workbench player-inventory slots to InventoryPlayer
+        auto getInvSlotForWb = [&](int16_t s) -> int32_t {
+            if (s >= 10 && s <= 36) return s - 10 + 9;  // main inv: 9-35
+            if (s >= 37 && s <= 45) return s - 37;       // hotbar: 0-8
+            return -1;
+        };
+
+        // Helper: update workbench crafting result
+        auto updateWbCrafting = [&]() {
+            CraftingGrid grid(3, 3);
+            for (int i = 0; i < 9; ++i) {
+                grid.setStack(i % 3, i / 3, workbenchGrid_[i]);
+            }
+            workbenchResult_ = CraftingManager::getInstance().findMatchingRecipe(grid);
+        };
+
+        // Helper: sync entire workbench window to client
+        auto syncWbWindow = [&]() {
+            updateWbCrafting();
+            // Send result slot
+            sendSetSlot(conn, openWindowId_, 0, workbenchResult_);
+            // Send grid slots 1-9
+            for (int i = 0; i < 9; ++i) {
+                sendSetSlot(conn, openWindowId_, static_cast<int16_t>(i + 1), workbenchGrid_[i]);
+            }
+            // Send player inventory slots 10-36 (main inv)
+            for (int i = 9; i < 36; ++i) {
+                sendSetSlot(conn, openWindowId_, static_cast<int16_t>(i + 1), inventory_.getStackInSlot(i));
+            }
+            // Send hotbar 37-45
+            for (int i = 0; i < 9; ++i) {
+                sendSetSlot(conn, openWindowId_, static_cast<int16_t>(37 + i), inventory_.getStackInSlot(i));
+            }
+            // Sync cursor
+            sendSetSlot(conn, -1, -1, cursorItem_);
+        };
+
+        if (mode == 0 && (button == 0 || button == 1)) {
+            // Mode 0: Normal click
+            if (slotId == -999) {
+                // Click outside — drop cursor
+                if (cursorItem_) {
+                    if (button == 0) {
+                        server_.spawnItemDrop(playerX_, playerY_ + 1.5, playerZ_,
+                            cursorItem_->getItemId(), cursorItem_->getDamage(), cursorItem_->getStackSize());
+                        cursorItem_ = std::nullopt;
+                    } else {
+                        server_.spawnItemDrop(playerX_, playerY_ + 1.5, playerZ_,
+                            cursorItem_->getItemId(), cursorItem_->getDamage(), 1);
+                        int32_t rem = cursorItem_->getStackSize() - 1;
+                        if (rem <= 0) cursorItem_ = std::nullopt;
+                        else cursorItem_->setStackSize(rem);
+                    }
+                }
+                sendConfirm(true);
+                syncWbWindow();
+                return;
+            }
+
+            if (slotId < 0 || slotId > 45) { sendConfirm(false); return; }
+
+            if (slotId == 0) {
+                // Click result slot — extract crafted item
+                if (workbenchResult_ && !cursorItem_) {
+                    cursorItem_ = workbenchResult_;
+                    workbenchResult_ = std::nullopt;
+                    // Consume 1 from each grid slot that has items
+                    for (int i = 0; i < 9; ++i) {
+                        if (workbenchGrid_[i]) {
+                            int32_t sz = workbenchGrid_[i]->getStackSize() - 1;
+                            if (sz <= 0) workbenchGrid_[i] = std::nullopt;
+                            else workbenchGrid_[i]->setStackSize(sz);
+                        }
+                    }
+                } else if (workbenchResult_ && cursorItem_) {
+                    // Cursor has item — can only stack if same type
+                    if (cursorItem_->getItemId() == workbenchResult_->getItemId() &&
+                        cursorItem_->getDamage() == workbenchResult_->getDamage()) {
+                        int32_t newSize = cursorItem_->getStackSize() + workbenchResult_->getStackSize();
+                        if (newSize <= 64) {
+                            cursorItem_->setStackSize(newSize);
+                            workbenchResult_ = std::nullopt;
+                            for (int i = 0; i < 9; ++i) {
+                                if (workbenchGrid_[i]) {
+                                    int32_t sz = workbenchGrid_[i]->getStackSize() - 1;
+                                    if (sz <= 0) workbenchGrid_[i] = std::nullopt;
+                                    else workbenchGrid_[i]->setStackSize(sz);
+                                }
+                            }
+                        }
+                    }
+                }
+                sendConfirm(true);
+                syncWbWindow();
+                return;
+            }
+
+            // Grid slots (1-9) or player inventory slots (10-45)
+            std::optional<ItemStack>* slotRef = getWbSlot(slotId);
+            int32_t invIdx = (slotRef == nullptr) ? getInvSlotForWb(slotId) : -1;
+
+            std::optional<ItemStack> slotStack;
+            if (slotRef) slotStack = *slotRef;
+            else if (invIdx >= 0) slotStack = inventory_.getStackInSlot(invIdx);
+            else { sendConfirm(false); return; }
+
+            if (button == 0) {
+                // Left click: swap cursor ↔ slot
+                if (slotRef) *slotRef = cursorItem_;
+                else if (invIdx >= 0) inventory_.setInventorySlotContents(invIdx, cursorItem_);
+                cursorItem_ = slotStack;
+            } else {
+                // Right click: place 1 from cursor, or pick up half
+                if (cursorItem_ && !slotStack) {
+                    // Place 1 item
+                    ItemStack placed(cursorItem_->getItemId(), 1, cursorItem_->getDamage());
+                    if (slotRef) *slotRef = placed;
+                    else if (invIdx >= 0) inventory_.setInventorySlotContents(invIdx, placed);
+                    int32_t rem = cursorItem_->getStackSize() - 1;
+                    if (rem <= 0) cursorItem_ = std::nullopt;
+                    else cursorItem_->setStackSize(rem);
+                } else if (cursorItem_ && slotStack &&
+                           cursorItem_->getItemId() == slotStack->getItemId() &&
+                           cursorItem_->getDamage() == slotStack->getDamage()) {
+                    // Place 1 onto matching stack
+                    int32_t newSize = slotStack->getStackSize() + 1;
+                    if (newSize <= 64) {
+                        slotStack->setStackSize(newSize);
+                        if (slotRef) *slotRef = slotStack;
+                        else if (invIdx >= 0) inventory_.setInventorySlotContents(invIdx, slotStack);
+                        int32_t rem = cursorItem_->getStackSize() - 1;
+                        if (rem <= 0) cursorItem_ = std::nullopt;
+                        else cursorItem_->setStackSize(rem);
+                    }
+                } else if (!cursorItem_ && slotStack) {
+                    // Pick up half
+                    int32_t half = (slotStack->getStackSize() + 1) / 2;
+                    int32_t remaining = slotStack->getStackSize() - half;
+                    cursorItem_ = ItemStack(slotStack->getItemId(), half, slotStack->getDamage());
+                    if (remaining <= 0) {
+                        if (slotRef) *slotRef = std::nullopt;
+                        else if (invIdx >= 0) inventory_.setInventorySlotContents(invIdx, std::nullopt);
+                    } else {
+                        slotStack->setStackSize(remaining);
+                        if (slotRef) *slotRef = slotStack;
+                        else if (invIdx >= 0) inventory_.setInventorySlotContents(invIdx, slotStack);
+                    }
+                } else if (!cursorItem_ && !slotStack) {
+                    // Nothing to do
+                } else {
+                    // Swap (different items)
+                    if (slotRef) *slotRef = cursorItem_;
+                    else if (invIdx >= 0) inventory_.setInventorySlotContents(invIdx, cursorItem_);
+                    cursorItem_ = slotStack;
+                }
+            }
+
+            sendConfirm(true);
+            syncWbWindow();
+            return;
+        }
+
+        // Shift-click in workbench
+        if (mode == 1 && (button == 0 || button == 1)) {
+            if (slotId < 0 || slotId > 45) { sendConfirm(false); return; }
+
+            // Simplified shift-click: move items between grid↔inventory
+            // For now just confirm and resync
+            sendConfirm(true);
+            syncWbWindow();
+            return;
+        }
+
+        // Other modes — confirm and sync
+        sendConfirm(true);
+        syncWbWindow();
+        return;
+    }
 
     if (!container_ || windowId != 0) {
         sendConfirm(false);

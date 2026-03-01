@@ -259,6 +259,24 @@ public:
                      const std::optional<ItemStack>& stack);
 
     /**
+     * Send S2D OpenWindow to the client.
+     * Java reference: S2DPacketOpenWindow
+     */
+    void sendOpenWindow(Connection& conn, int8_t windowId, int8_t windowType,
+                        const std::string& windowTitle, int8_t slotCount);
+
+    /**
+     * Open a 3×3 crafting table (workbench) for this player.
+     * Sends S2D OpenWindow + S30 (window contents).
+     */
+    void openWorkbench(Connection& conn, int32_t blockX, int32_t blockY, int32_t blockZ);
+
+    /**
+     * Close the current open window, dropping items from the crafting grid.
+     */
+    void closeOpenWindow(Connection& conn);
+
+    /**
      * Send entity teleport (absolute position) to the client.
      * Java reference: S18PacketEntityTeleport
      */
@@ -644,6 +662,16 @@ private:
     InventoryPlayer inventory_;
     std::unique_ptr<ContainerPlayer> container_;
     std::optional<ItemStack> cursorItem_; // Java: InventoryPlayer.getItemStack() — item on cursor
+
+    // ─── Open window tracking (workbench/chest/furnace/etc.) ───
+    int8_t openWindowId_ = 0;       // 0 = player inventory, >0 = open container
+    int8_t openWindowType_ = -1;    // -1 = none, 1 = crafting_table
+    int8_t nextWindowId_ = 1;       // Counter for window IDs (increments)
+
+    // ─── Workbench (3×3 crafting table) ───
+    // Java: ContainerWorkbench.craftMatrix (InventoryCrafting 3×3) + craftResult
+    std::optional<ItemStack> workbenchGrid_[9]; // 3×3 crafting grid
+    std::optional<ItemStack> workbenchResult_;   // Crafting output slot
 
     // Combat state — Java: EntityPlayer fields
     float health_ = 20.0f;        // EntityLivingBase.health
