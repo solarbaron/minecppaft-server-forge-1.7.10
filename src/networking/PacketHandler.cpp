@@ -2841,7 +2841,108 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
             if (heldBlock && Block::getIdFromBlock(heldBlock) != 0) {
                 placeBlockId = heldItemId;
             }
+        } else {
+            // Item→block mapping for items > 255
+            // Java: ItemDoor, ItemSeeds, ItemRedstone, ItemSign, ItemBed, etc.
+            switch (heldItemId) {
+                case 324: placeBlockId = 64; break;  // Wooden door item → door block
+                case 330: placeBlockId = 71; break;  // Iron door item → iron door block
+                case 331: placeBlockId = 55; break;  // Redstone dust → redstone wire
+                case 323: placeBlockId = 63; break;  // Sign → standing sign
+                case 338: placeBlockId = 83; break;  // Sugar cane → sugar cane block
+                case 356: placeBlockId = 93; break;  // Repeater item → repeater block
+                case 404: placeBlockId = 149; break; // Comparator item → comparator block
+                case 355: placeBlockId = 26; break;  // Bed item → bed block
+                case 295: placeBlockId = 59; break;  // Wheat seeds → wheat crop
+                case 391: placeBlockId = 141; break; // Carrot → carrot crop
+                case 392: placeBlockId = 142; break; // Potato → potato crop
+                case 360: placeBlockId = 105; break; // Melon seeds → melon stem
+                case 361: placeBlockId = 104; break; // Pumpkin seeds → pumpkin stem
+                case 321: break; // Paintings — entity, not block
+                case 389: placeBlockId = 140; break; // Flower pot item → flower pot block
+                case 397: placeBlockId = 144; break; // Skull item → skull block
+                default: break;
+            }
         }
+    }
+
+    // ─── Door item placement (324/330) — 2-block tall structure ───────
+    // Java: ItemDoor.onItemUse() → place lower + upper halves
+    if (placeBlockId == 64 || placeBlockId == 71) {
+        // Doors can only be placed on top face
+        if (direction != 1) return;
+        // Need air at placeY and placeY+1
+        if (placeY + 1 >= 256) return;
+        Block* above = world->getBlock(placeX, placeY + 1, placeZ);
+        if (above && Block::getIdFromBlock(above) != 0) return;
+
+        // Calculate facing from player yaw
+        // Java: MathHelper.floor_double((yaw + 180) * 4 / 360 - 0.5) & 3
+        int doorFacing = (static_cast<int>(std::floor((playerYaw_ + 180.0f) * 4.0f / 360.0f - 0.5f)) & 3);
+        // doorFacing: 0=west, 1=north, 2=east, 3=south
+
+        // Lower half: meta = doorFacing
+        world->setBlock(placeX, placeY, placeZ, Block::getBlockById(placeBlockId));
+        world->setBlockMetadata(placeX, placeY, placeZ, doorFacing);
+        server_.broadcastBlockChange(placeX, placeY, placeZ, placeBlockId, doorFacing);
+
+        // Upper half: meta = 8 (upper bit)
+        world->setBlock(placeX, placeY + 1, placeZ, Block::getBlockById(placeBlockId));
+        world->setBlockMetadata(placeX, placeY + 1, placeZ, 8);
+        server_.broadcastBlockChange(placeX, placeY + 1, placeZ, placeBlockId, 8);
+
+        // Play place sound
+        server_.broadcastSound("dig.wood",
+            static_cast<double>(placeX) + 0.5, static_cast<double>(placeY) + 0.5,
+            static_cast<double>(placeZ) + 0.5, 1.0f, 0.8f);
+
+        // Consume item in survival
+        if (gameMode_ != 1) {
+            auto held = inventory_.getCurrentItem();
+            if (held && held->getStackSize() > 1) {
+                ItemStack newStack(held->getItemId(), held->getStackSize() - 1, held->getDamage());
+                inventory_.setInventorySlotContents(inventory_.getCurrentSlot(), newStack);
+            } else {
+                inventory_.setInventorySlotContents(inventory_.getCurrentSlot(), std::nullopt);
+            }
+            sendWindowItems(conn);
+        }
+        return;
+    }
+
+    // ─── Seed placement (295/391/392/360/361) — only on farmland ─────
+    // Java: ItemSeeds.onItemUse() — requires farmland (60) below
+    if (placeBlockId == 59 || placeBlockId == 141 || placeBlockId == 142 ||
+        placeBlockId == 104 || placeBlockId == 105) {
+        // Seeds can only be placed on farmland (60), on top face
+        if (direction != 1) return;
+        // The clicked block must be farmland
+        Block* clickedBlock = world->getBlock(blockX, static_cast<int32_t>(blockY), blockZ);
+        int clickedId = clickedBlock ? Block::getIdFromBlock(clickedBlock) : 0;
+        if (clickedId != 60) return; // Must be farmland
+
+        // Place crop at meta 0 (initial growth stage)
+        world->setBlock(placeX, placeY, placeZ, Block::getBlockById(placeBlockId));
+        world->setBlockMetadata(placeX, placeY, placeZ, 0);
+        server_.broadcastBlockChange(placeX, placeY, placeZ, placeBlockId, 0);
+
+        // Play place sound
+        server_.broadcastSound("dig.grass",
+            static_cast<double>(placeX) + 0.5, static_cast<double>(placeY) + 0.5,
+            static_cast<double>(placeZ) + 0.5, 1.0f, 0.8f);
+
+        // Consume seed in survival
+        if (gameMode_ != 1) {
+            auto held = inventory_.getCurrentItem();
+            if (held && held->getStackSize() > 1) {
+                ItemStack newStack(held->getItemId(), held->getStackSize() - 1, held->getDamage());
+                inventory_.setInventorySlotContents(inventory_.getCurrentSlot(), newStack);
+            } else {
+                inventory_.setInventorySlotContents(inventory_.getCurrentSlot(), std::nullopt);
+            }
+            sendWindowItems(conn);
+        }
+        return;
     }
 
     // Place the block
