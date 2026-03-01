@@ -23,6 +23,8 @@
 #include "block/Block.h"
 #include "worldgen/ChunkProviderGenerate.h"
 #include "worldgen/NoiseGeneratorOctaves.h"
+#include "worldgen/MapGenCaves.h"
+#include "worldgen/WorldGenOre.h"
 
 #include <array>
 #include <cstring>
@@ -113,10 +115,33 @@ public:
         // ── Step 5: Surface replacement ──
         replaceBlocksForBiome(chunkX, chunkZ, blocks.data(), meta.data());
 
-        // ── Step 6: Bedrock ──
+        // ── Step 6: Cave generation ──
+        // Java reference: ChunkProviderGenerate.provideChunk → caveGenerator.generate
+        caveGen_.generate(seed_, chunkX, chunkZ, blocks.data(),
+            [](int32_t /*x*/, int32_t /*z*/) -> int32_t { return GRASS; });
+
+        // ── Step 7: Bedrock ──
         placeBedrock(chunkX, chunkZ, blocks.data());
 
-        // ── Step 7: Fill chunk sections ──
+        // ── Step 8: Ore generation ──
+        // Java reference: ChunkProviderGenerate.populate → BiomeDecorator.genStandardOre
+        {
+            OreVeinGenerator::RNG oreRng;
+            oreRng.setSeed(seed_ + ChunkProviderGenerate::getChunkSeed(chunkX, chunkZ));
+
+            auto getBlock = [&blocks](int32_t x, int32_t y, int32_t z) -> int32_t {
+                if (x < 0 || x > 15 || z < 0 || z > 15 || y < 0 || y > 255) return 0;
+                return blocks[(x * 16 + z) * 256 + y];
+            };
+            auto setBlock = [&blocks](int32_t x, int32_t y, int32_t z, int32_t id) {
+                if (x < 0 || x > 15 || z < 0 || z > 15 || y < 0 || y > 255) return;
+                blocks[(x * 16 + z) * 256 + y] = id;
+            };
+
+            OreDistribution::generateChunkOres(chunkX, chunkZ, oreRng, getBlock, setBlock);
+        }
+
+        // ── Step 9: Fill chunk sections ──
         for (int x = 0; x < 16; ++x) {
             for (int z = 0; z < 16; ++z) {
                 for (int y = 0; y < 256; ++y) {
@@ -162,6 +187,7 @@ public:
 private:
     int64_t seed_;
     ChunkProviderGenerate terrain_;
+    MapGenCaves caveGen_;   // Cave carver
     std::unique_ptr<NoiseGeneratorOctaves> noiseGen1_;  // lower density
     std::unique_ptr<NoiseGeneratorOctaves> noiseGen2_;  // upper density
     std::unique_ptr<NoiseGeneratorOctaves> noiseGen3_;  // interpolation

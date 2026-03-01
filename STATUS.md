@@ -118,7 +118,7 @@
 - **BiomeRegistry** — 355 lines, biome types registered
 - **NoiseGen** — 391 lines, Perlin/Simplex noise generators
 - **GenLayer** — 745-line header, biome generation layers
-- ❌ Only flat generator actually works; no terrain/caves/ores
+- ~~❌ Only flat generator actually works; no terrain/caves/ores~~ ✅ OverworldGenerator with caves + ores
 
 ### Forge / JNI Bridge
 - 440 lines, JVM initialization framework
@@ -143,7 +143,7 @@
 
 ### Gameplay
 - ~~**Block breaking/placing**~~ — ✅ PlayerDigging/PlayerBlockPlace handled, instant break + face-offset placement
-- **Item drops** — no EntityItem, no pickup mechanics
+- ~~**Item drops**~~ — ✅ EntityItem spawn on block break with pickup
 - ~~**Player-to-player visibility**~~ — ✅ S0C SpawnPlayer + S38 PlayerListItem + S13 DestroyEntities working
 - **Combat** — no damage, no knockback, no death/respawn
 - ~~**Health/hunger**~~ — ✅ initial S06 UpdateHealth sent on join (full health/food)
@@ -151,14 +151,15 @@
 - **Lighting** — no light propagation engine
 - **Gravity/physics** — no server-side player physics (client handles its own)
 - **Mob spawning** — no mob spawner, no natural spawning
-- **World saving** — chunk save on shutdown not implemented
+- ~~**World saving**~~ — ✅ saveAllChunks on shutdown
 - **Player data persistence** — no player data save/load
 - **Tab complete** — no server-side completion
 
 ### World Generation
-- **Terrain** — no overworld terrain (caves, mountains, biomes)
+- ~~**Terrain**~~ — ✅ OverworldGenerator with noise-based density + surface replacement
+- ~~**Caves**~~ — ✅ MapGenCaves worm carving integrated
+- ~~**Ores**~~ — ✅ All 11 vanilla ores (coal, iron, gold, diamond, redstone, lapis, emerald, dirt, gravel)
 - **Structures** — no villages, temples, strongholds, dungeons
-- **Ores** — no ore distribution
 - **Trees/vegetation** — no tree/flower generation
 - **Nether/End** — dimensions declared but not generated
 
@@ -195,3 +196,10 @@
 8. ~~**Sound effects**~~ — ✅ Done (S29 SoundEffect for block break/place with broadcastSound)
 9. ~~**World save**~~ — ✅ Done (saveAllChunks on shutdown via RegionFile Anvil format)
 10. ~~**Terrain generation**~~ — ✅ Done (OverworldGenerator with 7 noise octaves + density field + surface replacement + bedrock)
+
+### New Priorities
+11. **Caves + Ores** — ✅ Done (MapGenCaves worm carving + 11 vanilla ores via OreDistribution)
+12. **Tree generation** — WorldGenTrees / BiomeDecorator tree placement
+13. **Player data persistence** — save/load player position, inventory, health
+14. **Combat system** — damage, knockback, death/respawn
+15. **Mob spawning** — natural mob spawning in dark areas
