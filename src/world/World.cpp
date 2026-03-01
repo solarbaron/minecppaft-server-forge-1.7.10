@@ -17,6 +17,8 @@
  */
 
 #include "world/World.h"
+#include "world/Chunk.h"
+#include "worldgen/OverworldGenerator.h"
 #include "nbt/NBT.h"
 
 #include <algorithm>
@@ -216,8 +218,8 @@ WorldServer::WorldServer(int dimensionId, const std::string& worldName)
     : dimensionId_(dimensionId)
     , worldName_(worldName)
 {
-    // Create chunk provider with flat generator
-    auto generator = std::make_unique<ChunkProviderFlat>();
+    // Create chunk provider with overworld terrain generator
+    auto generator = std::make_unique<OverworldGenerator>(42);  // seed = 42
     chunkProvider_ = std::make_unique<ChunkProviderServer>(this, std::move(generator));
 }
 
@@ -228,7 +230,7 @@ void WorldServer::initialize() {
 
     // Set default spawn point
     spawnX_ = 0;
-    spawnY_ = 4;  // Above the superflat surface (bedrock=0, dirt=1-2, grass=3)
+    spawnY_ = 80;  // Above typical terrain height (sea level = 63)
     spawnZ_ = 0;
 
     // Pre-generate spawn area chunks

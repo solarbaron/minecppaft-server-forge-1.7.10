@@ -57,6 +57,27 @@ public:
 
     static constexpr int32_t SEA_LEVEL = 63;
 
+    // Java LCG RNG (must be declared before methods that use it inline)
+    struct RNG {
+        int64_t seed;
+        void setSeed(int64_t s) {
+            seed = (s ^ 0x5DEECE66DLL) & ((1LL << 48) - 1);
+        }
+        int32_t nextInt(int32_t bound) {
+            if (bound <= 0) return 0;
+            seed = (seed * 0x5DEECE66DALL + 0xBLL) & ((1LL << 48) - 1);
+            int32_t bits = static_cast<int32_t>(seed >> 17);
+            return ((bits % bound) + bound) % bound;
+        }
+        int64_t nextLong() {
+            seed = (seed * 0x5DEECE66DALL + 0xBLL) & ((1LL << 48) - 1);
+            int32_t hi = static_cast<int32_t>(seed >> 16);
+            seed = (seed * 0x5DEECE66DALL + 0xBLL) & ((1LL << 48) - 1);
+            int32_t lo = static_cast<int32_t>(seed >> 16);
+            return (static_cast<int64_t>(hi) << 32) | (static_cast<int64_t>(lo) & 0xFFFFFFFFL);
+        }
+    };
+
     // Noise generation callbacks
     using NoiseOctavesFn = std::function<void(double*, int32_t, int32_t, int32_t,
                                                int32_t, int32_t, int32_t,
@@ -365,27 +386,6 @@ public:
     const Config& getConfig() const { return config_; }
 
 private:
-    // Java LCG RNG
-    struct RNG {
-        int64_t seed;
-        void setSeed(int64_t s) {
-            seed = (s ^ 0x5DEECE66DLL) & ((1LL << 48) - 1);
-        }
-        int32_t nextInt(int32_t bound) {
-            if (bound <= 0) return 0;
-            seed = (seed * 0x5DEECE66DALL + 0xBLL) & ((1LL << 48) - 1);
-            int32_t bits = static_cast<int32_t>(seed >> 17);
-            return ((bits % bound) + bound) % bound;
-        }
-        int64_t nextLong() {
-            seed = (seed * 0x5DEECE66DALL + 0xBLL) & ((1LL << 48) - 1);
-            int32_t hi = static_cast<int32_t>(seed >> 16);
-            seed = (seed * 0x5DEECE66DALL + 0xBLL) & ((1LL << 48) - 1);
-            int32_t lo = static_cast<int32_t>(seed >> 16);
-            return (static_cast<int64_t>(hi) << 32) | (static_cast<int64_t>(lo) & 0xFFFFFFFFL);
-        }
-    };
-
     Config config_{};
     std::array<float, 25> parabolicField_{};
 };
