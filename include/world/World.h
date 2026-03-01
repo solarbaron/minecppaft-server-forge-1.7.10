@@ -27,6 +27,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <cstdlib>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -34,6 +35,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <algorithm>
 
 namespace mccpp {
 
@@ -177,6 +179,19 @@ private:
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
+// WeatherChange — returned by WorldServer::updateWeather() for packet sync.
+// ═══════════════════════════════════════════════════════════════════════════
+
+struct WeatherChange {
+    bool rainStarted = false;              // S2B reason 2 (begin rain)
+    bool rainStopped = false;              // S2B reason 1 (end rain)
+    bool rainStrengthChanged = false;      // S2B reason 7
+    bool thunderStrengthChanged = false;   // S2B reason 8
+    float newRainStrength = 0.0f;
+    float newThunderStrength = 0.0f;
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
 // WorldServer — Server-side world instance.
 // Java reference: net.minecraft.world.WorldServer
 //
@@ -238,6 +253,76 @@ public:
     int64_t getSeed() const { return seed_; }
     void setSeed(int64_t seed) { seed_ = seed; }
 
+    // ─── Weather ────────────────────────────────────────────────────────
+    bool isRaining() const { return raining_; }
+    bool isThundering() const { return thundering_; }
+    float getRainingStrength() const { return rainingStrength_; }
+    float getThunderingStrength() const { return thunderingStrength_; }
+
+    /**
+     * Tick weather timers and strength ramp.
+     * Java reference: World.updateWeather() + WorldServer.updateWeather()
+     * Returns changes for S2B packet broadcast.
+     */
+    WeatherChange updateWeather() {
+        if (dimensionId_ == -1) return {};  // Nether has no sky
+
+        WeatherChange changes;
+        bool wasRaining = raining_ && rainingStrength_ > 0.0f;
+
+        // ─── Thunder timer ───
+        // Java: World.updateWeather() thunder section
+        if (thunderTime_ <= 0) {
+            thunderTime_ = thundering_
+                ? (std::rand() % 12000 + 3600)    // 3600-15599 ticks (3-13 min)
+                : (std::rand() % 168000 + 12000);  // 12000-179999 ticks (10-150 min)
+        } else {
+            --thunderTime_;
+            if (thunderTime_ <= 0) {
+                thundering_ = !thundering_;
+            }
+        }
+
+        // Thunder strength ramp (±0.01/tick, clamped [0,1])
+        prevThunderingStrength_ = thunderingStrength_;
+        thunderingStrength_ += thundering_ ? 0.01f : -0.01f;
+        thunderingStrength_ = std::clamp(thunderingStrength_, 0.0f, 1.0f);
+
+        // ─── Rain timer ───
+        // Java: World.updateWeather() rain section
+        if (rainTime_ <= 0) {
+            rainTime_ = raining_
+                ? (std::rand() % 12000 + 12000)    // 12000-23999 ticks (10-20 min)
+                : (std::rand() % 168000 + 12000);   // 12000-179999 ticks (10-150 min)
+        } else {
+            --rainTime_;
+            if (rainTime_ <= 0) {
+                raining_ = !raining_;
+            }
+        }
+
+        // Rain strength ramp (±0.01/tick, clamped [0,1])
+        prevRainingStrength_ = rainingStrength_;
+        rainingStrength_ += raining_ ? 0.01f : -0.01f;
+        rainingStrength_ = std::clamp(rainingStrength_, 0.0f, 1.0f);
+
+        // ─── Detect changes for S2B packets ───
+        if (prevRainingStrength_ != rainingStrength_) {
+            changes.rainStrengthChanged = true;
+            changes.newRainStrength = rainingStrength_;
+        }
+        if (prevThunderingStrength_ != thunderingStrength_) {
+            changes.thunderStrengthChanged = true;
+            changes.newThunderStrength = thunderingStrength_;
+        }
+
+        bool isNowRaining = raining_ && rainingStrength_ > 0.0f;
+        if (wasRaining && !isNowRaining) changes.rainStopped = true;
+        else if (!wasRaining && isNowRaining) changes.rainStarted = true;
+
+        return changes;
+    }
+
     /**
      * Save all modified chunks to disk.
      * Java reference: WorldServer.saveAllChunks()
@@ -261,6 +346,16 @@ private:
 
     // Seed
     int64_t seed_ = 0;
+
+    // ─── Weather state (Java: WorldInfo + World fields) ────────────────
+    bool raining_ = false;
+    bool thundering_ = false;
+    int32_t rainTime_ = 0;
+    int32_t thunderTime_ = 0;
+    float rainingStrength_ = 0.0f;
+    float prevRainingStrength_ = 0.0f;
+    float thunderingStrength_ = 0.0f;
+    float prevThunderingStrength_ = 0.0f;
 };
 
 } // namespace mccpp

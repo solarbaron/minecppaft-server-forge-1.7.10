@@ -204,6 +204,38 @@ void MinecraftServer::tick() {
         world->tick();
     }
 
+    // ─── Weather update (every tick) ────────────────────────────────────
+    // Java: WorldServer.updateWeather() → S2B ChangeGameState
+    if (!worlds_.empty()) {
+        auto changes = worlds_[0]->updateWeather();
+
+        if (changes.rainStarted || changes.rainStopped ||
+            changes.rainStrengthChanged || changes.thunderStrengthChanged) {
+            std::lock_guard<std::mutex> lock(connectionsMutex_);
+            for (auto& conn : connections_) {
+                if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                auto handler = conn->getHandler();
+                auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                if (!ph) continue;
+
+                // Rain start/stop (S2B reason 2=begin rain, 1=end rain)
+                if (changes.rainStarted) {
+                    ph->sendChangeGameState(*conn, 2, 0.0f);
+                }
+                if (changes.rainStopped) {
+                    ph->sendChangeGameState(*conn, 1, 0.0f);
+                }
+                // Rain/thunder intensity (S2B reason 7=rain, 8=thunder)
+                if (changes.rainStrengthChanged) {
+                    ph->sendChangeGameState(*conn, 7, changes.newRainStrength);
+                }
+                if (changes.thunderStrengthChanged) {
+                    ph->sendChangeGameState(*conn, 8, changes.newThunderStrength);
+                }
+            }
+        }
+    }
+
     // Tick item entities (physics, despawn, pickup)
     tickItemEntities();
 
@@ -351,6 +383,17 @@ void MinecraftServer::onPlayerJoined(Connection& joinedConn, PlayHandler& joined
         for (int16_t s = 1; s <= 4; ++s) {
             auto armorItem = joinedHandler.getArmorItem(s);
             otherPlay->sendEntityEquipment(*conn, joinedHandler.getEntityId(), s, armorItem);
+        }
+    }
+
+    // ─── Send current weather state to joining player ────────────────────
+    // Java: EntityPlayerMP.onNewPotionEffect() / initializeConnectionToPlayer()
+    if (!worlds_.empty()) {
+        auto* world = worlds_[0].get();
+        if (world->isRaining() && world->getRainingStrength() > 0.0f) {
+            joinedHandler.sendChangeGameState(joinedConn, 2, 0.0f);  // Begin rain
+            joinedHandler.sendChangeGameState(joinedConn, 7, world->getRainingStrength());
+            joinedHandler.sendChangeGameState(joinedConn, 8, world->getThunderingStrength());
         }
     }
 }

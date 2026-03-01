@@ -28,7 +28,9 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <functional>
 #include <mutex>
 #include <set>
@@ -164,6 +166,10 @@ public:
     bool thundering = false;
     int32_t rainTime = 0;
     int32_t thunderTime = 0;
+    float rainingStrength = 0.0f;        // Java: World.rainingStrength
+    float prevRainingStrength = 0.0f;    // Java: World.prevRainingStrength
+    float thunderingStrength = 0.0f;     // Java: World.thunderingStrength
+    float prevThunderingStrength = 0.0f; // Java: World.prevThunderingStrength
 
     // ─── Random block tick LCG ───
     // Java: updateLCG = updateLCG * 3 + 1013904223
@@ -196,6 +202,19 @@ public:
     using GetBlockFn = std::function<int32_t(int32_t x, int32_t y, int32_t z)>;
     using IsTickRandomFn = std::function<bool(int32_t blockId)>;
     using SetBlockFn = std::function<void(int32_t x, int32_t y, int32_t z, int32_t blockId)>;
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Weather change report — returned by updateWeather() for packet sync
+    // ═══════════════════════════════════════════════════════════════════════
+
+    struct WeatherChange {
+        bool rainStarted = false;       // S2B reason 1 (end rain) or 2 (begin rain)
+        bool rainStopped = false;
+        bool rainStrengthChanged = false;  // S2B reason 7
+        bool thunderStrengthChanged = false; // S2B reason 8
+        float newRainStrength = 0.0f;
+        float newThunderStrength = 0.0f;
+    };
 
     // ═══════════════════════════════════════════════════════════════════════
     // Main tick pipeline
@@ -240,6 +259,76 @@ public:
         int32_t prev = blockEventIndex;
         blockEventIndex = 1 - blockEventIndex;
         blockEvents[prev].clear();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Weather update
+    // Java: World.updateWeather() + WorldServer.updateWeather()
+    // ═══════════════════════════════════════════════════════════════════════
+
+    WeatherChange updateWeather() {
+        WeatherChange changes;
+        bool wasRaining = raining && rainingStrength > 0.0f;
+
+        // ─── Thunder timer ───────────────────────────────────────────
+        // Java: World.updateWeather() thunder section
+        if (thunderTime <= 0) {
+            if (thundering) {
+                thunderTime = std::rand() % 12000 + 3600;   // 3600-15599 ticks
+            } else {
+                thunderTime = std::rand() % 168000 + 12000; // 12000-179999 ticks
+            }
+        } else {
+            --thunderTime;
+            if (thunderTime <= 0) {
+                thundering = !thundering;
+            }
+        }
+
+        // Thunder strength ramp
+        prevThunderingStrength = thunderingStrength;
+        thunderingStrength += thundering ? 0.01f : -0.01f;
+        thunderingStrength = std::clamp(thunderingStrength, 0.0f, 1.0f);
+
+        // ─── Rain timer ─────────────────────────────────────────────
+        // Java: World.updateWeather() rain section
+        if (rainTime <= 0) {
+            if (raining) {
+                rainTime = std::rand() % 12000 + 12000;    // 12000-23999 ticks
+            } else {
+                rainTime = std::rand() % 168000 + 12000;   // 12000-179999 ticks
+            }
+        } else {
+            --rainTime;
+            if (rainTime <= 0) {
+                raining = !raining;
+            }
+        }
+
+        // Rain strength ramp
+        prevRainingStrength = rainingStrength;
+        rainingStrength += raining ? 0.01f : -0.01f;
+        rainingStrength = std::clamp(rainingStrength, 0.0f, 1.0f);
+
+        // ─── Detect changes for S2B packets ─────────────────────────
+        // Java: WorldServer.updateWeather()
+        if (prevRainingStrength != rainingStrength) {
+            changes.rainStrengthChanged = true;
+            changes.newRainStrength = rainingStrength;
+        }
+        if (prevThunderingStrength != thunderingStrength) {
+            changes.thunderStrengthChanged = true;
+            changes.newThunderStrength = thunderingStrength;
+        }
+
+        bool isRaining = raining && rainingStrength > 0.0f;
+        if (wasRaining && !isRaining) {
+            changes.rainStopped = true;
+        } else if (!wasRaining && isRaining) {
+            changes.rainStarted = true;
+        }
+
+        return changes;
     }
 
     // ═══════════════════════════════════════════════════════════════════════

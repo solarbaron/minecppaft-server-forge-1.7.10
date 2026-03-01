@@ -145,7 +145,7 @@
 - **Player Info** — S38 PlayerListItem (tab list) — packet implemented, not auto-sent
 - **Sound/Particles** — S28 Effect, S29 SoundEffect, S2A Particle
 - **Explosions** — S27 Explosion
-- **Weather** — S2B ChangeGameState (rain start/stop) — packet implemented for gamemode changes
+- **Weather** — ✅ S2B ChangeGameState — rain/thunder cycle with timer countdown, strength ramp, client sync on change and join
 - **Time** — ✅ S03 TimeUpdate — auto-sent every 20 ticks (day/night cycle working)
 - **Health** — ✅ S06 UpdateHealth — sent on login, respawn, and whenever health/food changes
 - **Experience** — ✅ S1F SetExperience — sent on login (persisted XP), updated on mining/killing
@@ -250,3 +250,4 @@
 35. **Item durability** — ✅ Done (getMaxDurability for 50+ items, damageHeldItem on combat/block break, damageArmor damage/4 per piece, sword 2x on block break, creative exempt)
 36. **Item stack sizes + recipe expansion** — ✅ Done (getMaxStackSize per-item lookup: tools/weapons/armor=1, eggs/snowballs=16. Recipes expanded from 11 to 90+: all tools/weapons/armor/building/utility/redstone/food/storage)
 37. **XP gain system** — ✅ Done (xpBarCap vanilla formula, addExperience with level-up, mining XP for 6 ore types, kill XP level*7 cap 100, death reset, NBT persist XpP/XpLevel/XpTotal, persisted XP on login)
+38. **Weather system** — ✅ Done (updateWeather with Java-parity timer countdown/toggle, ±0.01/tick strength ramp, S2B broadcast: rain start/stop reasons 1/2, rain/thunder intensity reasons 7/8, weather sync on player join)
