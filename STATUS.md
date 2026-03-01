@@ -152,7 +152,7 @@
 - **Gravity/physics** — no server-side player physics (client handles its own)
 - **Mob spawning** — no mob spawner, no natural spawning
 - ~~**World saving**~~ — ✅ saveAllChunks on shutdown
-- **Player data persistence** — no player data save/load
+- ~~**Player data persistence**~~ — ✅ save/load position and rotation via NBT to world/playerdata/<uuid>.dat
 - **Tab complete** — no server-side completion
 
 ### World Generation
@@ -200,6 +200,6 @@
 ### New Priorities
 11. **Caves + Ores** — ✅ Done (MapGenCaves worm carving + 11 vanilla ores via OreDistribution)
 12. **Tree generation** — ✅ Done (TreeGenerator oak trees wired into OverworldGenerator)
-13. **Player data persistence** — save/load player position, inventory, health
+13. **Player data persistence** — ✅ Done (savePlayerData/loadPlayerData with NBT Pos/Rotation)
 14. **Combat system** — damage, knockback, death/respawn
 15. **Mob spawning** — natural mob spawning in dark areas

@@ -22,7 +22,11 @@
 #include <iostream>
 #include <sstream>
 #include <iomanip>
+#include <filesystem>
+#include <fstream>
 #include <zlib.h>
+
+#include "nbt/NBT.h"
 
 namespace mccpp {
 
@@ -479,6 +483,9 @@ void PlayHandler::sendLoginSequence(Connection& conn) {
     // CRITICAL ORDER: chunks must arrive BEFORE PlayerPosAndLook
     // so the client has terrain loaded before the player starts falling.
 
+    // Load saved player data (position, rotation) — modifies playerX_/Y_/Z_ etc.
+    loadPlayerData();
+
     // 1. S01PacketJoinGame (0x01)
     {
         std::vector<uint8_t> pkt;
@@ -628,6 +635,8 @@ void PlayHandler::handlePacket(int32_t packetId,
 
 void PlayHandler::onDisconnect(const std::string& reason) {
     std::cout << "[Play] " << playerName_ << " disconnected: " << reason << "\n";
+    // Save player data before removing from server
+    savePlayerData();
     // Notify all other players this player left
     server_.onPlayerLeft(*this);
 }
@@ -1327,6 +1336,106 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
         static_cast<double>(placeY) + 0.5,
         static_cast<double>(placeZ) + 0.5,
         1.0f, 0.8f);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Player data persistence
+// Java reference: SaveHandler.writePlayerData / readPlayerData
+// ═══════════════════════════════════════════════════════════════════════════
+
+void PlayHandler::savePlayerData() {
+    namespace fs = std::filesystem;
+
+    // Create playerdata directory
+    fs::path dir = "world/playerdata";
+    if (!fs::exists(dir)) {
+        fs::create_directories(dir);
+    }
+
+    // Build NBT compound
+    // Java format: Pos(double list), Rotation(float list), OnGround(byte), Dimension(int)
+    nbt::NBTTagCompound root;
+
+    // Position — TAG_List of 3 doubles
+    auto posList = std::make_unique<nbt::NBTTagList>();
+    posList->appendTag(std::make_unique<nbt::NBTTagDouble>(playerX_));
+    posList->appendTag(std::make_unique<nbt::NBTTagDouble>(playerY_));
+    posList->appendTag(std::make_unique<nbt::NBTTagDouble>(playerZ_));
+    root.setTag("Pos", std::move(posList));
+
+    // Rotation — TAG_List of 2 floats
+    auto rotList = std::make_unique<nbt::NBTTagList>();
+    rotList->appendTag(std::make_unique<nbt::NBTTagFloat>(playerYaw_));
+    rotList->appendTag(std::make_unique<nbt::NBTTagFloat>(playerPitch_));
+    root.setTag("Rotation", std::move(rotList));
+
+    // OnGround
+    root.setByte("OnGround", playerOnGround_ ? 1 : 0);
+
+    // Dimension
+    root.setInteger("Dimension", 0);
+
+    // Serialize to binary
+    auto data = nbt::serializeNBT(root);
+
+    // Write to file
+    fs::path filePath = dir / (uuid_ + ".dat");
+    std::ofstream file(filePath, std::ios::binary);
+    if (file) {
+        file.write(reinterpret_cast<const char*>(data.data()), data.size());
+        std::cout << "[Save] Saved player data for " << playerName_
+                  << " (" << data.size() << " bytes)\n";
+    }
+}
+
+bool PlayHandler::loadPlayerData() {
+    namespace fs = std::filesystem;
+
+    fs::path filePath = "world/playerdata" / fs::path(uuid_ + ".dat");
+    if (!fs::exists(filePath)) return false;
+
+    // Read file
+    std::ifstream file(filePath, std::ios::binary | std::ios::ate);
+    if (!file) return false;
+
+    auto size = file.tellg();
+    if (size <= 0) return false;
+    file.seekg(0);
+
+    std::vector<uint8_t> data(static_cast<size_t>(size));
+    file.read(reinterpret_cast<char*>(data.data()), size);
+
+    // Parse NBT
+    auto root = nbt::deserializeNBT(data.data(), data.size());
+    if (!root) return false;
+
+    // Read position
+    if (root->hasKey("Pos")) {
+        auto* posList = root->getTagList("Pos", 6);  // 6 = TAG_Double
+        if (posList && posList->tagCount() >= 3) {
+            playerX_ = posList->getDoubleAt(0);
+            playerY_ = posList->getDoubleAt(1);
+            playerZ_ = posList->getDoubleAt(2);
+        }
+    }
+
+    // Read rotation
+    if (root->hasKey("Rotation")) {
+        auto* rotList = root->getTagList("Rotation", 5);  // 5 = TAG_Float
+        if (rotList && rotList->tagCount() >= 2) {
+            playerYaw_ = rotList->getFloatAt(0);
+            playerPitch_ = rotList->getFloatAt(1);
+        }
+    }
+
+    // Read onGround
+    if (root->hasKey("OnGround")) {
+        playerOnGround_ = root->getByte("OnGround") != 0;
+    }
+
+    std::cout << "[Load] Loaded player data for " << playerName_
+              << " at (" << playerX_ << ", " << playerY_ << ", " << playerZ_ << ")\n";
+    return true;
 }
 
 } // namespace mccpp

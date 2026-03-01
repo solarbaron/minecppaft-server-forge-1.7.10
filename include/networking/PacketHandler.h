@@ -304,6 +304,19 @@ public:
     float getPlayerYaw() const { return playerYaw_; }
     float getPlayerPitch() const { return playerPitch_; }
 
+    /**
+     * Save player data to world/playerdata/<uuid>.dat
+     * Java reference: SaveHandler.writePlayerData()
+     */
+    void savePlayerData();
+
+    /**
+     * Load player data from world/playerdata/<uuid>.dat
+     * Java reference: SaveHandler.readPlayerData()
+     * Returns true if data was loaded, false if no save exists.
+     */
+    bool loadPlayerData();
+
 private:
     void handleKeepAlive(const uint8_t* data, size_t length, Connection& conn);
     void handleChatMessage(const uint8_t* data, size_t length, Connection& conn);
