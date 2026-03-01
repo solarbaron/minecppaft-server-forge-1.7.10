@@ -1822,7 +1822,21 @@ void PlayHandler::handlePlayerDigging(const uint8_t* data, size_t length, Connec
             case 36: return {-1, 0, 0};  // piston_extension
             case 51: return {-1, 0, 0};  // fire
             case 52: return {-1, 0, 0};  // mob_spawner
-            case 59: return {296, 1, 0}; // wheat crop → wheat (only when mature, simplified)
+            case 59: {
+                // Wheat crop — Java: BlockCrops.getItemDropped
+                // Mature (meta 7): drop wheat (296) + 0-3 seeds (295)
+                // Immature: drop 0-1 seeds
+                if (blockMeta >= 7) return {296, 1, 0}; // Wheat item
+                return {295, 1, 0}; // Seeds
+            }
+            // Carrot crop — Java: BlockCarrot.getItemDropped
+            case 141: return {391, (blockMeta >= 7) ? 2 : 1, 0}; // Carrot
+            // Potato crop — Java: BlockPotato.getItemDropped  
+            case 142: return {392, (blockMeta >= 7) ? 2 : 1, 0}; // Potato
+            // Melon stem → melon seeds
+            case 104: return {362, 1, 0};
+            // Pumpkin stem → pumpkin seeds
+            case 105: return {361, 1, 0};
             case 78: return {332, 1, 0}; // snow_layer → snowball
             case 79: return {-1, 0, 0};  // ice
             case 90: return {-1, 0, 0};  // portal
@@ -1860,8 +1874,8 @@ void PlayHandler::handlePlayerDigging(const uint8_t* data, size_t length, Connec
             // Java: BlockSnow → 4 snowballs (ID 332)
             case 80:  return {332, 4, 0};  // snow block → 4 snowballs
             // Java: BlockTallGrass → seeds sometimes; simplified to no drop
-            case 31:  return {-1, 0, 0};   // tall grass → nothing (chance seed drop)
-            case 32:  return {-1, 0, 0};   // dead bush → nothing
+            case 31:  return {295, 0, 0};  // tall grass → seeds (simplified, should be 1/8 chance)
+            case 32:  return {-1, 0, 0};   // dead bush → nothing (sticks with shears)
 
             // Door drops the item
             case 64:  return {324, 1, 0};  // wooden door → door item
