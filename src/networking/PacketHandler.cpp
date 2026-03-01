@@ -1251,8 +1251,40 @@ void PlayHandler::handlePlayerDigging(const uint8_t* data, size_t length, Connec
     // 4 = Drop item
     // 5 = Shoot arrow / finish eating
 
-    if (status == 3 || status == 4 || status == 5) {
-        // Drop item / shoot arrow — silently consume for now
+    if (status == 3 || status == 4) {
+        // Java: NetHandlerPlayServer.processPlayerDigging() → drop item
+        // Status 3 = drop entire stack, Status 4 = drop single item
+        // The item comes from the player's currently held hotbar slot
+        auto currentItem = inventory_.getCurrentItem();
+        if (!currentItem || currentItem->isEmpty()) return;
+
+        int32_t dropCount = (status == 3) ? currentItem->getStackSize() : 1;
+        int32_t itemId = currentItem->getItemId();
+        int32_t damage = currentItem->getDamage();
+
+        // Decrement the stack in inventory
+        int32_t remaining = currentItem->getStackSize() - dropCount;
+        if (remaining <= 0) {
+            inventory_.setInventorySlotContents(currentSlot_, std::nullopt);
+        } else {
+            ItemStack updated = *currentItem;
+            updated.setStackSize(remaining);
+            inventory_.setInventorySlotContents(currentSlot_, updated);
+        }
+
+        // Sync the slot to client — ContainerPlayer hotbar slot = 36 + currentSlot_
+        int16_t containerSlot = static_cast<int16_t>(36 + currentSlot_);
+        sendSetSlot(conn, 0, containerSlot, inventory_.getStackInSlot(currentSlot_));
+
+        // Spawn the dropped item entity in the world
+        server_.spawnItemDrop(playerX_, playerY_ + 1.5, playerZ_, itemId, damage, dropCount);
+
+        std::cout << "[Inv] " << playerName_ << " dropped " << dropCount << "x item " << itemId << "\n";
+        return;
+    }
+
+    if (status == 5) {
+        // Shoot arrow / finish eating — silently consume for now
         return;
     }
 
@@ -1598,6 +1630,23 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
                 // Eat the food — Java: ItemFood.onItemUseFinish
                 foodStats_.addStats(foodVal->healAmount, foodVal->saturationModifier);
                 sendUpdateHealth(conn, health_, foodStats_.getFoodLevel(), foodStats_.getSaturationLevel());
+
+                // Consume 1 item from held slot — Java: --itemStack.stackSize
+                auto heldStack = inventory_.getCurrentItem();
+                if (heldStack) {
+                    int32_t remaining = heldStack->getStackSize() - 1;
+                    if (remaining <= 0) {
+                        inventory_.setInventorySlotContents(currentSlot_, std::nullopt);
+                    } else {
+                        ItemStack updated = *heldStack;
+                        updated.setStackSize(remaining);
+                        inventory_.setInventorySlotContents(currentSlot_, updated);
+                    }
+                    // Sync slot to client — ContainerPlayer hotbar = 36 + currentSlot_
+                    int16_t containerSlot = static_cast<int16_t>(36 + currentSlot_);
+                    sendSetSlot(conn, 0, containerSlot, inventory_.getStackInSlot(currentSlot_));
+                }
+
                 // Play burp sound
                 server_.broadcastSound("random.burp", playerX_, playerY_, playerZ_, 0.5f, 0.9f);
                 std::cout << "[Food] " << playerName_ << " ate item " << heldItemId

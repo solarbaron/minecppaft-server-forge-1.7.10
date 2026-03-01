@@ -116,6 +116,8 @@
 - Basic inventory operations (250 lines)
 - ❌ No server→client inventory sync (no window packets)
 - ✅ Creative inventory action (C10) — set container slots + item drops in creative mode
+- ✅ Player item drop (Q key) — status 3 (full stack) / 4 (single item), inventory decrement + S2F sync
+- ✅ Food consumption — right-click food decrements stack count from hotbar + S2F sync
 - ❌ No item pickup/drop in survival mode
 
 ### Biomes & World Gen
@@ -222,3 +224,5 @@
 20. **Experience sync** — ✅ Done (S1F SetExperience sent on login)
 21. **Protocol audit** — ✅ Done (all 24 packet functions verified against Java references — field widths correct)
 22. **Survival block breaking** — ✅ Done (creative/survival split, timed break, 60+ drop table entries, material sounds, exhaustion)
+23. **Player item drop** — ✅ Done (Q=single item, Ctrl+Q=full stack, inventory decrement + S2F SetSlot sync)
+24. **Food consumption** — ✅ Done (eating food decrements held item stack count + S2F sync)
