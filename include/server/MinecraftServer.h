@@ -259,6 +259,14 @@ public:
      */
     void givePlayerItem(const std::string& playerName, int32_t itemId, int32_t amount, int32_t damage);
 
+    /**
+     * Set weather state for all worlds and broadcast S2B ChangeGameState.
+     * Java reference: CommandWeather.processCommand() → WorldInfo.setRaining/setThundering
+     * @param mode 0=clear, 1=rain, 2=thunder
+     * @param durationTicks duration in ticks (0 = use default random)
+     */
+    void setWeather(int32_t mode, int32_t durationTicks);
+
 private:
     /**
      * Execute a single server tick.

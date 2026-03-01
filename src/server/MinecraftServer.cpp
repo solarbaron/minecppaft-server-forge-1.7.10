@@ -907,6 +907,48 @@ void MinecraftServer::givePlayerItem(const std::string& playerName, int32_t item
     }
 }
 
+void MinecraftServer::setWeather(int32_t mode, int32_t durationTicks) {
+    // Java: CommandWeather.processCommand()
+    // mode: 0=clear, 1=rain, 2=thunder
+    if (worlds_.empty()) return;
+
+    auto* world = worlds_[0].get();
+
+    // Default duration: random 6000-18000 ticks (5-15 min)
+    if (durationTicks <= 0) durationTicks = 6000 + std::rand() % 12000;
+
+    switch (mode) {
+        case 0: // clear
+            world->setWeatherState(false, false, durationTicks, durationTicks);
+            break;
+        case 1: // rain
+            world->setWeatherState(true, false, durationTicks, durationTicks);
+            break;
+        case 2: // thunder
+            world->setWeatherState(true, true, durationTicks, durationTicks);
+            break;
+    }
+
+    // Broadcast immediately to all players
+    {
+        std::lock_guard<std::mutex> lock(connectionsMutex_);
+        for (auto& conn : connections_) {
+            if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+            auto handler = conn->getHandler();
+            auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+            if (!ph) continue;
+
+            if (mode == 0) {
+                ph->sendChangeGameState(*conn, 1, 0.0f);  // End rain
+            } else {
+                ph->sendChangeGameState(*conn, 2, 0.0f);  // Begin rain
+            }
+            ph->sendChangeGameState(*conn, 7, world->getRainingStrength());
+            ph->sendChangeGameState(*conn, 8, world->getThunderingStrength());
+        }
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Mob spawning system
 

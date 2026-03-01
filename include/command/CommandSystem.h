@@ -288,4 +288,16 @@ public:
     }
 };
 
+// /weather <clear|rain|thunder> [duration] — Controls weather
+// Java: net.minecraft.command.CommandWeather
+class CommandWeather : public ICommand {
+public:
+    std::string getCommandName() const override { return "weather"; }
+    std::string getCommandUsage() const override { return "/weather <clear|rain|thunder> [duration]"; }
+    int32_t getRequiredPermissionLevel() const override { return 2; }
+    void processCommand(ICommandSender& sender, const std::vector<std::string>& args) override;
+    std::vector<std::string> addTabCompletionOptions(
+        const ICommandSender& sender, const std::vector<std::string>& args) const override;
+};
+
 } // namespace mccpp

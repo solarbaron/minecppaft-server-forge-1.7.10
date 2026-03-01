@@ -259,6 +259,17 @@ public:
     float getRainingStrength() const { return rainingStrength_; }
     float getThunderingStrength() const { return thunderingStrength_; }
 
+    // Java: CommandWeather sets WorldInfo fields directly
+    void setWeatherState(bool rain, bool thunder, int32_t rainDuration, int32_t thunderDuration) {
+        raining_ = rain;
+        thundering_ = thunder;
+        rainTime_ = rainDuration;
+        thunderTime_ = thunderDuration;
+        // Snap strength to target immediately for command changes
+        rainingStrength_ = rain ? 1.0f : 0.0f;
+        thunderingStrength_ = thunder ? 1.0f : 0.0f;
+    }
+
     /**
      * Tick weather timers and strength ramp.
      * Java reference: World.updateWeather() + WorldServer.updateWeather()

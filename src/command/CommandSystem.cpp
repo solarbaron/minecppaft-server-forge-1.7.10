@@ -42,6 +42,7 @@ CommandHandler::CommandHandler() {
     registerCommand(std::make_shared<CommandSeed>());
     registerCommand(std::make_shared<CommandList>());
     registerCommand(std::make_shared<CommandKill>());
+    registerCommand(std::make_shared<CommandWeather>());
     std::cout << "[Commands] Registered " << getCommandCount() << " commands\n";
 }
 
@@ -428,6 +429,60 @@ void CommandKill::processCommand(ICommandSender& sender, const std::vector<std::
     auto* server = sender.getServer();
     if (server) server->killPlayer(target);
     std::cout << "[Server] " << sender.getCommandSenderName() << " killed " << target << "\n";
+}
+
+// /weather — Java: net.minecraft.command.CommandWeather
+void CommandWeather::processCommand(ICommandSender& sender, const std::vector<std::string>& args) {
+    if (args.empty()) {
+        sender.addChatMessage("§cUsage: /weather <clear|rain|thunder> [duration in seconds]");
+        return;
+    }
+
+    int32_t mode = -1;
+    if (args[0] == "clear") mode = 0;
+    else if (args[0] == "rain") mode = 1;
+    else if (args[0] == "thunder") mode = 2;
+
+    if (mode < 0) {
+        sender.addChatMessage("§cInvalid weather type: " + args[0] + ". Use clear, rain, or thunder.");
+        return;
+    }
+
+    // Java: duration is in seconds (converted to ticks: seconds * 20)
+    // Range: 1-1000000 seconds (Java: 300-1000000, but we're flexible)
+    int32_t durationTicks = 0;
+    if (args.size() > 1) {
+        try {
+            int32_t seconds = std::stoi(args[1]);
+            if (seconds < 1) seconds = 1;
+            if (seconds > 1000000) seconds = 1000000;
+            durationTicks = seconds * 20;
+        } catch (...) {
+            sender.addChatMessage("§cInvalid duration: " + args[1]);
+            return;
+        }
+    }
+
+    auto* server = sender.getServer();
+    if (server) {
+        server->setWeather(mode, durationTicks);
+        static const char* names[] = {"clear", "rain", "thunder"};
+        sender.addChatMessage("Changing to " + std::string(names[mode]) + " weather");
+        std::cout << "[Server] " << sender.getCommandSenderName()
+                  << " changed weather to " << names[mode] << "\n";
+    }
+}
+
+std::vector<std::string> CommandWeather::addTabCompletionOptions(
+    const ICommandSender& /*sender*/, const std::vector<std::string>& args) const {
+    if (args.size() == 1) {
+        std::vector<std::string> options;
+        for (const auto& opt : {"clear", "rain", "thunder"}) {
+            if (std::string(opt).find(args[0]) == 0) options.push_back(opt);
+        }
+        return options;
+    }
+    return {};
 }
 
 } // namespace mccpp
