@@ -160,7 +160,10 @@
 - ~~**Combat**~~ — ✅ damage (fist), knockback (S12), hurt animation (S1A), death + respawn
 - ~~**Fall damage**~~ — ✅ Server-side: accumulate fallDistance, damage=ceil(dist-3), fall sounds, death message
 - ~~**Drowning**~~ — ✅ Air supply (300 ticks = 15s), depletes in water, 2 damage when exhausted, death message
-- ~~**Suffocation**~~ — ✅ 1 damage/tick when head inside solid block, death message
+- ~~**Suffocation**~~ — ✅ 1 damage/tick when head inside opaque full-cube block (60+ block whitelist), death message
+- ~~**Lava damage**~~ — ✅ 4 damage/tick in lava + set on fire 15s, death: "tried to swim in lava"
+- ~~**Fire damage**~~ — ✅ 1 damage/tick in fire block + set on fire 8s, burning 1 dmg/sec, water extinguishes
+- ~~**Void damage**~~ — ✅ 4 damage/tick below Y=-64 (applies even in creative), death: "fell out of the world"
 - ~~**Health/hunger**~~ — ✅ Full FoodStats system: exhaustion→saturation→hunger drain, natural health regen (food≥18), starvation damage (food=0), movement exhaustion, food eating, NBT save/load
 - **Movement validation** — server accepts all positions without anti-cheat; ✅ S18 EntityTeleport + S19 HeadLook broadcast to other players
 - **Lighting** — no light propagation engine
@@ -234,4 +237,5 @@
 25. **Survival block place** — ✅ Done (consumes held item in survival, material place sounds)
 26. **Fall damage** — ✅ Done (accumulates fallDistance, damage=ceil(dist-3), fall sounds, death message, creative exempt)
 27. **Drowning** — ✅ Done (air supply 300 ticks, depletes in water, 2 dmg at exhaustion, death: "drowned")
-28. **Suffocation** — ✅ Done (1 dmg/tick in solid blocks, death: "suffocated in a wall")
+28. **Suffocation** — ✅ Done (1 dmg/tick in opaque full-cube blocks — fixed with explicit block whitelist)
+29. **Fire/lava/void damage** — ✅ Done (lava 4/tick + 15s fire, fire block 1/tick + 8s fire, burning 1/sec, void 4/tick below Y=-64, water extinguishes)

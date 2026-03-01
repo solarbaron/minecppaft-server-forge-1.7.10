@@ -2559,63 +2559,141 @@ void PlayHandler::handleCreativeInventory(const uint8_t* data, size_t length, Co
 void PlayHandler::tickFood(Connection& conn) {
     if (dead_) return;
 
-    // ─── Drowning — Java: EntityLivingBase.onEntityUpdate() ────────────
-    // Check if player's head is in water (block at head Y level)
-    // Water block IDs: 8 (flowing_water), 9 (water)
+    // ─── Environmental damage — Java: Entity.onUpdate + EntityLivingBase.onEntityUpdate() ───
     auto& worlds = server_.getWorlds();
-    if (!worlds.empty() && gameMode_ != 1) {
+    if (!worlds.empty()) {
         WorldServer* world = worlds[0].get();
-        int32_t headBlockX = static_cast<int32_t>(std::floor(playerX_));
-        int32_t headBlockY = static_cast<int32_t>(std::floor(playerY_ + 1.62)); // eye height
-        int32_t headBlockZ = static_cast<int32_t>(std::floor(playerZ_));
 
-        Block* headBlock = world->getBlock(headBlockX, headBlockY, headBlockZ);
-        int32_t headBlockId = headBlock ? Block::getIdFromBlock(headBlock) : 0;
-
-        bool isInWater = (headBlockId == 8 || headBlockId == 9);
-        bool isInSolidBlock = false;
-
-        // Check suffocation — Java: isEntityInsideOpaqueBlock()
-        // Player's head is inside a full solid block (not air, water, etc.)
-        if (!isInWater && headBlock && headBlockId != 0) {
-            // Simplified: if block is solid and full-cube, suffocation applies
-            float hardness = headBlock->getHardness();
-            if (hardness >= 0.0f) { // not air, not portal, not unbreakable special blocks
-                isInSolidBlock = true;
-            }
-        }
-
-        if (isInWater) {
-            // Deplete air — Java: decreaseAirSupply, air goes from 300 down
-            --airSupply_;
-            if (airSupply_ <= -20) {
-                airSupply_ = 0;
-                // Drowning damage — Java: attackEntityFrom(DamageSource.drown, 2.0f)
-                health_ -= 2.0f;
-                if (health_ < 0.0f) health_ = 0.0f;
-                sendUpdateHealth(conn, health_, foodStats_.getFoodLevel(), foodStats_.getSaturationLevel());
-                server_.broadcastSound("game.player.hurt", playerX_, playerY_, playerZ_, 1.0f, 1.0f);
-                std::cout << "[Drown] " << playerName_ << " is drowning (hp=" << health_ << ")\n";
-                if (health_ <= 0.0f) {
-                    dead_ = true;
-                    server_.broadcastEntityEvent(entityId_, 3);
-                    server_.broadcastChatMessage(playerName_ + " drowned");
-                }
-            }
-        } else {
-            // Restore air when not in water — Java: setAir(300)
-            airSupply_ = 300;
-        }
-
-        // Suffocation damage — Java: attackEntityFrom(DamageSource.inWall, 1.0f)
-        if (isInSolidBlock && !isInWater) {
-            health_ -= 1.0f;
+        // ─── Void damage — Java: Entity.kill() when Y < -64 ──────────────
+        // This applies even in creative mode (Java parity)
+        if (playerY_ < -64.0) {
+            health_ -= 4.0f;
             if (health_ < 0.0f) health_ = 0.0f;
             sendUpdateHealth(conn, health_, foodStats_.getFoodLevel(), foodStats_.getSaturationLevel());
             if (health_ <= 0.0f) {
                 dead_ = true;
                 server_.broadcastEntityEvent(entityId_, 3);
-                server_.broadcastChatMessage(playerName_ + " suffocated in a wall");
+                server_.broadcastChatMessage(playerName_ + " fell out of the world");
+            }
+        }
+
+        // Remaining env damage only in survival/adventure
+        if (gameMode_ != 1) {
+            int32_t headBlockX = static_cast<int32_t>(std::floor(playerX_));
+            int32_t headBlockY = static_cast<int32_t>(std::floor(playerY_ + 1.62)); // eye height
+            int32_t headBlockZ = static_cast<int32_t>(std::floor(playerZ_));
+            int32_t feetBlockX = static_cast<int32_t>(std::floor(playerX_));
+            int32_t feetBlockY = static_cast<int32_t>(std::floor(playerY_));
+            int32_t feetBlockZ = static_cast<int32_t>(std::floor(playerZ_));
+
+            Block* headBlock = world->getBlock(headBlockX, headBlockY, headBlockZ);
+            int32_t headBlockId = headBlock ? Block::getIdFromBlock(headBlock) : 0;
+            Block* feetBlock = world->getBlock(feetBlockX, feetBlockY, feetBlockZ);
+            int32_t feetBlockId = feetBlock ? Block::getIdFromBlock(feetBlock) : 0;
+
+            bool isInWater = (headBlockId == 8 || headBlockId == 9);
+            bool isInLava = (feetBlockId == 10 || feetBlockId == 11 ||
+                             headBlockId == 10 || headBlockId == 11);
+            bool isInFire = (feetBlockId == 51); // fire block
+
+            // ─── Drowning ─────────────────────────────────────────────
+            if (isInWater) {
+                --airSupply_;
+                if (airSupply_ <= -20) {
+                    airSupply_ = 0;
+                    health_ -= 2.0f;
+                    if (health_ < 0.0f) health_ = 0.0f;
+                    sendUpdateHealth(conn, health_, foodStats_.getFoodLevel(), foodStats_.getSaturationLevel());
+                    server_.broadcastSound("game.player.hurt", playerX_, playerY_, playerZ_, 1.0f, 1.0f);
+                    if (health_ <= 0.0f) {
+                        dead_ = true;
+                        server_.broadcastEntityEvent(entityId_, 3);
+                        server_.broadcastChatMessage(playerName_ + " drowned");
+                    }
+                }
+                // Water extinguishes fire
+                if (fireTicks_ > 0) fireTicks_ = 0;
+            } else {
+                airSupply_ = 300;
+            }
+
+            // ─── Lava damage — Java: Entity.onEntityUpdate → setFire(15) + 4 dmg ───
+            if (isInLava) {
+                health_ -= 4.0f;
+                if (health_ < 0.0f) health_ = 0.0f;
+                sendUpdateHealth(conn, health_, foodStats_.getFoodLevel(), foodStats_.getSaturationLevel());
+                server_.broadcastSound("game.player.hurt", playerX_, playerY_, playerZ_, 1.0f, 1.0f);
+                fireTicks_ = 300; // 15 seconds on fire (Java: setFire(15))
+                if (health_ <= 0.0f) {
+                    dead_ = true;
+                    server_.broadcastEntityEvent(entityId_, 3);
+                    server_.broadcastChatMessage(playerName_ + " tried to swim in lava");
+                }
+            }
+
+            // ─── Fire block damage — Java: Entity.dealFireDamage(1) ───
+            if (isInFire && !isInLava) {
+                health_ -= 1.0f;
+                if (health_ < 0.0f) health_ = 0.0f;
+                sendUpdateHealth(conn, health_, foodStats_.getFoodLevel(), foodStats_.getSaturationLevel());
+                fireTicks_ = std::max(fireTicks_, 160); // 8 seconds on fire
+                if (health_ <= 0.0f) {
+                    dead_ = true;
+                    server_.broadcastEntityEvent(entityId_, 3);
+                    server_.broadcastChatMessage(playerName_ + " went up in flames");
+                }
+            }
+
+            // ─── Burning damage — Java: Entity.onEntityUpdate → fire tick + 1 dmg/sec ───
+            if (fireTicks_ > 0) {
+                --fireTicks_;
+                // Deal 1 damage per second (every 20 ticks) while on fire
+                if (fireTicks_ % 20 == 0 && fireTicks_ > 0) {
+                    health_ -= 1.0f;
+                    if (health_ < 0.0f) health_ = 0.0f;
+                    sendUpdateHealth(conn, health_, foodStats_.getFoodLevel(), foodStats_.getSaturationLevel());
+                    if (health_ <= 0.0f) {
+                        dead_ = true;
+                        server_.broadcastEntityEvent(entityId_, 3);
+                        server_.broadcastChatMessage(playerName_ + " burned to death");
+                    }
+                }
+            }
+
+            // ─── Suffocation — Java: isEntityInsideOpaqueBlock() → DamageSource.inWall ───
+            // Only full opaque solid blocks cause suffocation (not torches, flowers, etc.)
+            // Check block at HEAD position: must be a full-cube solid block
+            if (!isInWater && !isInLava && headBlockId != 0) {
+                // List of block IDs that are full opaque cubes — anything that isn't
+                // transparent, partial, or non-solid
+                bool isOpaqueFullCube = false;
+                switch (headBlockId) {
+                    // Stone, granite, diorite, andesite
+                    case 1: case 2: case 3: case 4: case 7: // stone, grass, dirt, cobble, bedrock
+                    case 12: case 13: case 14: case 15: case 16: // sand, gravel, gold_ore, iron_ore, coal_ore
+                    case 17: case 21: case 22: case 24: case 35: // log, lapis_ore, lapis_block, sandstone, wool
+                    case 41: case 42: case 43: case 45: case 46: // gold/iron/doubleslab/brick/tnt
+                    case 48: case 49: case 56: case 57: case 58: // mossy/obsidian/diamond_ore/diamond/crafting
+                    case 60: case 61: case 62: case 73: case 74: // farmland/furnace/lit_furnace/redstone_ore
+                    case 79: case 80: case 82: case 86: case 87: // ice, snow_block, clay, pumpkin, netherrack
+                    case 88: case 89: case 91: case 97: case 98: // soulsand/glowstone/jack_o/silverfish/stonebrick
+                    case 103: case 110: case 112: case 121: case 123: case 124: // melon/mycelium/nether_brick/end_stone/redstone_lamp
+                    case 125: case 129: case 133: case 152: case 153: // double_wooden_slab/emerald_ore/emerald_block/redstone_block/nether_quartz_ore
+                    case 155: case 159: case 162: case 170: case 172: // quartz/stained_clay/log2/hay/hardened_clay
+                    case 173:  // coal_block
+                        isOpaqueFullCube = true;
+                        break;
+                }
+                if (isOpaqueFullCube) {
+                    health_ -= 1.0f;
+                    if (health_ < 0.0f) health_ = 0.0f;
+                    sendUpdateHealth(conn, health_, foodStats_.getFoodLevel(), foodStats_.getSaturationLevel());
+                    if (health_ <= 0.0f) {
+                        dead_ = true;
+                        server_.broadcastEntityEvent(entityId_, 3);
+                        server_.broadcastChatMessage(playerName_ + " suffocated in a wall");
+                    }
+                }
             }
         }
     }
