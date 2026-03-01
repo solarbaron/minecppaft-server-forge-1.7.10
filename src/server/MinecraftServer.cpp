@@ -1912,6 +1912,34 @@ void MinecraftServer::tickRandomBlocks() {
                         }
                     }
                 }
+
+                // ─── Leaf decay (18/161) ───
+                // Java: BlockLeaves.updateTick — natural leaves check for nearby logs
+                // Meta bit 2 = player-placed (never decays)
+                if (blockId == 18 || blockId == 161) {
+                    if (!(meta & 0x04)) { // Not player-placed
+                        if (std::uniform_int_distribution<>(0, 3)(rng) == 0) {
+                            bool hasLog = false;
+                            for (int dx = -4; dx <= 4 && !hasLog; ++dx) {
+                                for (int dy2 = -4; dy2 <= 4 && !hasLog; ++dy2) {
+                                    for (int dz2 = -4; dz2 <= 4 && !hasLog; ++dz2) {
+                                        if (std::abs(dx) + std::abs(dy2) + std::abs(dz2) > 4) continue;
+                                        Block* lb = world->getBlock(bx + dx, by + dy2, bz + dz2);
+                                        if (lb) {
+                                            int lid = Block::getIdFromBlock(lb);
+                                            if (lid == 17 || lid == 162) hasLog = true;
+                                        }
+                                    }
+                                }
+                            }
+                            if (!hasLog) {
+                                world->setBlock(bx, by, bz, Block::getBlockById(0));
+                                broadcastBlockChange(bx, by, bz, 0, 0);
+                                broadcastEffect(2001, bx, by, bz, blockId);
+                            }
+                        }
+                    }
+                }
             }
         }
     }
