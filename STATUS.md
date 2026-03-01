@@ -296,3 +296,5 @@
 55. **New containers** — ✅ Done (brewing stand 117 S2D type 5, dispenser 23 type 3, dropper 158 type 6, hopper 154 type 9 — all with per-position storage)
 56. **Repeater/comparator/anvil** — ✅ Done (repeater 93/94 delay cycle bits 2-3, comparator 149/150 subtract toggle bit 0x04, anvil 145 S2D type 8 repair GUI)
 57. **Trapped chest + cake + beacon** — ✅ Done (trapped chest 146 like normal chest, cake 92 eat slices meta 0-6 +2 food, beacon 138 S2D type 7)
+58. **Bucket mechanics** — ✅ Done (water 326 → place water source 9, lava 327 → place lava source 11, empty 325 → pick up water/lava sources, survival consumption)
+59. **Item use mechanics** — ✅ Done (bonemeal 351:15 → S28 effect 2005 + grass/crop growth, hoe 290-294 → grass/dirt→farmland 60, flint+steel 259 → fire block 51 placement)
