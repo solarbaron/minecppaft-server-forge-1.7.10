@@ -209,7 +209,7 @@ public:
      * Handle a player attacking another entity (player-to-player combat).
      * Java reference: EntityPlayerMP.attackTargetEntityWithCurrentItem()
      */
-    void handlePlayerAttack(PlayHandler& attacker, int32_t targetEntityId);
+    void handlePlayerAttack(PlayHandler& attacker, Connection& attackerConn, int32_t targetEntityId);
 
     /**
      * Teleport a player to a position. Sends S08 PlayerPosAndLook.

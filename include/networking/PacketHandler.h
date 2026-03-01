@@ -374,6 +374,16 @@ public:
      */
     void sendSetExperience(Connection& conn, float bar, int32_t level, int32_t totalXp);
 
+    // ─── XP accessors (used by MinecraftServer combat) ──────────────
+    float getExperienceBar() const { return experienceBar_; }
+    int32_t getExperienceLevel() const { return experienceLevel_; }
+    int32_t getExperienceTotal() const { return experienceTotal_; }
+    void grantExperience(int32_t amount) { addExperience(amount); }
+    void resetExperience() { experienceBar_ = 0.0f; experienceLevel_ = 0; experienceTotal_ = 0; }
+    void sendExperienceUpdate(Connection& conn) {
+        sendSetExperience(conn, experienceBar_, experienceLevel_, experienceTotal_);
+    }
+
     /**
      * Send a chunk unload (S21 with bitmask=0) to the client.
      * Java reference: S21PacketChunkData with groundUp=true, bitmask=0
@@ -654,6 +664,34 @@ private:
 
     // Item drop throttle — Java: NetHandlerPlayServer.itemDropThreshold
     int32_t itemDropThreshold_ = 0;
+
+    // ─── Experience (Java: EntityPlayer) ─────────────────────────────
+    float experienceBar_ = 0.0f;    // Java: experience (0.0-1.0 progress within level)
+    int32_t experienceLevel_ = 0;   // Java: experienceLevel
+    int32_t experienceTotal_ = 0;   // Java: experienceTotal
+
+    // Java: EntityPlayer.xpBarCap() — XP needed for next level
+    int32_t xpBarCap() const {
+        if (experienceLevel_ >= 30) return 62 + (experienceLevel_ - 30) * 7;
+        if (experienceLevel_ >= 15) return 17 + (experienceLevel_ - 15) * 3;
+        return 7 + experienceLevel_ * 2;
+    }
+
+    // Java: EntityPlayer.addExperience(int)
+    void addExperience(int32_t amount) {
+        if (amount <= 0) return;
+        int32_t cap = Integer_MAX - experienceTotal_;
+        if (amount > cap) amount = cap;
+        experienceBar_ += static_cast<float>(amount) / static_cast<float>(xpBarCap());
+        experienceTotal_ += amount;
+        while (experienceBar_ >= 1.0f) {
+            experienceBar_ = (experienceBar_ - 1.0f) * static_cast<float>(xpBarCap());
+            ++experienceLevel_;
+            experienceBar_ /= static_cast<float>(xpBarCap());
+        }
+    }
+
+    static constexpr int32_t Integer_MAX = 2147483647;
 };
 
 } // namespace mccpp

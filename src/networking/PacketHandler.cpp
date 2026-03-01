@@ -570,7 +570,7 @@ void PlayHandler::sendLoginSequence(Connection& conn) {
 
     // 7. S1FPacketSetExperience — initial XP (bar=0, level=0, total=0)
     // Java reference: EntityPlayerMP.onNewPotionEffect sends this on join
-    sendSetExperience(conn, 0.0f, 0, 0);
+    sendSetExperience(conn, experienceBar_, experienceLevel_, experienceTotal_);
 
     // 8. S30PacketWindowItems — send initial inventory contents
     // Java reference: EntityPlayerMP.onNewPotionEffect / initializeConnectionToPlayer
@@ -1708,6 +1708,25 @@ void PlayHandler::handlePlayerDigging(const uint8_t* data, size_t length, Connec
             }
         }
 
+        // ─── Mining XP ──────────────────────────────────────────────────
+        // Java: Block.getExpDrop() — ores drop XP when mined
+        {
+            int32_t xp = 0;
+            switch (brokenBlockId) {
+                case 16:  xp = (rand() % 3);     break; // Coal ore: 0-2
+                case 56:  xp = 3 + (rand() % 5); break; // Diamond ore: 3-7
+                case 129: xp = 3 + (rand() % 5); break; // Emerald ore: 3-7
+                case 73: case 74: xp = 1 + (rand() % 5); break; // Redstone ore: 1-5
+                case 21:  xp = 2 + (rand() % 4); break; // Lapis ore: 2-5
+                case 153: xp = 2 + (rand() % 4); break; // Quartz ore: 2-5
+                default: break;
+            }
+            if (xp > 0) {
+                addExperience(xp);
+                sendSetExperience(conn, experienceBar_, experienceLevel_, experienceTotal_);
+            }
+        }
+
         std::cout << "[World] " << playerName_ << " broke block at "
                   << blockX << "," << (int)blockY << "," << blockZ << "\n";
     }
@@ -2492,6 +2511,11 @@ void PlayHandler::savePlayerData() {
     root.setFloat("foodSaturationLevel", foodStats_.getSaturationLevel());
     root.setFloat("foodExhaustionLevel", foodStats_.getExhaustionLevel());
 
+    // XP — Java: EntityPlayer.writeEntityToNBT()
+    root.setFloat("XpP", experienceBar_);
+    root.setInteger("XpLevel", experienceLevel_);
+    root.setInteger("XpTotal", experienceTotal_);
+
     // Serialize to binary
     auto data = nbt::serializeNBT(root);
 
@@ -2567,6 +2591,11 @@ bool PlayHandler::loadPlayerData() {
         foodStats_.foodExhaustionLevel = root->getFloat("foodExhaustionLevel");
     }
 
+    // XP — Java: EntityPlayer.readEntityFromNBT()
+    if (root->hasKey("XpP")) experienceBar_ = root->getFloat("XpP");
+    if (root->hasKey("XpLevel")) experienceLevel_ = root->getInteger("XpLevel");
+    if (root->hasKey("XpTotal")) experienceTotal_ = root->getInteger("XpTotal");
+
     std::cout << "[Load] Loaded player data for " << playerName_
               << " at (" << playerX_ << ", " << playerY_ << ", " << playerZ_ << ")\n";
     return true;
@@ -2587,7 +2616,7 @@ void PlayHandler::handleUseEntity(const uint8_t* data, size_t length, Connection
 
     if (action == 1) {
         // ATTACK — Java: EntityPlayer.attackTargetEntityWithCurrentItem()
-        server_.handlePlayerAttack(*this, targetEntityId);
+        server_.handlePlayerAttack(*this, conn, targetEntityId);
     }
     // action 0 (interact) and 2 (interact_at) not implemented yet
 }

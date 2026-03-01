@@ -148,7 +148,7 @@
 - **Weather** — S2B ChangeGameState (rain start/stop) — packet implemented for gamemode changes
 - **Time** — ✅ S03 TimeUpdate — auto-sent every 20 ticks (day/night cycle working)
 - **Health** — ✅ S06 UpdateHealth — sent on login, respawn, and whenever health/food changes
-- **Experience** — ✅ S1F SetExperience — sent on login (bar=0, level=0, total=0)
+- **Experience** — ✅ S1F SetExperience — sent on login (persisted XP), updated on mining/killing
 - **Block changes** — ✅ S23 BlockChange — working, broadcast on break/place
 - **Chunk streaming** — ✅ Dynamic S21 send/unload as player moves across chunk boundaries
 
@@ -249,3 +249,4 @@
 34. **2×2 crafting grid** — ✅ Done (InventoryCrafting/InventoryCraftResult IInventory, updateCraftingResult via CraftingManager, ingredient decrement on pickup, shift-click support, CloseWindow drops grid items)
 35. **Item durability** — ✅ Done (getMaxDurability for 50+ items, damageHeldItem on combat/block break, damageArmor damage/4 per piece, sword 2x on block break, creative exempt)
 36. **Item stack sizes + recipe expansion** — ✅ Done (getMaxStackSize per-item lookup: tools/weapons/armor=1, eggs/snowballs=16. Recipes expanded from 11 to 90+: all tools/weapons/armor/building/utility/redstone/food/storage)
+37. **XP gain system** — ✅ Done (xpBarCap vanilla formula, addExperience with level-up, mining XP for 6 ore types, kill XP level*7 cap 100, death reset, NBT persist XpP/XpLevel/XpTotal, persisted XP on login)

@@ -621,7 +621,7 @@ void MinecraftServer::broadcastEquipment(PlayHandler& handler, int16_t equipSlot
     }
 }
 
-void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, int32_t targetEntityId) {
+void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& attackerConn, int32_t targetEntityId) {
     // Java reference: EntityPlayer.attackTargetEntityWithCurrentItem(Entity)
     // Find target player
     PlayHandler* target = nullptr;
@@ -721,6 +721,16 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, int32_t targetEn
         std::string deathMsg = "{\"text\":\"" + target->getPlayerName() +
             " was slain by " + attacker.getPlayerName() + "\"}";
         broadcastChatMessage(deathMsg);
+
+        // Java: EntityPlayer.getExperiencePoints() — drops level*7 XP (max 100)
+        int32_t killXp = std::min(target->getExperienceLevel() * 7, 100);
+        if (killXp > 0) {
+            attacker.grantExperience(killXp);
+            attacker.sendExperienceUpdate(attackerConn);
+        }
+
+        // Reset victim's XP on death
+        target->resetExperience();
 
         // Set player to dead state (will respawn on ClientStatus packet)
         // The client will show the death screen and send C16 ClientStatus(0)
