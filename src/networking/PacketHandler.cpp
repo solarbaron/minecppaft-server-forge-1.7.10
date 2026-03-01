@@ -2470,6 +2470,67 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
 
     // Note block (25) — play note and increment pitch
     // Java: BlockNote.onBlockActivated()
+    // Repeater (block IDs 93=unpowered, 94=powered) — Java: BlockRedstoneRepeater.onBlockActivated()
+    // Right-click cycles delay: bits 2-3 of metadata → 0,1,2,3 (1-4 tick delay)
+    if ((clickedBlockId == 93 || clickedBlockId == 94) && !isSneaking_) {
+        if (!server_.getWorlds().empty()) {
+            auto& w = server_.getWorlds()[0];
+            int32_t by = static_cast<int32_t>(blockY);
+            int meta = w->getBlockMetadata(blockX, by, blockZ);
+            int delay = (meta & 0x0C) >> 2;
+            delay = (delay + 1) & 3; // Cycle 0→1→2→3→0
+            int newMeta = (delay << 2) | (meta & 0x03); // Preserve direction bits
+            w->setBlockMetadata(blockX, by, blockZ, newMeta);
+            server_.broadcastBlockChange(blockX, by, blockZ, clickedBlockId, newMeta);
+            // Click sound
+            server_.broadcastSound("random.click",
+                static_cast<double>(blockX) + 0.5, static_cast<double>(by) + 0.5,
+                static_cast<double>(blockZ) + 0.5, 0.3f, 0.6f);
+        }
+        return;
+    }
+
+    // Comparator (block IDs 149=unpowered, 150=powered) — Java: BlockRedstoneComparator.onBlockActivated()
+    // Right-click toggles subtract mode (bit 0x04 of metadata)
+    if ((clickedBlockId == 149 || clickedBlockId == 150) && !isSneaking_) {
+        if (!server_.getWorlds().empty()) {
+            auto& w = server_.getWorlds()[0];
+            int32_t by = static_cast<int32_t>(blockY);
+            int meta = w->getBlockMetadata(blockX, by, blockZ);
+            int newMeta = meta ^ 0x04; // Toggle subtract mode
+            w->setBlockMetadata(blockX, by, blockZ, newMeta);
+            server_.broadcastBlockChange(blockX, by, blockZ, clickedBlockId, newMeta);
+            // Torch sound for mode change
+            server_.broadcastSound("random.click",
+                static_cast<double>(blockX) + 0.5, static_cast<double>(by) + 0.5,
+                static_cast<double>(blockZ) + 0.5, 0.3f, (newMeta & 0x04) ? 0.55f : 0.5f);
+        }
+        return;
+    }
+
+    // Anvil (block ID 145) — Java: BlockAnvil.onBlockActivated()
+    // Opens repair/rename GUI (S2D window type 8)
+    if (clickedBlockId == 145 && !isSneaking_) {
+        openWindowId_ = 14;
+        openWindowType_ = 8; // Anvil
+
+        // S2D OpenWindow (type 8 = anvil)
+        {
+            std::vector<uint8_t> pkt;
+            writeVarInt(pkt, ClientboundPacket::OpenWindow);
+            writeByte(pkt, static_cast<uint8_t>(openWindowId_));
+            writeByte(pkt, 8); // Type 8 = anvil
+            writeString(pkt, "Repair");
+            writeByte(pkt, 0); // 0 container slots (handled like enchanting)
+            writeByte(pkt, 1); // Use provided title
+            conn.sendPacket(std::move(pkt));
+        }
+
+        sendWindowItems(conn);
+        return;
+    }
+
+    // Note block (block ID 25) — Java: BlockNote.onBlockActivated()
     if (clickedBlockId == 25 && !isSneaking_) {
         if (!server_.getWorlds().empty()) {
             auto& world = server_.getWorlds()[0];
