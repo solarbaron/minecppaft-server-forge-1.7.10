@@ -992,7 +992,33 @@ void PlayHandler::sendSetSlot(Connection& conn, int8_t windowId, int16_t slot,
     conn.sendPacket(std::move(pkt));
 }
 
-void PlayHandler::handlePlayerPosition(const uint8_t* data, size_t length, Connection& /*conn*/) {
+void PlayHandler::sendEntityTeleport(Connection& conn, int32_t entityId,
+                                      double x, double y, double z,
+                                      float yaw, float pitch) {
+    // Java reference: S18PacketEntityTeleport.writePacketData()
+    // Format: Int entityId, Int x*32, Int y*32, Int z*32, Byte yaw, Byte pitch
+    std::vector<uint8_t> pkt;
+    writeVarInt(pkt, ClientboundPacket::EntityTeleport);
+    writeInt(pkt, entityId);
+    writeInt(pkt, static_cast<int32_t>(std::floor(x * 32.0)));
+    writeInt(pkt, static_cast<int32_t>(std::floor(y * 32.0)));
+    writeInt(pkt, static_cast<int32_t>(std::floor(z * 32.0)));
+    writeByte(pkt, static_cast<uint8_t>(static_cast<int8_t>(yaw * 256.0f / 360.0f)));
+    writeByte(pkt, static_cast<uint8_t>(static_cast<int8_t>(pitch * 256.0f / 360.0f)));
+    conn.sendPacket(std::move(pkt));
+}
+
+void PlayHandler::sendEntityHeadLook(Connection& conn, int32_t entityId, float yaw) {
+    // Java reference: S19PacketEntityHeadLook.writePacketData()
+    // Format: Int entityId, Byte yaw
+    std::vector<uint8_t> pkt;
+    writeVarInt(pkt, ClientboundPacket::EntityHeadLook);
+    writeInt(pkt, entityId);
+    writeByte(pkt, static_cast<uint8_t>(static_cast<int8_t>(yaw * 256.0f / 360.0f)));
+    conn.sendPacket(std::move(pkt));
+}
+
+void PlayHandler::handlePlayerPosition(const uint8_t* data, size_t length, Connection& conn) {
     // Java reference: NetHandlerPlayServer.processPlayer()
     // C04PacketPlayerPosition: Double x, Double y, Double stance, Double z, Bool onGround
     // Note: 1.7.10 sends BOTH y (feet) AND stance (head) — 33 bytes total
@@ -1002,18 +1028,20 @@ void PlayHandler::handlePlayerPosition(const uint8_t* data, size_t length, Conne
     // stance = readDouble(data + 16) — head Y, not stored separately
     playerZ_ = readDouble(data + 24);
     playerOnGround_ = data[32] != 0;
+    server_.broadcastPlayerPosition(*this);
 }
 
-void PlayHandler::handlePlayerLook(const uint8_t* data, size_t length, Connection& /*conn*/) {
+void PlayHandler::handlePlayerLook(const uint8_t* data, size_t length, Connection& conn) {
     // Java reference: NetHandlerPlayServer.processPlayer()
     // C05PacketPlayerLook: Float yaw, Float pitch, Bool onGround
     if (length < 9) return;
     playerYaw_ = readFloat(data);
     playerPitch_ = readFloat(data + 4);
     playerOnGround_ = data[8] != 0;
+    server_.broadcastPlayerPosition(*this);
 }
 
-void PlayHandler::handlePlayerPosAndLook(const uint8_t* data, size_t length, Connection& /*conn*/) {
+void PlayHandler::handlePlayerPosAndLook(const uint8_t* data, size_t length, Connection& conn) {
     // Java reference: NetHandlerPlayServer.processPlayer()
     // C06PacketPlayerPosLook: Double x, Double y, Double stance, Double z, Float yaw, Float pitch, Bool onGround
     if (length < 41) return;
@@ -1024,6 +1052,7 @@ void PlayHandler::handlePlayerPosAndLook(const uint8_t* data, size_t length, Con
     playerYaw_ = readFloat(data + 32);
     playerPitch_ = readFloat(data + 36);
     playerOnGround_ = data[40] != 0;
+    server_.broadcastPlayerPosition(*this);
 }
 
 void PlayHandler::handlePlayerGround(const uint8_t* data, size_t length, Connection& /*conn*/) {

@@ -130,6 +130,12 @@ public:
     void onPlayerLeft(PlayHandler& leftHandler);
 
     /**
+     * Broadcast a player's position/rotation to all other connected players.
+     * Java reference: EntityTrackerEntry.sendLocationToAllClients()
+     */
+    void broadcastPlayerPosition(PlayHandler& movedHandler);
+
+    /**
      * Register a new client connection (called from TcpListener callback).
      * Thread-safe.
      */

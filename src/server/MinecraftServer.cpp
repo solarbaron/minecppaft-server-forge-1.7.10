@@ -309,5 +309,23 @@ void MinecraftServer::onPlayerLeft(PlayHandler& leftHandler) {
     }
 }
 
+void MinecraftServer::broadcastPlayerPosition(PlayHandler& movedHandler) {
+    // Java reference: EntityTrackerEntry.sendLocationToAllClients()
+    // Broadcast S18 EntityTeleport + S19 EntityHeadLook to all other players
+    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    for (auto& conn : connections_) {
+        if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+        auto handler = conn->getHandler();
+        auto* otherPlay = dynamic_cast<PlayHandler*>(handler.get());
+        if (!otherPlay || otherPlay->getEntityId() == movedHandler.getEntityId()) continue;
+
+        otherPlay->sendEntityTeleport(*conn, movedHandler.getEntityId(),
+            movedHandler.getPlayerX(), movedHandler.getPlayerY(), movedHandler.getPlayerZ(),
+            movedHandler.getPlayerYaw(), movedHandler.getPlayerPitch());
+        otherPlay->sendEntityHeadLook(*conn, movedHandler.getEntityId(),
+            movedHandler.getPlayerYaw());
+    }
+}
+
 } // namespace mccpp
 

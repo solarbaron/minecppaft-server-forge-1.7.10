@@ -251,6 +251,20 @@ public:
     void sendSetSlot(Connection& conn, int8_t windowId, int16_t slot,
                      const std::optional<ItemStack>& stack);
 
+    /**
+     * Send entity teleport (absolute position) to the client.
+     * Java reference: S18PacketEntityTeleport
+     */
+    void sendEntityTeleport(Connection& conn, int32_t entityId,
+                            double x, double y, double z,
+                            float yaw, float pitch);
+
+    /**
+     * Send entity head rotation to the client.
+     * Java reference: S19PacketEntityHeadLook
+     */
+    void sendEntityHeadLook(Connection& conn, int32_t entityId, float yaw);
+
     // ─── Getters for player state ──────────────────────────────────────
     int32_t getEntityId() const { return entityId_; }
     const std::string& getUuid() const { return uuid_; }

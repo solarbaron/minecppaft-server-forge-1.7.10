@@ -147,7 +147,7 @@
 - ~~**Player-to-player visibility**~~ — ✅ S0C SpawnPlayer + S38 PlayerListItem + S13 DestroyEntities working
 - **Combat** — no damage, no knockback, no death/respawn
 - ~~**Health/hunger**~~ — ✅ initial S06 UpdateHealth sent on join (full health/food)
-- **Movement validation** — server accepts all positions without anti-cheat
+- **Movement validation** — server accepts all positions without anti-cheat; ✅ S18 EntityTeleport + S19 HeadLook broadcast to other players
 - **Lighting** — no light propagation engine
 - **Gravity/physics** — no server-side player physics (client handles its own)
 - **Mob spawning** — no mob spawner, no natural spawning
