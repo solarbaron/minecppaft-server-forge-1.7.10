@@ -230,6 +230,25 @@ private:
     mutable std::mutex itemEntitiesMutex_;
     std::vector<DroppedItem> itemEntities_;
     std::atomic<int32_t> nextItemEntityId_{100000};
+
+    // ─── Mob entities ───────────────────────────────────────────────
+    // Java reference: SpawnerAnimals.findChunksForSpawning()
+    struct SpawnedMob {
+        int32_t entityId = 0;
+        uint8_t mobType = 0;     // Entity type ID (54=zombie, 51=skel, 50=creeper, 52=spider)
+        double posX = 0, posY = 0, posZ = 0;
+        float yaw = 0, pitch = 0;
+        float health = 20.0f;
+        int64_t spawnTick = 0;
+        bool isDead = false;
+    };
+    mutable std::mutex mobEntitiesMutex_;
+    std::vector<SpawnedMob> mobEntities_;
+    std::atomic<int32_t> nextMobEntityId_{200000};
+    static constexpr int MAX_HOSTILE_MOBS = 70;  // Java: EnumCreatureType.MONSTER.maxNumber
+
+    void spawnNaturalMobs();
+    void tickMobs();
 };
 
 } // namespace mccpp

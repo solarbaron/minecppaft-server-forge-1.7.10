@@ -1565,6 +1565,54 @@ void PlayHandler::sendEntityVelocity(Connection& conn, int32_t entityId, double 
     conn.sendPacket(std::move(pkt));
 }
 
+void PlayHandler::sendSpawnMob(Connection& conn, int32_t entityId, uint8_t mobType,
+                                double x, double y, double z,
+                                float yaw, float pitch, float headYaw) {
+    // Java reference: S0FPacketSpawnMob
+    // Fixed-point: pos * 32
+    // Angle: angle * 256 / 360
+    auto encodePos = [](double pos) -> int32_t {
+        return static_cast<int32_t>(pos * 32.0);
+    };
+    auto encodeAngle = [](float angle) -> int8_t {
+        return static_cast<int8_t>(static_cast<int32_t>(angle * 256.0f / 360.0f) & 0xFF);
+    };
+
+    std::vector<uint8_t> pkt;
+    writeVarInt(pkt, ClientboundPacket::SpawnMob);
+    writeVarInt(pkt, entityId);
+    writeUByte(pkt, mobType);
+    writeInt(pkt, encodePos(x));
+    writeInt(pkt, encodePos(y));
+    writeInt(pkt, encodePos(z));
+    writeByte(pkt, encodeAngle(yaw));
+    writeByte(pkt, encodeAngle(pitch));
+    writeByte(pkt, encodeAngle(headYaw));
+    writeShort(pkt, 0);  // velX
+    writeShort(pkt, 0);  // velY
+    writeShort(pkt, 0);  // velZ
+
+    // DataWatcher metadata — minimal entity metadata
+    // Index 0: byte — entity flags (0 = normal)
+    pkt.push_back((0 << 5) | 0);  // type=byte(0), index=0
+    pkt.push_back(0);              // value: no flags
+
+    // Index 6: float — health (DataWatcher index 6 for LivingBase)
+    pkt.push_back((3 << 5) | 6);  // type=float(3), index=6
+    float health = 20.0f;
+    uint32_t healthBits;
+    std::memcpy(&healthBits, &health, sizeof(healthBits));
+    pkt.push_back((healthBits >> 24) & 0xFF);
+    pkt.push_back((healthBits >> 16) & 0xFF);
+    pkt.push_back((healthBits >> 8) & 0xFF);
+    pkt.push_back(healthBits & 0xFF);
+
+    // Terminator
+    pkt.push_back(0x7F);
+
+    conn.sendPacket(std::move(pkt));
+}
+
 void PlayHandler::applyDamage(float amount) {
     // Java reference: EntityLivingBase.damageEntity()
     health_ = std::max(0.0f, health_ - amount);

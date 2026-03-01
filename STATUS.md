@@ -202,4 +202,4 @@
 12. **Tree generation** — ✅ Done (TreeGenerator oak trees wired into OverworldGenerator)
 13. **Player data persistence** — ✅ Done (savePlayerData/loadPlayerData with NBT Pos/Rotation)
 14. **Combat system** — ✅ Done (UseEntity attack, damage, S12 knockback, S1A hurt/death, respawn via ClientStatus)
-15. **Mob spawning** — natural mob spawning in dark areas
+15. **Mob spawning** — ✅ Done (natural hostile spawn near players, S0F SpawnMob, despawn >600 ticks)

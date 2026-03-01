@@ -21,6 +21,7 @@
 
 #include <algorithm>
 #include <iostream>
+#include <random>
 
 namespace mccpp {
 
@@ -199,6 +200,15 @@ void MinecraftServer::tick() {
 
     // Tick item entities (physics, despawn, pickup)
     tickItemEntities();
+
+    // Tick mob entities (despawn tracking)
+    tickMobs();
+
+    // Natural mob spawning every 200 ticks (10 seconds)
+    // Java reference: WorldServer.tick() → SpawnerAnimals.findChunksForSpawning()
+    if (ticks > 0 && ticks % 200 == 0) {
+        spawnNaturalMobs();
+    }
 
     // Send S03 TimeUpdate to all players every 20 ticks (1 second)
     // Java reference: WorldServer.tick() sends S03PacketTimeUpdate every 20 ticks
@@ -608,5 +618,179 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, int32_t targetEn
     }
 }
 
-} // namespace mccpp
+// ═══════════════════════════════════════════════════════════════════════════
+// Mob spawning system
+// Java reference: SpawnerAnimals.findChunksForSpawning()
+// ═══════════════════════════════════════════════════════════════════════════
 
+void MinecraftServer::spawnNaturalMobs() {
+    // Don't spawn if no players
+    int playerCount = getOnlinePlayerCount();
+    if (playerCount == 0) return;
+    if (worlds_.empty()) return;
+
+    // Check mob cap
+    {
+        std::lock_guard<std::mutex> lock(mobEntitiesMutex_);
+        int aliveCount = 0;
+        for (auto& mob : mobEntities_) {
+            if (!mob.isDead) aliveCount++;
+        }
+        if (aliveCount >= MAX_HOSTILE_MOBS) return;
+    }
+
+    // Pick a random player to spawn near
+    static thread_local std::mt19937 rng(std::random_device{}());
+    PlayHandler* targetPlayer = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(connectionsMutex_);
+        std::vector<PlayHandler*> players;
+        for (auto& conn : connections_) {
+            if (conn->isConnected() && conn->getState() == ConnectionState::Play) {
+                auto handler = conn->getHandler();
+                auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                if (ph && !ph->isDead()) players.push_back(ph);
+            }
+        }
+        if (players.empty()) return;
+        targetPlayer = players[rng() % players.size()];
+    }
+
+    // Generate spawn position 8-24 blocks from the chosen player
+    // Java reference: SpawnerAnimals — random offset from chunk center
+    std::uniform_int_distribution<int> offsetDist(-24, 24);
+    double spawnX = targetPlayer->getPlayerX() + offsetDist(rng);
+    double spawnZ = targetPlayer->getPlayerZ() + offsetDist(rng);
+
+    // Keep distance reasonable (not too close)
+    double dx = spawnX - targetPlayer->getPlayerX();
+    double dz = spawnZ - targetPlayer->getPlayerZ();
+    if (dx * dx + dz * dz < 64.0) return; // Min 8 blocks away
+
+    // Find surface Y at spawn position
+    WorldServer* world = worlds_[0].get();
+    int bx = static_cast<int>(std::floor(spawnX));
+    int bz = static_cast<int>(std::floor(spawnZ));
+
+    // Find highest non-air block
+    int surfaceY = 64; // default
+    for (int y = 255; y > 0; --y) {
+        Block* block = world->getBlock(bx, y, bz);
+        if (block != nullptr) {
+            surfaceY = y + 1;
+            break;
+        }
+    }
+
+    // Don't spawn in void or too high
+    if (surfaceY <= 1 || surfaceY > 250) return;
+
+    double spawnY = static_cast<double>(surfaceY);
+
+    // Pick mob type  — Java entity type IDs:
+    // 50=Creeper, 51=Skeleton, 52=Spider, 54=Zombie
+    static const uint8_t hostileMobs[] = {54, 54, 54, 54, 51, 51, 51, 52, 52, 50};
+    uint8_t mobType = hostileMobs[rng() % 10];
+
+    // Random facing
+    std::uniform_real_distribution<float> yawDist(0.0f, 360.0f);
+    float yaw = yawDist(rng);
+
+    // Create mob
+    int32_t eid = nextMobEntityId_.fetch_add(1, std::memory_order_relaxed);
+    int64_t currentTick = tickCount_.load(std::memory_order_relaxed);
+
+    SpawnedMob mob;
+    mob.entityId = eid;
+    mob.mobType = mobType;
+    mob.posX = spawnX;
+    mob.posY = spawnY;
+    mob.posZ = spawnZ;
+    mob.yaw = yaw;
+    mob.pitch = 0.0f;
+    mob.health = 20.0f;
+    mob.spawnTick = currentTick;
+    mob.isDead = false;
+
+    // Broadcast S0F SpawnMob to all players
+    {
+        std::lock_guard<std::mutex> lock(connectionsMutex_);
+        for (auto& conn : connections_) {
+            if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+            auto handler = conn->getHandler();
+            auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+            if (ph) {
+                ph->sendSpawnMob(*conn, eid, mobType, spawnX, spawnY, spawnZ,
+                                  yaw, 0.0f, yaw);
+            }
+        }
+    }
+
+    // Track
+    {
+        std::lock_guard<std::mutex> lock(mobEntitiesMutex_);
+        mobEntities_.push_back(std::move(mob));
+    }
+}
+
+void MinecraftServer::tickMobs() {
+    // Despawn mobs that are old AND far from all players
+    // Java reference: EntityLiving.despawnEntity() — >600 ticks + >32 blocks
+    int64_t currentTick = tickCount_.load(std::memory_order_relaxed);
+    std::vector<int32_t> deadIds;
+
+    {
+        std::lock_guard<std::mutex> lock(mobEntitiesMutex_);
+        for (auto& mob : mobEntities_) {
+            if (mob.isDead) continue;
+
+            int64_t age = currentTick - mob.spawnTick;
+            if (age < 600) continue;
+
+            // Check distance to nearest player
+            bool nearPlayer = false;
+            {
+                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                for (auto& conn : connections_) {
+                    if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                    auto handler = conn->getHandler();
+                    auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                    if (!ph) continue;
+                    double dx = ph->getPlayerX() - mob.posX;
+                    double dz = ph->getPlayerZ() - mob.posZ;
+                    if (dx * dx + dz * dz < 1024.0) { // 32 blocks
+                        nearPlayer = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!nearPlayer) {
+                mob.isDead = true;
+                deadIds.push_back(mob.entityId);
+            }
+        }
+
+        // Remove dead
+        mobEntities_.erase(
+            std::remove_if(mobEntities_.begin(), mobEntities_.end(),
+                [](const SpawnedMob& m) { return m.isDead; }),
+            mobEntities_.end()
+        );
+    }
+
+    // Broadcast destroy for despawned mobs
+    if (!deadIds.empty()) {
+        std::lock_guard<std::mutex> lock(connectionsMutex_);
+        for (auto& conn : connections_) {
+            if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+            auto handler = conn->getHandler();
+            auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+            if (ph) {
+                ph->sendDestroyEntities(*conn, deadIds);
+            }
+        }
+    }
+}
+
+} // namespace mccpp

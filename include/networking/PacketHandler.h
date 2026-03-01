@@ -308,6 +308,14 @@ public:
     void sendEntityVelocity(Connection& conn, int32_t entityId, double vx, double vy, double vz);
 
     /**
+     * Send S0F SpawnMob to the client.
+     * Java reference: S0FPacketSpawnMob
+     */
+    void sendSpawnMob(Connection& conn, int32_t entityId, uint8_t mobType,
+                      double x, double y, double z,
+                      float yaw, float pitch, float headYaw);
+
+    /**
      * Apply damage to this player, reducing health.
      * Java reference: EntityLivingBase.damageEntity()
      */
