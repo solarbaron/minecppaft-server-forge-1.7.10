@@ -291,6 +291,13 @@ public:
     void openFurnace(Connection& conn, int32_t blockX, int32_t blockY, int32_t blockZ);
 
     /**
+     * Open an ender chest for this player.
+     * Per-player storage (27 slots), S2D OpenWindow type 0.
+     * Java reference: InventoryEnderChest
+     */
+    void openEnderChest(Connection& conn, int32_t blockX, int32_t blockY, int32_t blockZ);
+
+    /**
      * Send S31 WindowProperty to the client (furnace progress bars).
      * Java reference: S31PacketWindowProperty
      */
@@ -712,6 +719,10 @@ private:
     // Pointer to server-side chest storage (owned by MinecraftServer::chestStorage_)
     std::array<std::optional<ItemStack>, 27>* chestInventory_ = nullptr;
     int32_t openChestX_ = 0, openChestY_ = 0, openChestZ_ = 0;
+    bool isEnderChest_ = false; // true when chestInventory_ points to enderChestInventory_
+
+    // ─── Ender chest (per-player, 27 slots) ───
+    std::array<std::optional<ItemStack>, 27> enderChestInventory_;
 
     // ─── Furnace container ───
     // Pointer to server-side furnace (owned by MinecraftServer::furnaceStorage_)

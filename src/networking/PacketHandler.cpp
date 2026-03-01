@@ -1138,6 +1138,7 @@ void PlayHandler::closeOpenWindow(Connection& conn) {
     // Chest: just clear the pointer (items stay in chest)
     if (openWindowType_ == 0) {
         chestInventory_ = nullptr;
+        isEnderChest_ = false;
     }
 
     // Furnace: clear pointer (items stay in furnace)
@@ -1196,6 +1197,50 @@ void PlayHandler::openChest(Connection& conn, int32_t blockX, int32_t blockY, in
     conn.sendPacket(std::move(pkt));
 
     // Play chest open sound
+    server_.broadcastSound("random.chestopen",
+        static_cast<double>(blockX) + 0.5,
+        static_cast<double>(blockY) + 0.5,
+        static_cast<double>(blockZ) + 0.5,
+        0.5f, 1.0f);
+}
+
+void PlayHandler::openEnderChest(Connection& conn, int32_t blockX, int32_t blockY, int32_t blockZ) {
+    // Java: BlockEnderChest.onBlockActivated() → InventoryEnderChest
+    // Per-player storage, reuses the chest window handler
+    if (openWindowId_ > 0) {
+        closeOpenWindow(conn);
+    }
+
+    openWindowId_ = nextWindowId_++;
+    if (nextWindowId_ > 100) nextWindowId_ = 1;
+    openWindowType_ = 0; // generic container (same as regular chest)
+    isEnderChest_ = true;
+
+    // Point the chest handler at per-player ender chest storage
+    chestInventory_ = &enderChestInventory_;
+
+    // Send S2D OpenWindow (type 0 = generic, 27 slots = 3 rows)
+    sendOpenWindow(conn, openWindowId_, 0, "Ender Chest", 27);
+
+    // Send window contents — 63 slots (27 ender chest + 27 main inv + 9 hotbar)
+    std::vector<uint8_t> pkt;
+    writeVarInt(pkt, ClientboundPacket::WindowItems);
+    writeByte(pkt, static_cast<uint8_t>(openWindowId_));
+    writeShort(pkt, 63);
+
+    for (int i = 0; i < 27; ++i) {
+        writeItemStack(pkt, enderChestInventory_[i]);
+    }
+    for (int i = 9; i < 36; ++i) {
+        writeItemStack(pkt, inventory_.getStackInSlot(i));
+    }
+    for (int i = 0; i < 9; ++i) {
+        writeItemStack(pkt, inventory_.getStackInSlot(i));
+    }
+
+    conn.sendPacket(std::move(pkt));
+
+    // Ender chest open sound — in Java: "random.chestopen" (same sound)
     server_.broadcastSound("random.chestopen",
         static_cast<double>(blockX) + 0.5,
         static_cast<double>(blockY) + 0.5,
@@ -2015,6 +2060,12 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
     // Furnace (block ID 61=furnace, 62=lit_furnace) — Java: BlockFurnace.onBlockActivated()
     if ((clickedBlockId == 61 || clickedBlockId == 62) && !isSneaking_) {
         openFurnace(conn, blockX, static_cast<int32_t>(blockY), blockZ);
+        return;
+    }
+
+    // Ender Chest (block ID 130) — Java: BlockEnderChest.onBlockActivated()
+    if (clickedBlockId == 130 && !isSneaking_) {
+        openEnderChest(conn, blockX, static_cast<int32_t>(blockY), blockZ);
         return;
     }
 
