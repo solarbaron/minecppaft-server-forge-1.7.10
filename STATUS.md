@@ -110,7 +110,8 @@
 ### Tile Entities
 - 121 lines + 578-line header
 - Furnace, Chest, Beacon, Brewing Stand, etc. declared
-- ❌ No tile entity ticking or interaction
+- ✅ **Chest** — in-memory per-position storage (27 slots), S2D OpenWindow + ClickWindow
+- ❌ No tile entity ticking or interaction for other types
 
 ### Inventory System
 - Container hierarchy (679-line header)
@@ -254,3 +255,5 @@
 38. **Weather system** — ✅ Done (updateWeather with Java-parity timer countdown/toggle, ±0.01/tick strength ramp, S2B broadcast: rain start/stop reasons 1/2, rain/thunder intensity reasons 7/8, weather sync on player join)
 39. **/weather command** — ✅ Done (clear/rain/thunder modes + optional duration, setWeather server method, tab completion)
 40. **3×3 Crafting Table** — ✅ Done (S2D OpenWindow type 1, 46-slot workbench container, CraftingGrid 3×3 recipe matching, grid consumption on craft, close drops grid items, block 58 activation intercept, sneak bypass)
+41. **Item pickup to inventory** — ✅ Done (tryPickupItem calls addItemStackToInventory + S30 sync, inventory-full rejection keeps item on ground)
+42. **Chest container** — ✅ Done (per-position in-memory storage, S2D OpenWindow type 0, 63-slot container, block 54 interception, left/right click, chest contents preserved, open sound)
