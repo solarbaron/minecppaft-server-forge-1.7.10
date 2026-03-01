@@ -15,8 +15,8 @@
 - **Status** (Server List Ping) — responds with MOTD, player count, protocol info, ping/pong
 - **Login** — offline-mode auth, MD5-based UUID generation, LoginSuccess packet
 - **Play State Transition** — Login→Play state change, handler swap
-- **Play Packets Handled:** KeepAlive (echo), ChatMessage (with `/` command dispatch), Player/PlayerPosition/PlayerLook/PlayerPosAndLook, ClientSettings, PluginMessage (silently consumed), PlayerAbilities, PlayerDigging (instant break), PlayerBlockPlace (block placement), CreativeInventory (C10, slot set + item drop)
-- **Play Packets Silently Consumed:** HeldItemChange, Animation, EntityAction, CloseWindow, ClickWindow, ConfirmTransaction, UpdateSign, UseEntity, SteerVehicle, TabComplete, EnchantItem, ClientStatus
+- **Play Packets Handled:** KeepAlive (echo), ChatMessage (with `/` command dispatch), Player/PlayerPosition/PlayerLook/PlayerPosAndLook, ClientSettings, PluginMessage (silently consumed), PlayerAbilities, PlayerDigging (instant break), PlayerBlockPlace (block placement), CreativeInventory (C10, slot set + item drop), ClickWindow (C0E, modes 0-4 with cursor tracking), CloseWindow (drops cursor item)
+- **Play Packets Silently Consumed:** HeldItemChange, Animation, EntityAction, ConfirmTransaction, UpdateSign, UseEntity, SteerVehicle, TabComplete, EnchantItem, ClientStatus
 
 ### Login Sequence (sent to client on join)
 - S01 JoinGame (entity ID, gamemode, dimension, difficulty, max players, level type)
@@ -116,6 +116,8 @@
 - Basic inventory operations (250 lines)
 - ❌ No server→client inventory sync (no window packets)
 - ✅ Creative inventory action (C10) — set container slots + item drops in creative mode
+- ✅ **ClickWindow (C0E)** — modes 0-4: normal click (left/right pickup/place/merge/swap), shift-click (hotbar↔main), number key swap, creative clone, drop from slot. Cursor item tracking + S32 ConfirmTransaction + full window resync
+- ✅ CloseWindow (C0D) — drops cursor item on close
 - ✅ Player item drop (Q key) — status 3 (full stack) / 4 (single item), inventory decrement + S2F sync
 - ✅ Food consumption — right-click food decrements stack count from hotbar + S2F sync
 - ❌ No item pickup/drop in survival mode
@@ -239,3 +241,4 @@
 27. **Drowning** — ✅ Done (air supply 300 ticks, depletes in water, 2 dmg at exhaustion, death: "drowned")
 28. **Suffocation** — ✅ Done (1 dmg/tick in opaque full-cube blocks — fixed with explicit block whitelist)
 29. **Fire/lava/void damage** — ✅ Done (lava 4/tick + 15s fire, fire block 1/tick + 8s fire, burning 1/sec, void 4/tick below Y=-64, water extinguishes)
+30. **ClickWindow (C0E)** — ✅ Done (modes 0-4: left/right click, shift-click, number key swap, creative clone, drop. Cursor item tracking, S32 confirm, window resync)

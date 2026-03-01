@@ -633,10 +633,19 @@ void PlayHandler::handlePacket(int32_t packetId,
             handlePlayerBlockPlace(data, length, conn);
             break;
         case ServerboundPacket::CloseWindow:
+            // Drop cursor item if any — Java: Container.onContainerClosed
+            if (cursorItem_) {
+                server_.spawnItemDrop(playerX_, playerY_ + 1.5, playerZ_,
+                    cursorItem_->getItemId(), cursorItem_->getDamage(), cursorItem_->getStackSize());
+                cursorItem_ = std::nullopt;
+            }
+            break;
         case ServerboundPacket::ClickWindow:
+            handleClickWindow(data, length, conn);
+            break;
         case ServerboundPacket::ConfirmTransaction:
         case ServerboundPacket::UpdateSign:
-            // Silently consume unimplemented inventory/sign packets
+            // Silently consume unimplemented sign packets
             break;
         case ServerboundPacket::CreativeInventory:
             handleCreativeInventory(data, length, conn);
@@ -1828,6 +1837,364 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
         static_cast<double>(placeY) + 0.5,
         static_cast<double>(placeZ) + 0.5,
         1.0f, 0.8f);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Click Window — C0E inventory interactions
+// Java reference: Container.slotClick(slotId, button, mode, player)
+//
+// C0E format: Byte windowId, Short slot, Byte button, Short actionNumber,
+//             Byte mode, Slot clickedItem
+// ═══════════════════════════════════════════════════════════════════════════
+
+void PlayHandler::handleClickWindow(const uint8_t* data, size_t length, Connection& conn) {
+    // Minimum: 1(windowId) + 2(slot) + 1(button) + 2(actionNumber) + 1(mode) + 2(itemId) = 9
+    if (length < 9) return;
+
+    int8_t windowId = static_cast<int8_t>(data[0]);
+    int16_t slotId = static_cast<int16_t>((data[1] << 8) | data[2]);
+    int8_t button = static_cast<int8_t>(data[3]);
+    int16_t actionNumber = static_cast<int16_t>((data[4] << 8) | data[5]);
+    int8_t mode = static_cast<int8_t>(data[6]);
+    // Skip reading the clicked item — server is authoritative
+
+    int32_t slotCount = container_ ? container_->getSlotCount() : 0;
+
+    // Helper: send S32 ConfirmTransaction (accepted)
+    auto sendConfirm = [&](bool accepted) {
+        std::vector<uint8_t> pkt;
+        writeVarInt(pkt, ClientboundPacket::ConfirmTransaction);
+        writeByte(pkt, static_cast<uint8_t>(windowId));
+        writeShort(pkt, actionNumber);
+        writeByte(pkt, accepted ? 1 : 0);
+        conn.sendPacket(std::move(pkt));
+    };
+
+    // Helper: sync entire window to client after state change
+    auto syncWindow = [&]() {
+        if (!container_) return;
+        for (int32_t i = 0; i < slotCount; ++i) {
+            Slot* s = container_->getSlot(i);
+            if (s) {
+                sendSetSlot(conn, 0, static_cast<int16_t>(i), s->getStack());
+            }
+        }
+        // Sync cursor item — slot -1
+        sendSetSlot(conn, -1, -1, cursorItem_);
+    };
+
+    if (!container_ || windowId != 0) {
+        sendConfirm(false);
+        return;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // Mode 0: Normal click (button 0=left, 1=right)
+    // Java: Container.slotClick mode 0
+    // ═══════════════════════════════════════════════════════════════════
+    if (mode == 0 && (button == 0 || button == 1)) {
+        if (slotId == -999) {
+            // Click outside window — drop cursor item
+            if (cursorItem_) {
+                if (button == 0) {
+                    // Left: drop entire cursor stack
+                    server_.spawnItemDrop(playerX_, playerY_ + 1.5, playerZ_,
+                        cursorItem_->getItemId(), cursorItem_->getDamage(), cursorItem_->getStackSize());
+                    cursorItem_ = std::nullopt;
+                } else {
+                    // Right: drop 1 from cursor
+                    server_.spawnItemDrop(playerX_, playerY_ + 1.5, playerZ_,
+                        cursorItem_->getItemId(), cursorItem_->getDamage(), 1);
+                    int32_t remaining = cursorItem_->getStackSize() - 1;
+                    if (remaining <= 0) {
+                        cursorItem_ = std::nullopt;
+                    } else {
+                        cursorItem_->setStackSize(remaining);
+                    }
+                }
+            }
+            sendConfirm(true);
+            syncWindow();
+            return;
+        }
+
+        if (slotId < 0 || slotId >= slotCount) {
+            sendConfirm(false);
+            return;
+        }
+
+        Slot* slot = container_->getSlot(slotId);
+        if (!slot) { sendConfirm(false); return; }
+
+        auto slotStack = slot->getStack();
+
+        if (!slotStack) {
+            // Empty slot — place cursor item into it
+            if (cursorItem_) {
+                if (button == 0) {
+                    // Left: place all
+                    slot->putStack(cursorItem_);
+                    cursorItem_ = std::nullopt;
+                } else {
+                    // Right: place 1
+                    ItemStack single(cursorItem_->getItemId(), 1, cursorItem_->getDamage());
+                    slot->putStack(single);
+                    int32_t remaining = cursorItem_->getStackSize() - 1;
+                    if (remaining <= 0) {
+                        cursorItem_ = std::nullopt;
+                    } else {
+                        cursorItem_->setStackSize(remaining);
+                    }
+                }
+            }
+        } else {
+            // Slot has item
+            if (!cursorItem_) {
+                // Pick up from slot
+                if (button == 0) {
+                    // Left: pick up all
+                    cursorItem_ = slotStack;
+                    slot->putStack(std::nullopt);
+                } else {
+                    // Right: pick up half (round up)
+                    int32_t halfCount = (slotStack->getStackSize() + 1) / 2;
+                    ItemStack picked = *slotStack;
+                    picked.setStackSize(halfCount);
+                    cursorItem_ = picked;
+                    int32_t remaining = slotStack->getStackSize() - halfCount;
+                    if (remaining <= 0) {
+                        slot->putStack(std::nullopt);
+                    } else {
+                        ItemStack left = *slotStack;
+                        left.setStackSize(remaining);
+                        slot->putStack(left);
+                    }
+                }
+            } else {
+                // Both slot and cursor have items
+                if (cursorItem_->getItemId() == slotStack->getItemId() &&
+                    cursorItem_->getDamage() == slotStack->getDamage()) {
+                    // Same item type — merge
+                    if (button == 0) {
+                        // Left: add as many cursor items as possible
+                        int32_t maxStack = cursorItem_->getMaxStackSize();
+                        int32_t canAdd = maxStack - slotStack->getStackSize();
+                        if (canAdd > 0) {
+                            int32_t toAdd = std::min(canAdd, cursorItem_->getStackSize());
+                            ItemStack updated = *slotStack;
+                            updated.setStackSize(slotStack->getStackSize() + toAdd);
+                            slot->putStack(updated);
+                            int32_t cursorLeft = cursorItem_->getStackSize() - toAdd;
+                            if (cursorLeft <= 0) {
+                                cursorItem_ = std::nullopt;
+                            } else {
+                                cursorItem_->setStackSize(cursorLeft);
+                            }
+                        }
+                    } else {
+                        // Right: add 1 from cursor
+                        if (slotStack->getStackSize() < slotStack->getMaxStackSize()) {
+                            ItemStack updated = *slotStack;
+                            updated.setStackSize(slotStack->getStackSize() + 1);
+                            slot->putStack(updated);
+                            int32_t cursorLeft = cursorItem_->getStackSize() - 1;
+                            if (cursorLeft <= 0) {
+                                cursorItem_ = std::nullopt;
+                            } else {
+                                cursorItem_->setStackSize(cursorLeft);
+                            }
+                        }
+                    }
+                } else {
+                    // Different items — swap
+                    auto temp = cursorItem_;
+                    cursorItem_ = slotStack;
+                    slot->putStack(temp);
+                }
+            }
+        }
+        sendConfirm(true);
+        syncWindow();
+        return;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // Mode 1: Shift-click (quick move)
+    // Java: Container.transferStackInSlot → mergeItemStack
+    // ContainerPlayer layout: 0=output, 1-4=craft grid, 5-8=armor,
+    //                        9-35=main inventory, 36-44=hotbar
+    // ═══════════════════════════════════════════════════════════════════
+    if (mode == 1 && (button == 0 || button == 1)) {
+        if (slotId < 0 || slotId >= slotCount) {
+            sendConfirm(false);
+            return;
+        }
+        Slot* slot = container_->getSlot(slotId);
+        if (!slot) { sendConfirm(false); return; }
+        auto slotStack = slot->getStack();
+        if (!slotStack) { sendConfirm(true); syncWindow(); return; }
+
+        // Simple shift-click: hotbar (36-44) ↔ main inventory (9-35)
+        int32_t destStart, destEnd;
+        if (slotId >= 36 && slotId <= 44) {
+            // Hotbar → main inventory
+            destStart = 9; destEnd = 36;
+        } else if (slotId >= 9 && slotId <= 35) {
+            // Main → hotbar
+            destStart = 36; destEnd = 45;
+        } else if (slotId >= 5 && slotId <= 8) {
+            // Armor → main+hotbar
+            destStart = 9; destEnd = 45;
+        } else if (slotId >= 1 && slotId <= 4) {
+            // Crafting grid → main+hotbar
+            destStart = 9; destEnd = 45;
+        } else if (slotId == 0) {
+            // Crafting output → main+hotbar
+            destStart = 9; destEnd = 45;
+        } else {
+            sendConfirm(true);
+            syncWindow();
+            return;
+        }
+
+        // Try to merge into destination range
+        ItemStack toMove = *slotStack;
+        bool moved = false;
+
+        // First pass: merge with existing stacks of same type
+        for (int32_t i = destStart; i < destEnd && toMove.getStackSize() > 0; ++i) {
+            Slot* dest = container_->getSlot(i);
+            if (!dest) continue;
+            auto destStack = dest->getStack();
+            if (destStack && destStack->getItemId() == toMove.getItemId() &&
+                destStack->getDamage() == toMove.getDamage()) {
+                int32_t canAdd = destStack->getMaxStackSize() - destStack->getStackSize();
+                if (canAdd > 0) {
+                    int32_t add = std::min(canAdd, toMove.getStackSize());
+                    ItemStack updated = *destStack;
+                    updated.setStackSize(destStack->getStackSize() + add);
+                    dest->putStack(updated);
+                    toMove.setStackSize(toMove.getStackSize() - add);
+                    moved = true;
+                }
+            }
+        }
+
+        // Second pass: place in empty slots
+        for (int32_t i = destStart; i < destEnd && toMove.getStackSize() > 0; ++i) {
+            Slot* dest = container_->getSlot(i);
+            if (!dest) continue;
+            auto destStack = dest->getStack();
+            if (!destStack) {
+                dest->putStack(toMove);
+                toMove.setStackSize(0);
+                moved = true;
+            }
+        }
+
+        // Update source slot
+        if (toMove.getStackSize() <= 0) {
+            slot->putStack(std::nullopt);
+        } else {
+            slot->putStack(toMove);
+        }
+
+        sendConfirm(true);
+        syncWindow();
+        return;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // Mode 2: Number key swap (button = hotbar slot 0-8)
+    // Java: Container.slotClick mode 2
+    // ═══════════════════════════════════════════════════════════════════
+    if (mode == 2 && button >= 0 && button < 9) {
+        if (slotId < 0 || slotId >= slotCount) {
+            sendConfirm(false);
+            return;
+        }
+        Slot* clickedSlot = container_->getSlot(slotId);
+        if (!clickedSlot) { sendConfirm(false); return; }
+
+        // Hotbar slot in ContainerPlayer = 36 + button
+        int32_t hotbarContainerSlot = 36 + button;
+        Slot* hotbarSlot = container_->getSlot(hotbarContainerSlot);
+        if (!hotbarSlot) { sendConfirm(false); return; }
+
+        auto clickedStack = clickedSlot->getStack();
+        auto hotbarStack = hotbarSlot->getStack();
+
+        // Swap the two slots
+        clickedSlot->putStack(hotbarStack);
+        hotbarSlot->putStack(clickedStack);
+
+        sendConfirm(true);
+        syncWindow();
+        return;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // Mode 3: Creative middle click (clone item)
+    // Java: Container.slotClick mode 3
+    // ═══════════════════════════════════════════════════════════════════
+    if (mode == 3 && gameMode_ == 1) {
+        if (slotId >= 0 && slotId < slotCount && !cursorItem_) {
+            Slot* slot = container_->getSlot(slotId);
+            if (slot) {
+                auto slotStack = slot->getStack();
+                if (slotStack) {
+                    ItemStack cloned = *slotStack;
+                    cloned.setStackSize(cloned.getMaxStackSize());
+                    cursorItem_ = cloned;
+                }
+            }
+        }
+        sendConfirm(true);
+        syncWindow();
+        return;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // Mode 4: Drop item from slot (not cursor)
+    // Java: Container.slotClick mode 4
+    // button 0 = drop 1, button 1 = drop stack
+    // ═══════════════════════════════════════════════════════════════════
+    if (mode == 4 && !cursorItem_) {
+        if (slotId >= 0 && slotId < slotCount) {
+            Slot* slot = container_->getSlot(slotId);
+            if (slot) {
+                auto slotStack = slot->getStack();
+                if (slotStack) {
+                    int32_t dropCount = (button == 0) ? 1 : slotStack->getStackSize();
+                    dropCount = std::min(dropCount, slotStack->getStackSize());
+
+                    // Drop the items
+                    server_.spawnItemDrop(playerX_, playerY_ + 1.5, playerZ_,
+                        slotStack->getItemId(), slotStack->getDamage(), dropCount);
+
+                    int32_t remaining = slotStack->getStackSize() - dropCount;
+                    if (remaining <= 0) {
+                        slot->putStack(std::nullopt);
+                    } else {
+                        ItemStack updated = *slotStack;
+                        updated.setStackSize(remaining);
+                        slot->putStack(updated);
+                    }
+                }
+            }
+        }
+        sendConfirm(true);
+        syncWindow();
+        return;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // Mode 5: Drag (paint mode) — complex, accept and resync
+    // Mode 6: Double-click (collect all) — complex, accept and resync
+    // For now: accept the action and resync the full window
+    // ═══════════════════════════════════════════════════════════════════
+    sendConfirm(true);
+    syncWindow();
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

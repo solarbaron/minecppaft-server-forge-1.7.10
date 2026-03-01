@@ -415,6 +415,7 @@ private:
     void handleClientSettings(const uint8_t* data, size_t length, Connection& conn);
     void handlePlayerDigging(const uint8_t* data, size_t length, Connection& conn);
     void handlePlayerBlockPlace(const uint8_t* data, size_t length, Connection& conn);
+    void handleClickWindow(const uint8_t* data, size_t length, Connection& conn);
     void handleUseEntity(const uint8_t* data, size_t length, Connection& conn);
     void handleClientStatus(const uint8_t* data, size_t length, Connection& conn);
     void handleHeldItemChange(const uint8_t* data, size_t length, Connection& conn);
@@ -451,6 +452,7 @@ private:
     // Player inventory
     InventoryPlayer inventory_;
     std::unique_ptr<ContainerPlayer> container_;
+    std::optional<ItemStack> cursorItem_; // Java: InventoryPlayer.getItemStack() — item on cursor
 
     // Combat state — Java: EntityPlayer fields
     float health_ = 20.0f;        // EntityLivingBase.health
