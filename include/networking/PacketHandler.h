@@ -334,6 +334,25 @@ public:
     float getSaturation() const { return saturation_; }
     bool isDead() const { return dead_; }
 
+    // ─── Setters for player state (used by commands) ────────────────────
+    void setPlayerPosition(double x, double y, double z) {
+        playerX_ = x; playerY_ = y; playerZ_ = z;
+    }
+
+    /**
+     * Send S08 PlayerPosAndLook (teleport the client to a position).
+     * Java reference: EntityPlayerMP.setPositionAndUpdate()
+     */
+    void sendPlayerPosAndLook(Connection& conn, double x, double y, double z,
+                               float yaw, float pitch);
+
+    /**
+     * Send S2B ChangeGameState to the client.
+     * Java reference: S2BPacketChangeGameState
+     * Reason 3 = change game mode (value = gamemode int)
+     */
+    void sendChangeGameState(Connection& conn, uint8_t reason, float value);
+
     /**
      * Save player data to world/playerdata/<uuid>.dat
      * Java reference: SaveHandler.writePlayerData()

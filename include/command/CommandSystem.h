@@ -36,6 +36,8 @@
 
 namespace mccpp {
 
+class MinecraftServer; // forward decl for command server access
+
 // ═══════════════════════════════════════════════════════════════════════════
 // ICommandSender — Entity capable of receiving command output.
 // Java reference: net.minecraft.command.ICommandSender
@@ -54,6 +56,9 @@ public:
     // Java: ICommandSender.canCommandSenderUseCommand(int, String)
     // Permission level: 0=all, 1=moderator, 2=gamemaster, 3=admin, 4=owner
     virtual bool canCommandSenderUseCommand(int32_t permLevel, const std::string& command) const = 0;
+
+    // Java: MinecraftServer.getServer() — access the server instance
+    virtual MinecraftServer* getServer() const { return nullptr; }
 };
 
 // ═══════════════════════════════════════════════════════════════════════════

@@ -619,9 +619,133 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, int32_t targetEn
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Mob spawning system
-// Java reference: SpawnerAnimals.findChunksForSpawning()
+// Command helper methods
 // ═══════════════════════════════════════════════════════════════════════════
+
+void MinecraftServer::teleportPlayer(const std::string& playerName, double x, double y, double z) {
+    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    for (auto& conn : connections_) {
+        if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+        auto handler = conn->getHandler();
+        auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+        if (!ph || ph->getPlayerName() != playerName) continue;
+
+        ph->setPlayerPosition(x, y, z);
+        ph->sendPlayerPosAndLook(*conn, x, y, z, ph->getPlayerYaw(), ph->getPlayerPitch());
+        // Broadcast to others
+        for (auto& oc : connections_) {
+            if (oc.get() == conn.get()) continue;
+            if (!oc->isConnected() || oc->getState() != ConnectionState::Play) continue;
+            auto oh = oc->getHandler();
+            auto* op = dynamic_cast<PlayHandler*>(oh.get());
+            if (op) op->sendEntityTeleport(*oc, ph->getEntityId(), x, y, z, ph->getPlayerYaw(), ph->getPlayerPitch());
+        }
+        return;
+    }
+}
+
+void MinecraftServer::setWorldTime(int64_t time) {
+    if (!worlds_.empty()) worlds_[0]->setWorldTime(time);
+    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    for (auto& conn : connections_) {
+        if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+        auto handler = conn->getHandler();
+        auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+        if (ph) {
+            int64_t total = worlds_.empty() ? 0 : worlds_[0]->getTotalWorldTime();
+            ph->sendTimeUpdate(*conn, total, time);
+        }
+    }
+}
+
+void MinecraftServer::addWorldTime(int64_t amount) {
+    int64_t newTime = 0;
+    if (!worlds_.empty()) {
+        worlds_[0]->setWorldTime(worlds_[0]->getWorldTime() + amount);
+        newTime = worlds_[0]->getWorldTime();
+    }
+    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    for (auto& conn : connections_) {
+        if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+        auto handler = conn->getHandler();
+        auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+        if (ph) {
+            int64_t total = worlds_.empty() ? 0 : worlds_[0]->getTotalWorldTime();
+            ph->sendTimeUpdate(*conn, total, newTime);
+        }
+    }
+}
+
+void MinecraftServer::killPlayer(const std::string& playerName) {
+    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    for (auto& conn : connections_) {
+        if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+        auto handler = conn->getHandler();
+        auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+        if (!ph || ph->getPlayerName() != playerName || ph->isDead()) continue;
+        ph->applyDamage(ph->getHealth());
+        ph->sendUpdateHealth(*conn, 0.0f, ph->getFood(), ph->getSaturation());
+        broadcastEntityEvent(ph->getEntityId(), 3);
+        broadcastChatMessage(playerName + " was killed");
+        return;
+    }
+}
+
+void MinecraftServer::setPlayerGameMode(const std::string& playerName, int32_t gameMode) {
+    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    for (auto& conn : connections_) {
+        if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+        auto handler = conn->getHandler();
+        auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+        if (!ph || ph->getPlayerName() != playerName) continue;
+        ph->sendChangeGameState(*conn, 3, static_cast<float>(gameMode));
+        return;
+    }
+}
+
+std::vector<std::string> MinecraftServer::getOnlinePlayerNames() const {
+    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    std::vector<std::string> names;
+    for (auto& conn : connections_) {
+        if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+        auto handler = conn->getHandler();
+        auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+        if (ph) names.push_back(ph->getPlayerName());
+    }
+    return names;
+}
+
+std::optional<PlayerPosition> MinecraftServer::getPlayerPosition(const std::string& playerName) const {
+    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    for (auto& conn : connections_) {
+        if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+        auto handler = conn->getHandler();
+        auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+        if (ph && ph->getPlayerName() == playerName) {
+            return PlayerPosition{ph->getPlayerX(), ph->getPlayerY(), ph->getPlayerZ()};
+        }
+    }
+    return std::nullopt;
+}
+
+void MinecraftServer::givePlayerItem(const std::string& playerName, int32_t itemId, int32_t amount, int32_t damage) {
+    // Give item by sending S2F SetSlot to the first empty hotbar/inventory slot
+    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    for (auto& conn : connections_) {
+        if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+        auto handler = conn->getHandler();
+        auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+        if (!ph || ph->getPlayerName() != playerName) continue;
+
+        // Add to first hotbar slot
+        ItemStack stack(itemId, amount, damage);
+        ph->sendSetSlot(*conn, 0, 36, stack);
+        return;
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Mob spawning system
 
 void MinecraftServer::spawnNaturalMobs() {
     // Don't spawn if no players

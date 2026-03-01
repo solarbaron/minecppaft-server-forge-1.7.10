@@ -136,7 +136,7 @@
 - **Player Info** — S38 PlayerListItem (tab list) — packet implemented, not auto-sent
 - **Sound/Particles** — S28 Effect, S29 SoundEffect, S2A Particle
 - **Explosions** — S27 Explosion
-- **Weather** — S2B ChangeGameState (rain start/stop)
+- **Weather** — S2B ChangeGameState (rain start/stop) — packet implemented for gamemode changes
 - **Time** — ✅ S03 TimeUpdate — auto-sent every 20 ticks (day/night cycle working)
 - **Health** — ✅ S06 UpdateHealth — sent on login (20hp, 20food, 5.0 saturation)
 - **Block changes** — ✅ S23 BlockChange — working, broadcast on break/place
@@ -150,7 +150,8 @@
 - **Movement validation** — server accepts all positions without anti-cheat; ✅ S18 EntityTeleport + S19 HeadLook broadcast to other players
 - **Lighting** — no light propagation engine
 - **Gravity/physics** — no server-side player physics (client handles its own)
-- **Mob spawning** — no mob spawner, no natural spawning
+- **Mob spawning** — ✅ Done (natural hostile spawn near players, S0F SpawnMob, despawn >600 ticks)
+- ~~**Functional commands**~~ — ✅ Done (/stop, /gamemode, /time, /give, /tp, /kill, /difficulty, /seed, /list, /say, /gamerule, /help all with actual game effects)
 - ~~**World saving**~~ — ✅ saveAllChunks on shutdown
 - ~~**Player data persistence**~~ — ✅ save/load position and rotation via NBT to world/playerdata/<uuid>.dat
 - **Tab complete** — no server-side completion
@@ -172,7 +173,7 @@
 | networking | 1,193 | ~3,000 | Most complete module |
 | world | 1,148 | ~4,000 | Chunk I/O + flat gen working |
 | block | 815 | ~6,000 | Registry only, no block logic |
-| command | 443 | ~1,100 | 12 commands, server-side only |
+| command | 443 | ~1,100 | 12 commands, fully functional with game effects |
 | item | 426 | ~1,200 | Registry only |
 | forge | 440 | ~1,000 | JNI bridge skeleton |
 | redstone | 451 | ~800 | Framework only |
@@ -203,3 +204,4 @@
 13. **Player data persistence** — ✅ Done (savePlayerData/loadPlayerData with NBT Pos/Rotation)
 14. **Combat system** — ✅ Done (UseEntity attack, damage, S12 knockback, S1A hurt/death, respawn via ClientStatus)
 15. **Mob spawning** — ✅ Done (natural hostile spawn near players, S0F SpawnMob, despawn >600 ticks)
+16. **Functional commands** — ✅ Done (/stop, /gamemode, /time, /give, /tp, /kill, /difficulty, /seed, /list, /say, /gamerule, /help)

@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -23,6 +24,11 @@
 #include "command/CommandSystem.h"
 
 namespace mccpp {
+
+// Position struct for getPlayerPosition result
+struct PlayerPosition {
+    double x, y, z;
+};
 
 class TcpListener;   // forward decl
 class Connection;    // forward decl
@@ -75,6 +81,12 @@ public:
      * Check if the server is currently running.
      */
     bool isRunning() const { return running_.load(std::memory_order_relaxed); }
+
+    /**
+     * Request server shutdown (callable from commands).
+     * Java reference: MinecraftServer.initiateShutdown()
+     */
+    void requestShutdown() { stop(); }
 
     // ─── Accessors ──────────────────────────────────────────────────────
 
@@ -183,6 +195,54 @@ public:
      * Java reference: EntityPlayerMP.attackTargetEntityWithCurrentItem()
      */
     void handlePlayerAttack(PlayHandler& attacker, int32_t targetEntityId);
+
+    /**
+     * Teleport a player to a position. Sends S08 PlayerPosAndLook.
+     * Java reference: EntityPlayerMP.setPositionAndUpdate()
+     */
+    void teleportPlayer(const std::string& playerName, double x, double y, double z);
+
+    /**
+     * Set world time for all worlds and broadcast S03 TimeUpdate.
+     * Java reference: CommandTime → WorldServer.setWorldTime()
+     */
+    void setWorldTime(int64_t time);
+
+    /**
+     * Add to world time for all worlds and broadcast S03 TimeUpdate.
+     * Java reference: CommandTime → WorldServer.setWorldTime(getWorldTime()+val)
+     */
+    void addWorldTime(int64_t amount);
+
+    /**
+     * Kill a player (set health to 0, trigger death).
+     * Java reference: CommandKill → EntityPlayerMP.attackEntityFrom(DamageSource.OUT_OF_WORLD)
+     */
+    void killPlayer(const std::string& playerName);
+
+    /**
+     * Set a player's gamemode and send S2B ChangeGameState.
+     * Java reference: EntityPlayerMP.setGameType()
+     */
+    void setPlayerGameMode(const std::string& playerName, int32_t gameMode);
+
+    /**
+     * Get a list of all online player names.
+     * Java reference: ServerConfigurationManager.func_152600_g()
+     */
+    std::vector<std::string> getOnlinePlayerNames() const;
+
+    /**
+     * Get a player's current position by name.
+     * Java reference: EntityPlayerMP.posX/posY/posZ
+     */
+    std::optional<PlayerPosition> getPlayerPosition(const std::string& playerName) const;
+
+    /**
+     * Give an item to a player by adding to their inventory + sending S2F.
+     * Java reference: CommandGive.processCommand() → EntityItem spawn
+     */
+    void givePlayerItem(const std::string& playerName, int32_t itemId, int32_t amount, int32_t damage);
 
 private:
     /**

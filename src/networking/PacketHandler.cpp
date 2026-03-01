@@ -828,8 +828,9 @@ void PlayHandler::handleChatMessage(const uint8_t* data, size_t length, Connecti
         // Java: EntityPlayerMP implements ICommandSender
         class PlayerCommandSender : public ICommandSender {
         public:
-            PlayerCommandSender(PlayHandler& handler, Connection& conn, const std::string& name)
-                : handler_(handler), conn_(conn), name_(name) {}
+            PlayerCommandSender(PlayHandler& handler, Connection& conn, const std::string& name,
+                                MinecraftServer& server)
+                : handler_(handler), conn_(conn), name_(name), server_(server) {}
             std::string getCommandSenderName() const override { return name_; }
             void addChatMessage(const std::string& msg) override {
                 handler_.sendChatMessage(conn_, msg);
@@ -837,13 +838,15 @@ void PlayHandler::handleChatMessage(const uint8_t* data, size_t length, Connecti
             bool canCommandSenderUseCommand(int32_t /*permLevel*/, const std::string& /*cmd*/) const override {
                 return true; // All players are ops in offline mode for now
             }
+            MinecraftServer* getServer() const override { return &server_; }
         private:
             PlayHandler& handler_;
             Connection& conn_;
             std::string name_;
+            MinecraftServer& server_;
         };
 
-        PlayerCommandSender sender(*this, conn, playerName_);
+        PlayerCommandSender sender(*this, conn, playerName_, server_);
         server_.getCommandHandler().executeCommand(sender, message);
     } else {
         // Regular chat message — broadcast to all players
@@ -1619,6 +1622,29 @@ void PlayHandler::applyDamage(float amount) {
     if (health_ <= 0.0f) {
         dead_ = true;
     }
+}
+
+void PlayHandler::sendPlayerPosAndLook(Connection& conn, double x, double y, double z,
+                                        float yaw, float pitch) {
+    // Java reference: S08PacketPlayerPosLook
+    std::vector<uint8_t> pkt;
+    writeVarInt(pkt, ClientboundPacket::PlayerPosAndLook);
+    writeDouble(pkt, x);
+    writeDouble(pkt, y);
+    writeDouble(pkt, z);
+    writeFloat(pkt, yaw);
+    writeFloat(pkt, pitch);
+    pkt.push_back(0); // flags: 0 = absolute
+    conn.sendPacket(std::move(pkt));
+}
+
+void PlayHandler::sendChangeGameState(Connection& conn, uint8_t reason, float value) {
+    // Java reference: S2BPacketChangeGameState
+    std::vector<uint8_t> pkt;
+    writeVarInt(pkt, ClientboundPacket::ChangeGameState);
+    writeUByte(pkt, reason);
+    writeFloat(pkt, value);
+    conn.sendPacket(std::move(pkt));
 }
 
 } // namespace mccpp
