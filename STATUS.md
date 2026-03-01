@@ -114,7 +114,14 @@
 - ✅ **Furnace** — in-memory smelting with Java-parity tick/canSmelt/smeltItem, S2D type 2, S31 progress
 - ✅ **Ender Chest** — per-player 27-slot storage, block 130 interception
 - ✅ **Signs** — per-position text storage, C12 UpdateSign handler, S33 broadcast
-- ❌ No tile entity ticking or interaction for other types (beacon, brewing stand, hopper)
+- ✅ **Brewing Stand** — per-position 4-slot storage, S2D type 5, S31 brew time
+- ✅ **Dispenser** — per-position 9-slot storage, S2D type 3
+- ✅ **Dropper** — per-position 9-slot storage, S2D type 6
+- ✅ **Hopper** — per-position storage, S2D type 9, 5 slots
+- ✅ **Beacon** — S2D type 7, S31 properties (power/effects)
+- ✅ **Enchanting Table** — S2D type 4, bookshelf counting, S31 enchantment levels
+- ✅ **Anvil** — S2D type 8, repair/rename GUI
+- ❌ No tile entity ticking for brewing stand or hopper automation
 
 ### Inventory System
 - Container hierarchy (679-line header)
@@ -135,7 +142,11 @@
 - ✅ **Levers** (69) — toggle meta 0x08 with click sound
 - ✅ **Buttons** (77/143) — momentary press meta 0x08
 - ✅ **Note blocks** (25) — pitch 0-24, harp sound + note particle
-- ❌ Repeaters, comparators, daylight sensors, pressure plates
+- ✅ **Repeaters** (93/94) — delay cycle bits 2-3, 4 states
+- ✅ **Comparators** (149/150) — subtract mode toggle bit 0x04
+- ✅ **Cake** (92) — eat slices meta 0-6, +2 food per slice
+- ✅ **Trapped Chest** (146) — opens like normal chest
+- ❌ Pressure plates, daylight sensors, trip wires
 
 ### Biomes & World Gen
 - **BiomeRegistry** — 355 lines, biome types registered
@@ -280,3 +291,8 @@
 50. **Sign text handling** — ✅ Done (C12 UpdateSign → setSignText per-position storage + S33 broadcast to all players; sendSignToPlayer for chunk load)
 51. **Particle broadcast** — ✅ Done (broadcastParticle S2A to all connected players)
 52. **Interactive blocks** — ✅ Done (wooden door 64 toggle meta 0x04 both halves, trapdoor 96, fence gate 107, lever 69 toggle meta 0x08, stone/wood button 77/143 press, note block 25 pitch 0-24 + note.harp sound + note particle)
+53. **Enchanting table GUI** — ✅ Done (block 116, S2D type 4, Java-parity bookshelf counting in 3×3 ring, simplified enchantment level generation, S31 properties 0-2)
+54. **S28 Effect (block break particles)** — ✅ Done (broadcastEffect S28 on all 3 block break paths, effectId 2001 with blockId data)
+55. **New containers** — ✅ Done (brewing stand 117 S2D type 5, dispenser 23 type 3, dropper 158 type 6, hopper 154 type 9 — all with per-position storage)
+56. **Repeater/comparator/anvil** — ✅ Done (repeater 93/94 delay cycle bits 2-3, comparator 149/150 subtract toggle bit 0x04, anvil 145 S2D type 8 repair GUI)
+57. **Trapped chest + cake + beacon** — ✅ Done (trapped chest 146 like normal chest, cake 92 eat slices meta 0-6 +2 food, beacon 138 S2D type 7)
