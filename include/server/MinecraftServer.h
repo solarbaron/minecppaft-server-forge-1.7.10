@@ -538,6 +538,7 @@ private:
 
     void spawnNaturalMobs();
     void tickMobs();
+    void tickRandomBlocks();
 
     // ─── Chest storage (in-memory tile entities) ─────────────────────
     // Key: packed position (x << 40 | (z & 0xFFFFF) << 20 | (y & 0xFFFFF))

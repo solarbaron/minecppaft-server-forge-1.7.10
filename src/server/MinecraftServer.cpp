@@ -295,6 +295,11 @@ void MinecraftServer::tick() {
         }
     }
 
+    // Random block ticks — crop growth, sapling growth, farmland hydration, grass spread
+    // Java reference: WorldServer.func_147456_g() — applies random ticks per chunk section
+    // We run this every tick but the method internally controls tick rate
+    tickRandomBlocks();
+
     // Periodic status logging (every 6000 ticks = 5 minutes)
     if (ticks > 0 && ticks % 6000 == 0) {
         std::lock_guard<std::mutex> lock(connectionsMutex_);
@@ -1697,6 +1702,214 @@ void MinecraftServer::tickFurnaces() {
                     // Send slot contents
                     for (int i = 0; i < 3; ++i) {
                         ph->sendSetSlot(*conn, ph->getOpenWindowId(), static_cast<int16_t>(i), furnace.slots[i]);
+                    }
+                }
+            }
+        }
+    }
+}
+
+void MinecraftServer::tickRandomBlocks() {
+    // Java reference: WorldServer.func_147456_g() — random tick speed 3 per section
+    // Simplified: for each loaded chunk near a player, pick random blocks and apply growth
+    if (worlds_.empty()) return;
+    auto& world = worlds_[0];
+
+    static thread_local std::mt19937 rng(std::random_device{}());
+
+    // Get player positions
+    std::vector<std::pair<int, int>> playerChunks;
+    {
+        std::lock_guard<std::mutex> lock(connectionsMutex_);
+        for (auto& conn : connections_) {
+            if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+            auto handler = conn->getHandler();
+            auto* play = dynamic_cast<PlayHandler*>(handler.get());
+            if (!play) continue;
+            int cx = static_cast<int>(std::floor(play->getPlayerX())) >> 4;
+            int cz = static_cast<int>(std::floor(play->getPlayerZ())) >> 4;
+            playerChunks.emplace_back(cx, cz);
+        }
+    }
+
+    // For each player's nearby chunks, apply random ticks
+    // Java: iterates all loaded chunks in range, 3 random ticks per section
+    // Simplified: 3 chunks × 3 ticks = 9 random block ticks per player per tick
+    for (auto& [pcx, pcz] : playerChunks) {
+        for (int attempt = 0; attempt < 3; ++attempt) {
+            // Pick a random chunk within 7-chunk radius
+            int cx = pcx + std::uniform_int_distribution<>(-7, 7)(rng);
+            int cz = pcz + std::uniform_int_distribution<>(-7, 7)(rng);
+
+            // For each chunk, pick 3 random positions
+            for (int t = 0; t < 3; ++t) {
+                int lx = std::uniform_int_distribution<>(0, 15)(rng);
+                int ly = std::uniform_int_distribution<>(1, 128)(rng); // Focus on surface
+                int lz = std::uniform_int_distribution<>(0, 15)(rng);
+
+                int bx = cx * 16 + lx;
+                int by = ly;
+                int bz = cz * 16 + lz;
+
+                Block* block = world->getBlock(bx, by, bz);
+                if (!block) continue;
+                int blockId = Block::getIdFromBlock(block);
+                if (blockId == 0) continue;
+
+                int meta = world->getBlockMetadata(bx, by, bz);
+
+                // ─── Wheat (59), Carrots (141), Potatoes (142) ───
+                // Java: BlockCrops.updateTick — advance growth with 1/4 chance
+                if (blockId == 59 || blockId == 141 || blockId == 142) {
+                    if (meta < 7 && std::uniform_int_distribution<>(0, 3)(rng) == 0) {
+                        world->setBlockMetadata(bx, by, bz, meta + 1);
+                        broadcastBlockChange(bx, by, bz, blockId, meta + 1);
+                    }
+                }
+
+                // ─── Sapling (6) — grow into tree ───
+                // Java: BlockSapling.updateTick — stage 0→8 then tree
+                if (blockId == 6) {
+                    if (meta < 8) {
+                        // Increment stage (uses bits 3 for stage flag)
+                        if (std::uniform_int_distribution<>(0, 6)(rng) == 0) {
+                            int newMeta = meta | 0x08; // Set stage bit
+                            world->setBlockMetadata(bx, by, bz, newMeta);
+                            broadcastBlockChange(bx, by, bz, 6, newMeta);
+                        }
+                    }
+                    if (meta & 0x08) {
+                        // Stage 1 — attempt tree growth
+                        if (std::uniform_int_distribution<>(0, 6)(rng) == 0) {
+                            // Remove sapling
+                            world->setBlock(bx, by, bz, Block::getBlockById(0));
+                            broadcastBlockChange(bx, by, bz, 0, 0);
+                            // Generate simple oak tree
+                            // Java: WorldGenTrees.generate()
+                            int treeHeight = 4 + std::uniform_int_distribution<>(0, 2)(rng);
+                            bool canGrow = true;
+                            for (int y2 = by + 1; y2 <= by + treeHeight + 1 && y2 < 256; ++y2) {
+                                Block* b = world->getBlock(bx, y2, bz);
+                                if (b && Block::getIdFromBlock(b) != 0 && Block::getIdFromBlock(b) != 18) {
+                                    canGrow = false;
+                                    break;
+                                }
+                            }
+                            if (canGrow && by + treeHeight + 2 < 256) {
+                                // Trunk
+                                for (int y2 = by; y2 < by + treeHeight; ++y2) {
+                                    world->setBlock(bx, y2, bz, Block::getBlockById(17)); // Log
+                                    world->setBlockMetadata(bx, y2, bz, 0);
+                                    broadcastBlockChange(bx, y2, bz, 17, 0);
+                                }
+                                // Leaves — 3×3 for top 2 layers, 5×5 for middle 2
+                                for (int ly2 = treeHeight - 3; ly2 <= treeHeight; ++ly2) {
+                                    int radius = (ly2 >= treeHeight - 1) ? 1 : 2;
+                                    for (int dx = -radius; dx <= radius; ++dx) {
+                                        for (int dz = -radius; dz <= radius; ++dz) {
+                                            if (dx == 0 && dz == 0 && ly2 < treeHeight) continue; // Trunk
+                                            int lbx = bx + dx, lby = by + ly2, lbz = bz + dz;
+                                            if (lby >= 256) continue;
+                                            Block* lb = world->getBlock(lbx, lby, lbz);
+                                            if (!lb || Block::getIdFromBlock(lb) == 0) {
+                                                world->setBlock(lbx, lby, lbz, Block::getBlockById(18));
+                                                world->setBlockMetadata(lbx, lby, lbz, 0);
+                                                broadcastBlockChange(lbx, lby, lbz, 18, 0);
+                                            }
+                                        }
+                                    }
+                                }
+                            } else {
+                                // Can't grow — put sapling back
+                                world->setBlock(bx, by, bz, Block::getBlockById(6));
+                                world->setBlockMetadata(bx, by, bz, meta & 0x07);
+                                broadcastBlockChange(bx, by, bz, 6, meta & 0x07);
+                            }
+                        }
+                    }
+                }
+
+                // ─── Grass block (2) spread to dirt ───
+                // Java: BlockGrass.updateTick — spreads to adjacent dirt blocks
+                if (blockId == 2) {
+                    if (std::uniform_int_distribution<>(0, 3)(rng) == 0) {
+                        int dx = std::uniform_int_distribution<>(-1, 1)(rng);
+                        int dy = std::uniform_int_distribution<>(-1, 1)(rng);
+                        int dz2 = std::uniform_int_distribution<>(-1, 1)(rng);
+                        int nx = bx + dx, ny = by + dy, nz = bz + dz2;
+                        Block* nb = world->getBlock(nx, ny, nz);
+                        if (nb && Block::getIdFromBlock(nb) == 3) { // Dirt
+                            // Check above is air or transparent
+                            Block* above = world->getBlock(nx, ny + 1, nz);
+                            int aboveId = above ? Block::getIdFromBlock(above) : 0;
+                            if (aboveId == 0 || aboveId == 31 || aboveId == 37 || aboveId == 38) {
+                                world->setBlock(nx, ny, nz, Block::getBlockById(2)); // Spread grass
+                                broadcastBlockChange(nx, ny, nz, 2, 0);
+                            }
+                        }
+                    }
+                }
+
+                // ─── Farmland (60) — hydration/decay ───
+                // Java: BlockFarmland.updateTick — check for water nearby
+                if (blockId == 60) {
+                    bool nearWater = false;
+                    for (int dx = -4; dx <= 4 && !nearWater; ++dx) {
+                        for (int dz2 = -4; dz2 <= 4 && !nearWater; ++dz2) {
+                            Block* wb = world->getBlock(bx + dx, by, bz + dz2);
+                            if (wb) {
+                                int wid = Block::getIdFromBlock(wb);
+                                if (wid == 8 || wid == 9) nearWater = true;
+                            }
+                            wb = world->getBlock(bx + dx, by + 1, bz + dz2);
+                            if (wb) {
+                                int wid = Block::getIdFromBlock(wb);
+                                if (wid == 8 || wid == 9) nearWater = true;
+                            }
+                        }
+                    }
+                    if (nearWater) {
+                        if (meta < 7) {
+                            world->setBlockMetadata(bx, by, bz, 7); // Fully hydrated
+                            broadcastBlockChange(bx, by, bz, 60, 7);
+                        }
+                    } else {
+                        if (meta > 0) {
+                            world->setBlockMetadata(bx, by, bz, meta - 1); // Dry out
+                            broadcastBlockChange(bx, by, bz, 60, meta - 1);
+                        } else {
+                            // Check if there's a crop above — if no crop, revert to dirt
+                            Block* above = world->getBlock(bx, by + 1, bz);
+                            int aboveId = above ? Block::getIdFromBlock(above) : 0;
+                            if (aboveId != 59 && aboveId != 141 && aboveId != 142 &&
+                                aboveId != 104 && aboveId != 105) {
+                                world->setBlock(bx, by, bz, Block::getBlockById(3)); // Dirt
+                                world->setBlockMetadata(bx, by, bz, 0);
+                                broadcastBlockChange(bx, by, bz, 3, 0);
+                            }
+                        }
+                    }
+                }
+
+                // ─── Melon/Pumpkin stems (104/105) — grow fruit ───
+                if (blockId == 104 || blockId == 105) {
+                    if (meta < 7 && std::uniform_int_distribution<>(0, 5)(rng) == 0) {
+                        world->setBlockMetadata(bx, by, bz, meta + 1);
+                        broadcastBlockChange(bx, by, bz, blockId, meta + 1);
+                    } else if (meta >= 7 && std::uniform_int_distribution<>(0, 7)(rng) == 0) {
+                        // Try to place fruit adjacent
+                        int fruitId = (blockId == 104) ? 86 : 103; // Pumpkin : Melon block
+                        int dirs[4][2] = {{1,0},{-1,0},{0,1},{0,-1}};
+                        int d = std::uniform_int_distribution<>(0, 3)(rng);
+                        int fx = bx + dirs[d][0], fz = bz + dirs[d][1];
+                        Block* fb = world->getBlock(fx, by, fz);
+                        Block* below = world->getBlock(fx, by - 1, fz);
+                        int belowId = below ? Block::getIdFromBlock(below) : 0;
+                        if (fb && Block::getIdFromBlock(fb) == 0 &&
+                            (belowId == 2 || belowId == 3 || belowId == 60)) {
+                            world->setBlock(fx, by, fz, Block::getBlockById(fruitId));
+                            broadcastBlockChange(fx, by, fz, fruitId, 0);
+                        }
                     }
                 }
             }
