@@ -494,7 +494,7 @@ void PlayHandler::sendLoginSequence(Connection& conn) {
         std::vector<uint8_t> pkt;
         writeVarInt(pkt, ClientboundPacket::JoinGame);
         writeInt(pkt, entityId_);  // Entity ID (unique per player)
-        writeUByte(pkt, 0);        // Gamemode: 0 = Survival
+        writeUByte(pkt, static_cast<uint8_t>(gameMode_)); // Gamemode
         writeByte(pkt, 0);         // Dimension: 0 = Overworld
         writeUByte(pkt, 1);        // Difficulty: 1 = Easy
         writeUByte(pkt, static_cast<uint8_t>(server_.getMaxPlayers()));
@@ -626,9 +626,11 @@ void PlayHandler::handlePacket(int32_t packetId,
         case ServerboundPacket::CloseWindow:
         case ServerboundPacket::ClickWindow:
         case ServerboundPacket::ConfirmTransaction:
-        case ServerboundPacket::CreativeInventory:
         case ServerboundPacket::UpdateSign:
             // Silently consume unimplemented inventory/sign packets
+            break;
+        case ServerboundPacket::CreativeInventory:
+            handleCreativeInventory(data, length, conn);
             break;
         case ServerboundPacket::UseEntity:
             handleUseEntity(data, length, conn);
@@ -1879,6 +1881,143 @@ void PlayHandler::handleTabComplete(const uint8_t* data, size_t length, Connecti
     // Send S3A TabComplete response
     auto tabPkt = PacketBuilder::tabComplete(completions);
     conn.sendPacket(tabPkt);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// handleCreativeInventory — C10PacketCreativeInventoryAction handler.
+// Java reference: NetHandlerPlayServer.processCreativeInventoryAction()
+//
+// C10 format: Short slotId, ItemStack stack
+//   slotId < 0 → drop item in world
+//   slotId 1-44 → set container slot
+// ═══════════════════════════════════════════════════════════════════════════
+
+// readItemStack — Parse ItemStack from protocol buffer.
+// Java reference: PacketBuffer.readItemStackFromBuffer()
+// Format: Short itemId, [if >= 0: Byte count, Short damage, Short nbtLen, [nbt bytes]]
+namespace {
+std::optional<ItemStack> readItemStackFromBuffer(const uint8_t* data, size_t length, size_t& offset) {
+    if (offset + 2 > length) return std::nullopt;
+    int16_t itemId = static_cast<int16_t>((data[offset] << 8) | data[offset + 1]);
+    offset += 2;
+
+    if (itemId < 0) {
+        return std::nullopt; // empty slot
+    }
+
+    if (offset + 3 > length) return std::nullopt;
+    uint8_t count = data[offset++];
+    int16_t damage = static_cast<int16_t>((data[offset] << 8) | data[offset + 1]);
+    offset += 2;
+
+    // Read NBT tag length (Short)
+    // Java: readNBTTagCompoundFromBuffer() → readShort() for length
+    if (offset + 2 > length) return std::nullopt;
+    int16_t nbtLen = static_cast<int16_t>((data[offset] << 8) | data[offset + 1]);
+    offset += 2;
+
+    if (nbtLen > 0) {
+        // Skip NBT data (we don't parse NBT from creative packets yet)
+        if (offset + static_cast<size_t>(nbtLen) > length) return std::nullopt;
+        offset += static_cast<size_t>(nbtLen);
+    }
+
+    return ItemStack(static_cast<int32_t>(itemId), static_cast<int32_t>(count),
+                     static_cast<int32_t>(damage));
+}
+} // anonymous namespace
+
+void PlayHandler::handleCreativeInventory(const uint8_t* data, size_t length, Connection& conn) {
+    // Java reference: NetHandlerPlayServer.processCreativeInventoryAction()
+    // C10PacketCreativeInventoryAction: Short slotId, ItemStack stack
+    //
+    // Java source lines 656-679:
+    //   if (this.playerEntity.theItemInWorldManager.isCreative())
+    //   {
+    //       boolean flag = packetIn.func_149627_c() < 0;
+    //       ItemStack itemstack = packetIn.func_149625_d();
+    //       boolean flag1 = packetIn.func_149627_c() >= 1
+    //           && packetIn.func_149627_c() < 36 + InventoryPlayer.getHotbarSize();
+    //       boolean flag2 = itemstack == null || itemstack.getItem() != null;
+    //       boolean flag3 = itemstack == null ||
+    //           itemstack.getItemDamage() >= 0 &&
+    //           itemstack.stackSize <= 64 &&
+    //           itemstack.stackSize > 0;
+    //
+    //       if (flag1 && flag2 && flag3) {
+    //           if (itemstack == null) {
+    //               this.playerEntity.inventoryContainer.putStackInSlot(
+    //                   packetIn.func_149627_c(), (ItemStack)null);
+    //           } else {
+    //               this.playerEntity.inventoryContainer.putStackInSlot(
+    //                   packetIn.func_149627_c(), itemstack);
+    //           }
+    //           this.playerEntity.inventoryContainer.setPlayerIsPresent(
+    //               this.playerEntity, true);
+    //       }
+    //       else if (flag && flag2 && flag3 && this.field_147366_g < 200) {
+    //           this.field_147366_g += 20;
+    //           EntityItem entityitem = this.playerEntity.dropPlayerItemWithRandomChoice(
+    //               itemstack, true);
+    //           if (entityitem != null) {
+    //               entityitem.setAgeToCreativeDespawnTime();
+    //           }
+    //       }
+    //   }
+
+    // Must be in creative mode
+    if (gameMode_ != 1) return;
+
+    // Parse C10 packet: Short slotId + ItemStack
+    if (length < 2) return;
+    int16_t slotId = static_cast<int16_t>((data[0] << 8) | data[1]);
+    size_t offset = 2;
+    auto itemstack = readItemStackFromBuffer(data, length, offset);
+
+    bool isDropAction = slotId < 0;
+    // Java: slotId >= 1 && slotId < 36 + InventoryPlayer.getHotbarSize() (= 45)
+    bool isValidSlot = slotId >= 1 && slotId < 36 + 9; // slots 1-44
+
+    // Java: flag2 = itemstack == null || itemstack.getItem() != null
+    // We check that the item ID is valid (exists in Item registry)
+    bool isValidItem = !itemstack.has_value() || itemstack->getItemId() > 0;
+
+    // Java: flag3 = itemstack == null || (damage >= 0 && stackSize <= 64 && stackSize > 0)
+    bool isValidStack = !itemstack.has_value() ||
+        (itemstack->getDamage() >= 0 &&
+         itemstack->getStackSize() <= 64 &&
+         itemstack->getStackSize() > 0);
+
+    if (isValidSlot && isValidItem && isValidStack) {
+        // Place item in container slot
+        if (!container_) return;
+        container_->putStackInSlot(slotId, itemstack);
+
+        // Send S2F SetSlot to confirm
+        sendSetSlot(conn, 0, slotId, itemstack);
+
+        std::cout << "[Creative] " << playerName_ << " set slot " << slotId
+                  << " to " << (itemstack ? std::to_string(itemstack->getItemId()) +
+                     "x" + std::to_string(itemstack->getStackSize()) : "empty")
+                  << "\n";
+    }
+    else if (isDropAction && isValidItem && isValidStack && itemDropThreshold_ < 200) {
+        // Drop item into world
+        // Java: field_147366_g += 20 (throttle)
+        itemDropThreshold_ += 20;
+
+        if (itemstack) {
+            // Spawn the item in the world near the player
+            server_.spawnItemDrop(playerX_, playerY_ + 1.62, playerZ_,
+                                 itemstack->getItemId(),
+                                 static_cast<int32_t>(itemstack->getDamage()),
+                                 itemstack->getStackSize());
+
+            std::cout << "[Creative] " << playerName_ << " dropped "
+                      << itemstack->getItemId() << "x" << itemstack->getStackSize()
+                      << "\n";
+        }
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

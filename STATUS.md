@@ -15,8 +15,8 @@
 - **Status** (Server List Ping) — responds with MOTD, player count, protocol info, ping/pong
 - **Login** — offline-mode auth, MD5-based UUID generation, LoginSuccess packet
 - **Play State Transition** — Login→Play state change, handler swap
-- **Play Packets Handled:** KeepAlive (echo), ChatMessage (with `/` command dispatch), Player/PlayerPosition/PlayerLook/PlayerPosAndLook, ClientSettings, PluginMessage (silently consumed), PlayerAbilities, PlayerDigging (instant break), PlayerBlockPlace (block placement)
-- **Play Packets Silently Consumed:** HeldItemChange, Animation, EntityAction, CloseWindow, ClickWindow, ConfirmTransaction, CreativeInventory, UpdateSign, UseEntity, SteerVehicle, TabComplete, EnchantItem, ClientStatus
+- **Play Packets Handled:** KeepAlive (echo), ChatMessage (with `/` command dispatch), Player/PlayerPosition/PlayerLook/PlayerPosAndLook, ClientSettings, PluginMessage (silently consumed), PlayerAbilities, PlayerDigging (instant break), PlayerBlockPlace (block placement), CreativeInventory (C10, slot set + item drop)
+- **Play Packets Silently Consumed:** HeldItemChange, Animation, EntityAction, CloseWindow, ClickWindow, ConfirmTransaction, UpdateSign, UseEntity, SteerVehicle, TabComplete, EnchantItem, ClientStatus
 
 ### Login Sequence (sent to client on join)
 - S01 JoinGame (entity ID, gamemode, dimension, difficulty, max players, level type)
@@ -59,7 +59,7 @@
 | `/stop` | ✅ Working via chat |
 | `/say` | ✅ Working via chat |
 | `/help` | ✅ Working via chat |
-| `/gamemode` | ✅ Working via chat (no actual mode change yet) |
+| `/gamemode` | ✅ Working — sends S2B + tracks gameMode_ server-side |
 | `/time` | ✅ Working via chat (no actual time change yet) |
 | `/give` | ✅ Working via chat (no actual item give yet) |
 | `/tp` | ✅ Working via chat (no actual teleport yet) |
@@ -112,7 +112,8 @@
 - Container hierarchy (679-line header)
 - Basic inventory operations (250 lines)
 - ❌ No server→client inventory sync (no window packets)
-- ❌ No item pickup/drop
+- ✅ Creative inventory action (C10) — set container slots + item drops in creative mode
+- ❌ No item pickup/drop in survival mode
 
 ### Biomes & World Gen
 - **BiomeRegistry** — 355 lines, biome types registered
@@ -209,3 +210,4 @@
 15. **Mob spawning** — ✅ Done (natural hostile spawn near players, S0F SpawnMob, despawn >600 ticks)
 16. **Functional commands** — ✅ Done (/stop, /gamemode, /time, /give, /tp, /kill, /difficulty, /seed, /list, /say, /gamerule, /help)
 17. **Tab completion + player actions** — ✅ Done (C14 tab complete, C09 held item, C0A animation, C0B sneak/sprint)
+18. **Creative inventory** — ✅ Done (C10 handler with Java parity, gameMode_ tracking, readItemStack parser)

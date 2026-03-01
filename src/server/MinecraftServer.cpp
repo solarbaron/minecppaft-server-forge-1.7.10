@@ -746,6 +746,7 @@ void MinecraftServer::setPlayerGameMode(const std::string& playerName, int32_t g
         auto handler = conn->getHandler();
         auto* ph = dynamic_cast<PlayHandler*>(handler.get());
         if (!ph || ph->getPlayerName() != playerName) continue;
+        ph->setGameMode(gameMode);
         ph->sendChangeGameState(*conn, 3, static_cast<float>(gameMode));
         return;
     }

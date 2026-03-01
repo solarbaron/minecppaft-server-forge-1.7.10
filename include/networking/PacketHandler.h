@@ -352,6 +352,8 @@ public:
     void setPlayerPosition(double x, double y, double z) {
         playerX_ = x; playerY_ = y; playerZ_ = z;
     }
+    void setGameMode(int32_t mode) { gameMode_ = mode; }
+    int32_t getGameMode() const { return gameMode_; }
 
     /**
      * Send S08 PlayerPosAndLook (teleport the client to a position).
@@ -396,6 +398,7 @@ private:
     void handleAnimation(const uint8_t* data, size_t length, Connection& conn);
     void handleEntityAction(const uint8_t* data, size_t length, Connection& conn);
     void handleTabComplete(const uint8_t* data, size_t length, Connection& conn);
+    void handleCreativeInventory(const uint8_t* data, size_t length, Connection& conn);
 
     MinecraftServer& server_;
     std::string playerName_;
@@ -426,10 +429,16 @@ private:
     int hurtResistantTime_ = 0;   // EntityLivingBase.hurtResistantTime (20 tick cooldown)
     bool dead_ = false;           // EntityLivingBase.dead
 
+    // Game mode — Java: ItemInWorldManager.theGameType
+    int32_t gameMode_ = 0;        // 0=Survival, 1=Creative, 2=Adventure, 3=Spectator
+
     // Held item & movement state
     int16_t currentSlot_ = 0;      // InventoryPlayer.currentItem (0-8)
     bool isSneaking_ = false;      // EntityPlayer.isSneaking
     bool isSprinting_ = false;     // EntityPlayer.isSprinting
+
+    // Item drop throttle — Java: NetHandlerPlayServer.itemDropThreshold
+    int32_t itemDropThreshold_ = 0;
 };
 
 } // namespace mccpp
