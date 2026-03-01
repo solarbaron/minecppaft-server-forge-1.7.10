@@ -117,6 +117,9 @@ void MinecraftServer::run() {
     // Shutdown
     std::cout << "[Server] Shutting down...\n";
 
+    // Save all world data before stopping listener
+    saveAllWorlds();
+
     if (listener_) {
         listener_->stop();
     }
@@ -339,6 +342,17 @@ void MinecraftServer::broadcastSound(const std::string& soundName, double x, dou
 
         play->sendSoundEffect(*conn, soundName, x, y, z, volume, pitch);
     }
+}
+
+void MinecraftServer::saveAllWorlds() {
+    // Java reference: MinecraftServer.saveAllWorlds()
+    std::cout << "[Server] Saving world data...\n";
+    for (auto& world : worlds_) {
+        if (world) {
+            world->saveAllChunks();
+        }
+    }
+    std::cout << "[Server] World data saved.\n";
 }
 
 } // namespace mccpp

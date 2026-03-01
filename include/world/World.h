@@ -238,6 +238,12 @@ public:
     int64_t getSeed() const { return seed_; }
     void setSeed(int64_t seed) { seed_ = seed; }
 
+    /**
+     * Save all modified chunks to disk.
+     * Java reference: WorldServer.saveAllChunks()
+     */
+    void saveAllChunks();
+
 private:
     int dimensionId_;
     std::string worldName_;

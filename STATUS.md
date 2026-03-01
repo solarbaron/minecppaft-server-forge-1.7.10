@@ -193,5 +193,5 @@
 6. **Item drops** — EntityItem spawning + S0E SpawnObject + pickup
 7. ~~**Inventory sync**~~ — ✅ Done (S30 WindowItems on join + S2F SetSlot method)
 8. ~~**Sound effects**~~ — ✅ Done (S29 SoundEffect for block break/place with broadcastSound)
-9. **World save** — save chunks on shutdown
+9. ~~**World save**~~ — ✅ Done (saveAllChunks on shutdown via RegionFile Anvil format)
 10. **Terrain generation** — implement overworld generator using existing noise/biome code

@@ -181,6 +181,7 @@ public:
     bool isLightPopulated = false;
     bool hasEntities = false;
     int64_t inhabitedTime = 0;
+    bool isModified = false;  // Java: Chunk.isModified — set when block changes
 
     Chunk() = default;
     Chunk(int x, int z) : xPosition(x), zPosition(z) {
@@ -195,6 +196,18 @@ public:
     void setBlock(int x, int y, int z, Block* block);
     int getBlockMetadata(int x, int y, int z) const;
     void setBlockMetadata(int x, int y, int z, int meta);
+
+    /**
+     * Mark chunk as modified (needs saving).
+     * Java reference: Chunk.setChunkModified()
+     */
+    void setChunkModified() { isModified = true; }
+
+    /**
+     * Check if chunk needs saving.
+     * Java reference: Chunk.needsSaving()
+     */
+    bool needsSaving() const { return isModified; }
 
     /**
      * Serialize chunk data to NBT (Level compound).

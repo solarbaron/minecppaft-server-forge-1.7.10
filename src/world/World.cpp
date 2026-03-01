@@ -17,9 +17,12 @@
  */
 
 #include "world/World.h"
+#include "nbt/NBT.h"
 
 #include <algorithm>
+#include <filesystem>
 #include <iostream>
+#include <unordered_map>
 
 namespace mccpp {
 
@@ -278,6 +281,7 @@ void WorldServer::setBlock(int x, int y, int z, Block* block) {
     Chunk* chunk = getChunkFromBlockCoords(x, z);
     if (!chunk) return;
     chunk->setBlock(x & 15, y, z & 15, block);
+    chunk->setChunkModified();
 }
 
 int WorldServer::getBlockMetadata(int x, int y, int z) {
@@ -292,6 +296,7 @@ void WorldServer::setBlockMetadata(int x, int y, int z, int meta) {
     Chunk* chunk = getChunkFromBlockCoords(x, z);
     if (!chunk) return;
     chunk->setBlockMetadata(x & 15, y, z & 15, meta);
+    chunk->setChunkModified();
 }
 
 Chunk* WorldServer::getChunkFromChunkCoords(int chunkX, int chunkZ) {
@@ -302,4 +307,71 @@ Chunk* WorldServer::getChunkFromBlockCoords(int blockX, int blockZ) {
     return getChunkFromChunkCoords(blockX >> 4, blockZ >> 4);
 }
 
+void WorldServer::saveAllChunks() {
+    // Java reference: WorldServer.saveAllChunks() / ChunkProviderServer.saveChunks(true)
+    auto chunks = chunkProvider_->getLoadedChunks();
+    if (chunks.empty()) return;
+
+    std::string worldDir = worldName_;
+    std::string regionDir = worldDir + "/region";
+    std::filesystem::create_directories(regionDir);
+
+    // Cache open region files by region key
+    std::unordered_map<int64_t, std::unique_ptr<RegionFile>> regionCache;
+
+    auto getRegion = [&](int32_t chunkX, int32_t chunkZ) -> RegionFile* {
+        int32_t regionX = chunkX >> 5;
+        int32_t regionZ = chunkZ >> 5;
+        int64_t key = (static_cast<int64_t>(regionX) << 32) | (static_cast<uint32_t>(regionZ));
+        auto it = regionCache.find(key);
+        if (it != regionCache.end()) return it->second.get();
+        // Build path: worldDir/region/r.X.Z.mca
+        std::string path = regionDir + "/r." + std::to_string(regionX) + "." + std::to_string(regionZ) + ".mca";
+        auto region = std::make_unique<RegionFile>(path);
+        RegionFile* ptr = region.get();
+        regionCache[key] = std::move(region);
+        return ptr;
+    };
+
+    int saved = 0;
+    for (Chunk* chunk : chunks) {
+        if (!chunk || !chunk->needsSaving()) continue;
+
+        // Serialize chunk to NBT
+        auto nbtTag = chunk->writeToNBT();
+        if (!nbtTag) continue;
+
+        // Wrap in root compound with "Level" key (Anvil format)
+        // Since writeToNBT returns shared_ptr and NBTTagCompound is non-copyable,
+        // we serialize the Level compound directly as the root with name ""
+        // and wrap manually: build root that owns nbtTag via shared_ptr cast
+        nbt::NBTTagCompound root;
+        // Transfer ownership: create a unique_ptr from the shared_ptr's raw pointer
+        // This is safe because we're the only reference holder in this scope
+        auto levelPtr = std::unique_ptr<nbt::NBTBase>(
+            new nbt::NBTTagCompound(std::move(*nbtTag)));
+        root.setTag("Level", std::move(levelPtr));
+
+        // Serialize NBT to bytes
+        auto bytes = nbt::serializeNBT(root);
+        if (bytes.empty()) continue;
+
+        // Write to region file (handles compression)
+        RegionFile* region = getRegion(chunk->xPosition, chunk->zPosition);
+        int32_t localX = chunk->xPosition & 31;
+        int32_t localZ = chunk->zPosition & 31;
+        if (region && region->writeChunkData(localX, localZ, bytes)) {
+            chunk->isModified = false;
+            ++saved;
+        }
+    }
+
+    // Region files auto-close in destructor
+
+    if (saved > 0) {
+        std::cout << "[World] Saved " << saved << " chunk(s) for dimension " << dimensionId_ << "\n";
+    }
+}
+
 } // namespace mccpp
+

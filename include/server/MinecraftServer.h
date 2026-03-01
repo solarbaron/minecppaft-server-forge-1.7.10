@@ -143,6 +143,10 @@ public:
                         float volume, float pitch);
 
     /**
+     * Save all world chunks to disk.\n     * Java reference: MinecraftServer.saveAllWorlds()\n     */
+    void saveAllWorlds();
+
+    /**
      * Register a new client connection (called from TcpListener callback).
      * Thread-safe.
      */
