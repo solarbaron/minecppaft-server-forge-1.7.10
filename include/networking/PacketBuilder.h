@@ -398,6 +398,40 @@ namespace PacketBuilder {
         return w.toFramed();
     }
 
+    // ─── 0x0B Animation ───
+    // Java: S0BPacketAnimation
+    // animationType: 0=swing arm, 1=hurt, 2=leave bed, 3=eat food, 4=crit, 5=magic crit
+    inline std::vector<uint8_t> animation(int32_t entityId, uint8_t animationType) {
+        PacketWriter w(ClientboundPacket::Animation);
+        w.writeVarInt(entityId);
+        w.writeUByte(animationType);
+        return w.toFramed();
+    }
+
+    // ─── 0x1C Entity Metadata ───
+    // Java: S1CPacketEntityMetadata (minimal: just sneaking flag)
+    // Sends metadata index 0 (entity flags byte): bit 1 = sneaking, bit 3 = sprinting
+    inline std::vector<uint8_t> entityMetadataFlags(int32_t entityId, uint8_t flags) {
+        PacketWriter w(ClientboundPacket::EntityMetadata);
+        w.writeVarInt(entityId);
+        // DataWatcher entry: type<<5 | index, where type=0 (byte), index=0
+        w.writeUByte(0x00); // (0 << 5) | 0 = byte at index 0
+        w.writeByte(static_cast<int8_t>(flags));
+        w.writeUByte(0x7F); // End of metadata
+        return w.toFramed();
+    }
+
+    // ─── 0x3A Tab Complete ───
+    // Java: S3APacketTabComplete
+    inline std::vector<uint8_t> tabComplete(const std::vector<std::string>& completions) {
+        PacketWriter w(ClientboundPacket::TabComplete);
+        w.writeVarInt(static_cast<int32_t>(completions.size()));
+        for (const auto& s : completions) {
+            w.writeString(s);
+        }
+        return w.toFramed();
+    }
+
 } // namespace PacketBuilder
 
 } // namespace mccpp

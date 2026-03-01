@@ -154,7 +154,10 @@
 - ~~**Functional commands**~~ — ✅ Done (/stop, /gamemode, /time, /give, /tp, /kill, /difficulty, /seed, /list, /say, /gamerule, /help all with actual game effects)
 - ~~**World saving**~~ — ✅ saveAllChunks on shutdown
 - ~~**Player data persistence**~~ — ✅ save/load position and rotation via NBT to world/playerdata/<uuid>.dat
-- **Tab complete** — no server-side completion
+- ~~**Tab complete**~~ — ✅ Server-side completion for commands and player names (C14→S3A)
+- ~~**Held item tracking**~~ — ✅ C09 HeldItemChange updates player's currentSlot (0-8 validated)
+- ~~**Animation broadcast**~~ — ✅ C0A arm swing → S0B broadcast to other players
+- ~~**Entity actions**~~ — ✅ C0B sneak/sprint start/stop → S1C metadata flags broadcast
 
 ### World Generation
 - ~~**Terrain**~~ — ✅ OverworldGenerator with noise-based density + surface replacement
@@ -205,3 +208,4 @@
 14. **Combat system** — ✅ Done (UseEntity attack, damage, S12 knockback, S1A hurt/death, respawn via ClientStatus)
 15. **Mob spawning** — ✅ Done (natural hostile spawn near players, S0F SpawnMob, despawn >600 ticks)
 16. **Functional commands** — ✅ Done (/stop, /gamemode, /time, /give, /tp, /kill, /difficulty, /seed, /list, /say, /gamerule, /help)
+17. **Tab completion + player actions** — ✅ Done (C14 tab complete, C09 held item, C0A animation, C0B sneak/sprint)

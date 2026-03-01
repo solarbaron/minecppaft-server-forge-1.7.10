@@ -333,6 +333,9 @@ public:
     int32_t getFood() const { return food_; }
     float getSaturation() const { return saturation_; }
     bool isDead() const { return dead_; }
+    int16_t getCurrentSlot() const { return currentSlot_; }
+    bool isSneaking() const { return isSneaking_; }
+    bool isSprinting() const { return isSprinting_; }
 
     // ─── Setters for player state (used by commands) ────────────────────
     void setPlayerPosition(double x, double y, double z) {
@@ -378,6 +381,10 @@ private:
     void handlePlayerBlockPlace(const uint8_t* data, size_t length, Connection& conn);
     void handleUseEntity(const uint8_t* data, size_t length, Connection& conn);
     void handleClientStatus(const uint8_t* data, size_t length, Connection& conn);
+    void handleHeldItemChange(const uint8_t* data, size_t length, Connection& conn);
+    void handleAnimation(const uint8_t* data, size_t length, Connection& conn);
+    void handleEntityAction(const uint8_t* data, size_t length, Connection& conn);
+    void handleTabComplete(const uint8_t* data, size_t length, Connection& conn);
 
     MinecraftServer& server_;
     std::string playerName_;
@@ -408,6 +415,11 @@ private:
     float saturation_ = 5.0f;     // FoodStats.foodSaturationLevel
     int hurtResistantTime_ = 0;   // EntityLivingBase.hurtResistantTime (20 tick cooldown)
     bool dead_ = false;           // EntityLivingBase.dead
+
+    // Held item & movement state
+    int16_t currentSlot_ = 0;      // InventoryPlayer.currentItem (0-8)
+    bool isSneaking_ = false;      // EntityPlayer.isSneaking
+    bool isSprinting_ = false;     // EntityPlayer.isSprinting
 };
 
 } // namespace mccpp

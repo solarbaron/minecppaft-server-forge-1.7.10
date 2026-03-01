@@ -15,6 +15,7 @@
 #include "item/Item.h"
 #include "crafting/Crafting.h"
 #include "networking/Connection.h"
+#include "networking/PacketBuilder.h"
 #include "networking/PacketHandler.h"
 #include "networking/TcpListener.h"
 #include "world/World.h"
@@ -522,6 +523,34 @@ void MinecraftServer::broadcastEntityEvent(int32_t entityId, int8_t status) {
         if (play) {
             play->sendEntityStatus(*conn, entityId, status);
         }
+    }
+}
+
+void MinecraftServer::broadcastAnimation(int32_t entityId, uint8_t animationType) {
+    // Java reference: WorldServer entity.worldObj.setEntityState() for animation
+    // Broadcasts S0B Animation to all players except the source entity
+    auto pkt = PacketBuilder::animation(entityId, animationType);
+    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    for (auto& conn : connections_) {
+        if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+        auto handler = conn->getHandler();
+        auto* play = dynamic_cast<PlayHandler*>(handler.get());
+        if (!play || play->getEntityId() == entityId) continue;
+        conn->sendPacket(pkt);
+    }
+}
+
+void MinecraftServer::broadcastEntityMetadataFlags(int32_t entityId, uint8_t flags) {
+    // Java reference: EntityTrackerEntry.func_151261_b() → S1CPacketEntityMetadata
+    // Broadcasts entity metadata flags (sneaking, sprinting) to all players except the source
+    auto pkt = PacketBuilder::entityMetadataFlags(entityId, flags);
+    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    for (auto& conn : connections_) {
+        if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+        auto handler = conn->getHandler();
+        auto* play = dynamic_cast<PlayHandler*>(handler.get());
+        if (!play || play->getEntityId() == entityId) continue;
+        conn->sendPacket(pkt);
     }
 }
 

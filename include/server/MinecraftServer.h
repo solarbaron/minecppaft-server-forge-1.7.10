@@ -191,6 +191,18 @@ public:
     void broadcastEntityEvent(int32_t entityId, int8_t status);
 
     /**
+     * Broadcast S0B Animation (e.g. arm swing) to all players except the source.
+     * Java reference: WorldServer.broadcastAnimation() → S0BPacketAnimation
+     */
+    void broadcastAnimation(int32_t entityId, uint8_t animationType);
+
+    /**
+     * Broadcast S1C EntityMetadata flags byte (sneaking/sprinting) to all players except the source.
+     * Java reference: DataWatcher index 0 byte → S1CPacketEntityMetadata
+     */
+    void broadcastEntityMetadataFlags(int32_t entityId, uint8_t flags);
+
+    /**
      * Handle a player attacking another entity (player-to-player combat).
      * Java reference: EntityPlayerMP.attackTargetEntityWithCurrentItem()
      */

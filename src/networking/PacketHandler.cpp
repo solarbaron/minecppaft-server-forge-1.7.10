@@ -9,8 +9,11 @@
 
 #include "networking/PacketHandler.h"
 #include "networking/Connection.h"
+#include "networking/PacketBuilder.h"
+#include "networking/PacketReader.h"
 #include "networking/PlayPackets.h"
 #include "server/MinecraftServer.h"
+#include "command/CommandSystem.h"
 #include "types/VarInt.h"
 #include "world/World.h"
 
@@ -606,8 +609,14 @@ void PlayHandler::handlePacket(int32_t packetId,
             // Client sends flying state — accept silently for now
             break;
         case ServerboundPacket::HeldItemChange:
+            handleHeldItemChange(data, length, conn);
+            break;
         case ServerboundPacket::Animation:
+            handleAnimation(data, length, conn);
+            break;
         case ServerboundPacket::EntityAction:
+            handleEntityAction(data, length, conn);
+            break;
         case ServerboundPacket::PlayerDigging:
             handlePlayerDigging(data, length, conn);
             break;
@@ -627,8 +636,10 @@ void PlayHandler::handlePacket(int32_t packetId,
         case ServerboundPacket::ClientStatus:
             handleClientStatus(data, length, conn);
             break;
-        case ServerboundPacket::SteerVehicle:
         case ServerboundPacket::TabComplete:
+            handleTabComplete(data, length, conn);
+            break;
+        case ServerboundPacket::SteerVehicle:
         case ServerboundPacket::EnchantItem:
             // Silently consume unimplemented packets
             break;
@@ -1645,6 +1656,159 @@ void PlayHandler::sendChangeGameState(Connection& conn, uint8_t reason, float va
     writeUByte(pkt, reason);
     writeFloat(pkt, value);
     conn.sendPacket(std::move(pkt));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// handleHeldItemChange — Track which hotbar slot the player has selected.
+// Java: NetHandlerPlayServer.processHeldItemChange()
+// ═══════════════════════════════════════════════════════════════════════════
+void PlayHandler::handleHeldItemChange(const uint8_t* data, size_t length, Connection& conn) {
+    PacketReader reader(data, length);
+    auto pkt = SB_HeldItemChange::read(reader);
+
+    // Java: if (slotId < 0 || slotId >= InventoryPlayer.getHotbarSize()) return;
+    if (pkt.slotId < 0 || pkt.slotId >= 9) {
+        std::cerr << "[Play] " << playerName_ << " tried to set invalid held item: "
+                  << pkt.slotId << "\n";
+        return;
+    }
+
+    currentSlot_ = pkt.slotId;
+    // Java: this.playerEntity.inventory.currentItem = slotId;
+    // Java: this.playerEntity.markPlayerActive();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// handleAnimation — Broadcast arm swing to other players.
+// Java: NetHandlerPlayServer.processAnimation()
+// ═══════════════════════════════════════════════════════════════════════════
+void PlayHandler::handleAnimation(const uint8_t* data, size_t length, Connection& conn) {
+    PacketReader reader(data, length);
+    auto pkt = SB_Animation::read(reader);
+
+    // Java: if (animation == 1) { this.playerEntity.swingItem(); }
+    // swingItem() broadcasts S0B animation packet to nearby players
+    if (pkt.animation == 1) {
+        // Broadcast S0B Animation (swing arm = type 0 in clientbound) to all other players
+        server_.broadcastAnimation(entityId_, 0); // 0 = swing arm
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// handleEntityAction — Handle sneak, sprint, bed leave.
+// Java: NetHandlerPlayServer.processEntityAction()
+// ═══════════════════════════════════════════════════════════════════════════
+void PlayHandler::handleEntityAction(const uint8_t* data, size_t length, Connection& conn) {
+    PacketReader reader(data, length);
+    auto pkt = SB_EntityAction::read(reader);
+
+    // Java: func_149513_d() returns actionId
+    // 1=start sneaking, 2=stop sneaking, 3=leave bed
+    // 4=start sprinting, 5=stop sprinting
+    // 6=horse jump, 7=open horse inventory
+    switch (pkt.actionId) {
+        case 1: // Start sneaking
+            isSneaking_ = true;
+            break;
+        case 2: // Stop sneaking
+            isSneaking_ = false;
+            break;
+        case 4: // Start sprinting
+            isSprinting_ = true;
+            break;
+        case 5: // Stop sprinting
+            isSprinting_ = false;
+            break;
+        default:
+            // Other actions (bed, horse) not yet implemented
+            return;
+    }
+
+    // Broadcast entity metadata flags to all other players
+    // Java: DataWatcher index 0, byte type:
+    //   bit 0 = on fire, bit 1 = sneaking, bit 3 = sprinting
+    //   bit 4 = eating/drinking, bit 5 = invisible
+    uint8_t flags = 0;
+    if (isSneaking_) flags |= 0x02;  // bit 1
+    if (isSprinting_) flags |= 0x08; // bit 3
+
+    server_.broadcastEntityMetadataFlags(entityId_, flags);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// handleTabComplete — Send command/player name completions.
+// Java: NetHandlerPlayServer.processTabComplete()
+// Java: MinecraftServer.getPossibleCompletions(ICommandSender, String)
+// ═══════════════════════════════════════════════════════════════════════════
+void PlayHandler::handleTabComplete(const uint8_t* data, size_t length, Connection& conn) {
+    PacketReader reader(data, length);
+    auto pkt = SB_TabComplete::read(reader);
+
+    std::vector<std::string> completions;
+
+    if (pkt.text.empty()) {
+        // No text to complete
+    } else if (pkt.text[0] == '/') {
+        // Command completion
+        // Java: this.serverController.getPossibleCompletions(this.playerEntity, message)
+        // The Java implementation strips the leading '/' internally in CommandHandler
+        std::string withoutSlash = pkt.text.substr(1);
+
+        // Create a simple command sender for permission checks
+        // The PlayerCommandSender is defined in the same compilation unit
+        // For simplicity, we create a temporary sender
+        class TempSender : public ICommandSender {
+        public:
+            TempSender(const std::string& name, MinecraftServer& server)
+                : name_(name), server_(server) {}
+            std::string getCommandSenderName() const override { return name_; }
+            bool canCommandSenderUseCommand(int, const std::string&) const override { return true; }
+            void addChatMessage(const std::string&) override {} // Tab complete doesn't need chat
+            MinecraftServer* getServer() const override { return &server_; }
+        private:
+            std::string name_;
+            MinecraftServer& server_;
+        };
+
+        TempSender sender(playerName_, server_);
+        auto cmdCompletions = server_.getCommandHandler().getPossibleCommands(sender, withoutSlash);
+
+        // Prepend '/' to each completion
+        for (const auto& c : cmdCompletions) {
+            completions.push_back("/" + c);
+        }
+    } else {
+        // Player name completion
+        // Java: MinecraftServer.getPossibleCompletions checks for player names
+        // if the message doesn't start with '/'
+        auto lastSpace = pkt.text.rfind(' ');
+        std::string partial = (lastSpace != std::string::npos) ?
+            pkt.text.substr(lastSpace + 1) : pkt.text;
+
+        if (!partial.empty()) {
+            auto playerNames = server_.getOnlinePlayerNames();
+            for (const auto& name : playerNames) {
+                // Case-insensitive prefix match
+                if (name.size() >= partial.size()) {
+                    bool match = true;
+                    for (size_t i = 0; i < partial.size(); ++i) {
+                        if (std::tolower(name[i]) != std::tolower(partial[i])) {
+                            match = false;
+                            break;
+                        }
+                    }
+                    if (match) {
+                        completions.push_back(name);
+                    }
+                }
+            }
+            std::sort(completions.begin(), completions.end());
+        }
+    }
+
+    // Send S3A TabComplete response
+    auto tabPkt = PacketBuilder::tabComplete(completions);
+    conn.sendPacket(tabPkt);
 }
 
 } // namespace mccpp
