@@ -26,6 +26,7 @@ namespace mccpp {
 class TcpListener;   // forward decl
 class Connection;    // forward decl
 class WorldServer;   // forward decl
+class PlayHandler;   // forward decl
 
 /**
  * MinecraftServer — the central server object.
@@ -115,6 +116,18 @@ public:
      * Java reference: WorldServer.markBlockForUpdate()
      */
     void broadcastBlockChange(int32_t x, int32_t y, int32_t z, int32_t blockId, int32_t metadata);
+
+    /**
+     * Called when a player finishes login — broadcasts SpawnPlayer + PlayerListItem.
+     * Java reference: ServerConfigurationManager.playerLoggedIn()
+     */
+    void onPlayerJoined(Connection& joinedConn, PlayHandler& joinedHandler);
+
+    /**
+     * Called when a player disconnects — broadcasts DestroyEntities + PlayerListItem(offline).
+     * Java reference: ServerConfigurationManager.playerLoggedOut()
+     */
+    void onPlayerLeft(PlayHandler& leftHandler);
 
     /**
      * Register a new client connection (called from TcpListener callback).

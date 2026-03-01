@@ -14,6 +14,8 @@
 #include "types/VarInt.h"
 #include "world/World.h"
 
+#include <cmath>
+
 #include <array>
 #include <cstring>
 #include <functional>
@@ -341,7 +343,7 @@ void LoginHandler::handlePacket(int32_t packetId,
 
         // Transition to PlayHandler
         // Java: server.getConfigurationManager().initializeConnectionToPlayer(networkManager, player)
-        auto playHandler = std::make_shared<PlayHandler>(server_, playerName_, uuid, conn);
+        auto playHandler = std::make_shared<PlayHandler>(server_, playerName_, uuid);
         conn.setHandler(playHandler);
 
         // Send initial login sequence (Join Game, Spawn Position, Abilities, Position)
@@ -450,12 +452,16 @@ inline float readFloat(const uint8_t* data) {
 
 } // anonymous namespace
 
-PlayHandler::PlayHandler(MinecraftServer& server, const std::string& playerName,
-                         const std::string& uuid, Connection& /*conn*/)
+// Static entity ID counter — Java reference: Entity.nextEntityID
+std::atomic<int32_t> PlayHandler::nextEntityId_{1}; // Start at 1 (0 is reserved)
+
+PlayHandler::PlayHandler(MinecraftServer& server, const std::string& name,
+                         const std::string& uuid)
     : server_(server)
-    , playerName_(playerName)
+    , playerName_(name)
     , uuid_(uuid)
 {
+    entityId_ = nextEntityId_.fetch_add(1, std::memory_order_relaxed);
     // Default spawn position for superflat world
     playerX_ = 0.5;
     playerY_ = 4.0;  // Above superflat surface (bedrock=0, dirt=1-2, grass=3)
@@ -473,7 +479,7 @@ void PlayHandler::sendLoginSequence(Connection& conn) {
     {
         std::vector<uint8_t> pkt;
         writeVarInt(pkt, ClientboundPacket::JoinGame);
-        writeInt(pkt, 0);          // Entity ID (0 for first player)
+        writeInt(pkt, entityId_);  // Entity ID (unique per player)
         writeUByte(pkt, 0);        // Gamemode: 0 = Survival
         writeByte(pkt, 0);         // Dimension: 0 = Overworld
         writeUByte(pkt, 1);        // Difficulty: 1 = Easy
@@ -537,7 +543,13 @@ void PlayHandler::sendLoginSequence(Connection& conn) {
 
     std::cout << "[Play] " << playerName_ << " joined the game at ("
               << playerX_ << ", " << playerY_ << ", " << playerZ_ << ") — "
-              << chunksSent << " chunks sent\n";
+              << chunksSent << " chunks sent (entityId=" << entityId_ << ")\n";
+
+    // ─── Player visibility broadcasts ─────────────────────────────────
+    // Java reference: ServerConfigurationManager.playerLoggedIn()
+    // Send this player's info to all existing players, and send existing
+    // players' info to this player.
+    server_.onPlayerJoined(conn, *this);
 }
 
 void PlayHandler::handlePacket(int32_t packetId,
@@ -604,6 +616,8 @@ void PlayHandler::handlePacket(int32_t packetId,
 
 void PlayHandler::onDisconnect(const std::string& reason) {
     std::cout << "[Play] " << playerName_ << " disconnected: " << reason << "\n";
+    // Notify all other players this player left
+    server_.onPlayerLeft(*this);
 }
 
 void PlayHandler::sendKeepAlive(Connection& conn) {
@@ -856,6 +870,61 @@ void PlayHandler::sendPlayerListItem(Connection& conn, const std::string& player
     writeString(pkt, playerName);
     writeBool(pkt, online);
     writeShort(pkt, ping);
+    conn.sendPacket(std::move(pkt));
+}
+
+void PlayHandler::sendSpawnPlayer(Connection& conn, int32_t entityId,
+                                    const std::string& uuid, const std::string& name,
+                                    double x, double y, double z,
+                                    float yaw, float pitch, int16_t heldItem) {
+    // Java reference: S0CPacketSpawnPlayer.writePacketData()
+    // Format:
+    //   VarInt entityId
+    //   String uuid (36 chars, e.g. "550e8400-e29b-41d4-a716-446655440000")
+    //   String playerName (16 chars max)
+    //   VarInt propertyCount (0 = no auth properties in offline mode)
+    //   Int x (fixed-point: x * 32)
+    //   Int y (fixed-point: y * 32)
+    //   Int z (fixed-point: z * 32)
+    //   Byte yaw (angle: yaw * 256 / 360)
+    //   Byte pitch (angle: pitch * 256 / 360)
+    //   Short currentItem (held item ID, 0 = none)
+    //   DataWatcher metadata (0x7F = end marker, minimal)
+    std::vector<uint8_t> pkt;
+    writeVarInt(pkt, ClientboundPacket::SpawnPlayer);
+    writeVarInt(pkt, entityId);
+    writeString(pkt, uuid);     // UUID as string
+    writeString(pkt, name);     // player name
+    writeVarInt(pkt, 0);        // property count (offline mode = 0)
+
+    // Fixed-point position: Java MathHelper.floor_double(pos * 32.0)
+    writeInt(pkt, static_cast<int32_t>(std::floor(x * 32.0)));
+    writeInt(pkt, static_cast<int32_t>(std::floor(y * 32.0)));
+    writeInt(pkt, static_cast<int32_t>(std::floor(z * 32.0)));
+
+    // Angle conversion: Java (byte)(rotation * 256.0f / 360.0f)
+    writeByte(pkt, static_cast<uint8_t>(static_cast<int>(yaw * 256.0f / 360.0f) & 0xFF));
+    writeByte(pkt, static_cast<uint8_t>(static_cast<int>(pitch * 256.0f / 360.0f) & 0xFF));
+
+    writeShort(pkt, heldItem);  // current item
+
+    // DataWatcher metadata — minimal: just the end marker
+    // Java: DataWatcher.func_151509_a(buffer) writes watched objects then 0x7F
+    writeByte(pkt, 0x7F);  // End of metadata
+
+    conn.sendPacket(std::move(pkt));
+}
+
+void PlayHandler::sendDestroyEntities(Connection& conn, const std::vector<int32_t>& entityIds) {
+    // Java reference: S13PacketDestroyEntities.writePacketData()
+    // Format: Byte count, Int[] entityIds
+    if (entityIds.empty()) return;
+    std::vector<uint8_t> pkt;
+    writeVarInt(pkt, ClientboundPacket::DestroyEntities);
+    writeByte(pkt, static_cast<uint8_t>(entityIds.size()));
+    for (int32_t id : entityIds) {
+        writeInt(pkt, id);
+    }
     conn.sendPacket(std::move(pkt));
 }
 

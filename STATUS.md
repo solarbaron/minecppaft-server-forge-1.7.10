@@ -144,7 +144,7 @@
 ### Gameplay
 - ~~**Block breaking/placing**~~ — ✅ PlayerDigging/PlayerBlockPlace handled, instant break + face-offset placement
 - **Item drops** — no EntityItem, no pickup mechanics
-- **Player-to-player visibility** — players can't see each other
+- ~~**Player-to-player visibility**~~ — ✅ S0C SpawnPlayer + S38 PlayerListItem + S13 DestroyEntities working
 - **Combat** — no damage, no knockback, no death/respawn
 - **Health/hunger** — food system not synced to client (no S06 UpdateHealth)
 - **Movement validation** — server accepts all positions without anti-cheat
@@ -187,7 +187,7 @@
 
 1. ~~**Chat→Command bridge**~~ — ✅ Done
 2. ~~**Block breaking/placing**~~ — ✅ Done
-3. **Player visibility** — send S0C SpawnPlayer + S38 PlayerListItem so players see each other
+3. ~~**Player visibility**~~ — ✅ Done (S0C SpawnPlayer + S38 tab list + S13 cleanup on disconnect)
 4. ~~**Time sync**~~ — ✅ Done (S03 every 20 ticks)
 5. **Health sync** — send S06 UpdateHealth when food/health changes
 6. **Item drops** — EntityItem spawning + S0E SpawnObject + pickup

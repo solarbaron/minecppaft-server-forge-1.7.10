@@ -12,6 +12,7 @@
  */
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -154,7 +155,7 @@ private:
 class PlayHandler : public PacketHandler {
 public:
     PlayHandler(MinecraftServer& server, const std::string& playerName,
-                const std::string& uuid, Connection& conn);
+                const std::string& uuid);
 
     void handlePacket(int32_t packetId,
                       const uint8_t* data,
@@ -221,6 +222,30 @@ public:
     void sendPlayerListItem(Connection& conn, const std::string& playerName,
                             bool online, int16_t ping);
 
+    /**
+     * Send a SpawnPlayer packet to make a player entity visible.
+     * Java reference: S0CPacketSpawnPlayer
+     */
+    void sendSpawnPlayer(Connection& conn, int32_t entityId,
+                         const std::string& uuid, const std::string& name,
+                         double x, double y, double z,
+                         float yaw, float pitch, int16_t heldItem);
+
+    /**
+     * Send a DestroyEntities packet to remove entity(s) from client.
+     * Java reference: S13PacketDestroyEntities
+     */
+    void sendDestroyEntities(Connection& conn, const std::vector<int32_t>& entityIds);
+
+    // ─── Getters for player state ──────────────────────────────────────
+    int32_t getEntityId() const { return entityId_; }
+    const std::string& getUuid() const { return uuid_; }
+    double getPlayerX() const { return playerX_; }
+    double getPlayerY() const { return playerY_; }
+    double getPlayerZ() const { return playerZ_; }
+    float getPlayerYaw() const { return playerYaw_; }
+    float getPlayerPitch() const { return playerPitch_; }
+
 private:
     void handleKeepAlive(const uint8_t* data, size_t length, Connection& conn);
     void handleChatMessage(const uint8_t* data, size_t length, Connection& conn);
@@ -235,6 +260,7 @@ private:
     MinecraftServer& server_;
     std::string playerName_;
     std::string uuid_;
+    int32_t entityId_ = 0;  // Assigned on login via atomic counter
 
     // Keep Alive tracking
     // Java: NetHandlerPlayServer.field_147378_h (keepAlive ID)
@@ -245,6 +271,10 @@ private:
     double playerX_ = 0.0, playerY_ = 0.0, playerZ_ = 0.0;
     float playerYaw_ = 0.0f, playerPitch_ = 0.0f;
     bool playerOnGround_ = false;
+
+    // Static atomic entity ID counter
+    // Java reference: Entity.nextEntityID (global counter)
+    static std::atomic<int32_t> nextEntityId_;
 };
 
 } // namespace mccpp

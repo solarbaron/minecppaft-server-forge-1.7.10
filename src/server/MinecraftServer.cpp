@@ -258,5 +258,56 @@ void MinecraftServer::broadcastBlockChange(int32_t x, int32_t y, int32_t z,
     }
 }
 
+void MinecraftServer::onPlayerJoined(Connection& joinedConn, PlayHandler& joinedHandler) {
+    // Java reference: ServerConfigurationManager.playerLoggedIn()
+    // 1. Send existing players to the new player (SpawnPlayer + PlayerListItem)
+    // 2. Send the new player to all existing players
+
+    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    for (auto& conn : connections_) {
+        if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+        auto handler = conn->getHandler();
+        auto* otherPlay = dynamic_cast<PlayHandler*>(handler.get());
+        if (!otherPlay) continue;
+
+        // Skip self
+        if (otherPlay->getEntityId() == joinedHandler.getEntityId()) continue;
+
+        // Send existing player to the new player
+        joinedHandler.sendSpawnPlayer(joinedConn,
+            otherPlay->getEntityId(), otherPlay->getUuid(), otherPlay->getPlayerName(),
+            otherPlay->getPlayerX(), otherPlay->getPlayerY(), otherPlay->getPlayerZ(),
+            otherPlay->getPlayerYaw(), otherPlay->getPlayerPitch(), 0);
+        joinedHandler.sendPlayerListItem(joinedConn, otherPlay->getPlayerName(), true, 0);
+
+        // Send the new player to the existing player
+        otherPlay->sendSpawnPlayer(*conn,
+            joinedHandler.getEntityId(), joinedHandler.getUuid(), joinedHandler.getPlayerName(),
+            joinedHandler.getPlayerX(), joinedHandler.getPlayerY(), joinedHandler.getPlayerZ(),
+            joinedHandler.getPlayerYaw(), joinedHandler.getPlayerPitch(), 0);
+        otherPlay->sendPlayerListItem(*conn, joinedHandler.getPlayerName(), true, 0);
+    }
+
+    // Send own PlayerListItem to self (so own name shows in tab list)
+    joinedHandler.sendPlayerListItem(joinedConn, joinedHandler.getPlayerName(), true, 0);
+}
+
+void MinecraftServer::onPlayerLeft(PlayHandler& leftHandler) {
+    // Java reference: ServerConfigurationManager.playerLoggedOut()
+    // Broadcast DestroyEntities + PlayerListItem(offline) to all remaining players
+    std::vector<int32_t> destroyIds = { leftHandler.getEntityId() };
+
+    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    for (auto& conn : connections_) {
+        if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+        auto handler = conn->getHandler();
+        auto* otherPlay = dynamic_cast<PlayHandler*>(handler.get());
+        if (!otherPlay || otherPlay->getEntityId() == leftHandler.getEntityId()) continue;
+
+        otherPlay->sendDestroyEntities(*conn, destroyIds);
+        otherPlay->sendPlayerListItem(*conn, leftHandler.getPlayerName(), false, 0);
+    }
+}
+
 } // namespace mccpp
 
