@@ -190,7 +190,7 @@
 3. ~~**Player visibility**~~ — ✅ Done (S0C SpawnPlayer + S38 tab list + S13 cleanup on disconnect)
 4. ~~**Time sync**~~ — ✅ Done (S03 every 20 ticks)
 5. ~~**Health sync**~~ — ✅ Done (S06 on login)
-6. **Item drops** — EntityItem spawning + S0E SpawnObject + pickup
+6. ~~**Item drops**~~ — ✅ Done (EntityItem spawn on block break + S0E/S1C/S0D/S13 packets + pickup + physics)
 7. ~~**Inventory sync**~~ — ✅ Done (S30 WindowItems on join + S2F SetSlot method)
 8. ~~**Sound effects**~~ — ✅ Done (S29 SoundEffect for block break/place with broadcastSound)
 9. ~~**World save**~~ — ✅ Done (saveAllChunks on shutdown via RegionFile Anvil format)

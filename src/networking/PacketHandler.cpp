@@ -1038,6 +1038,68 @@ void PlayHandler::sendSoundEffect(Connection& conn, const std::string& soundName
     conn.sendPacket(std::move(pkt));
 }
 
+void PlayHandler::sendSpawnObject(Connection& conn, int32_t entityId, int8_t type,
+                                   double x, double y, double z,
+                                   float yaw, float pitch, int32_t data,
+                                   double motionX, double motionY, double motionZ) {
+    // Java reference: S0EPacketSpawnObject.writePacketData()
+    // Format: VarInt entityId, Byte type, Int x*32, Int y*32, Int z*32,
+    //   Byte pitch, Byte yaw, Int data, [Short velX, Short velY, Short velZ if data > 0]
+    std::vector<uint8_t> pkt;
+    writeVarInt(pkt, ClientboundPacket::SpawnObject);
+    writeVarInt(pkt, entityId);
+    writeByte(pkt, static_cast<uint8_t>(type));
+    writeInt(pkt, static_cast<int32_t>(x * 32.0));
+    writeInt(pkt, static_cast<int32_t>(y * 32.0));
+    writeInt(pkt, static_cast<int32_t>(z * 32.0));
+    writeByte(pkt, static_cast<uint8_t>(static_cast<int>(pitch * 256.0f / 360.0f) & 0xFF));
+    writeByte(pkt, static_cast<uint8_t>(static_cast<int>(yaw * 256.0f / 360.0f) & 0xFF));
+    writeInt(pkt, data);
+    if (data > 0) {
+        // Velocity encoded: vel * 8000, clamped ±3.9
+        auto encVel = [](double v) -> int16_t {
+            if (v < -3.9) v = -3.9;
+            if (v > 3.9) v = 3.9;
+            return static_cast<int16_t>(v * 8000.0);
+        };
+        writeShort(pkt, encVel(motionX));
+        writeShort(pkt, encVel(motionY));
+        writeShort(pkt, encVel(motionZ));
+    }
+    conn.sendPacket(std::move(pkt));
+}
+
+void PlayHandler::sendEntityMetadataItem(Connection& conn, int32_t entityId,
+                                          int16_t itemId, int8_t stackSize, int16_t damage) {
+    // Java reference: S1CPacketEntityMetadata + DataWatcher serialization
+    // DataWatcher slot 10, type 5 (ItemStack)
+    // Format: VarInt packetId, Int entityId, DataWatcher entries
+    // DataWatcher entry: Byte (type<<5 | index), then type-specific data
+    //   Type 5 = ItemStack: Short itemId, Byte count, Short damage, Byte 0 (no NBT)
+    std::vector<uint8_t> pkt;
+    writeVarInt(pkt, ClientboundPacket::EntityMetadata);
+    writeInt(pkt, entityId);
+    // DataWatcher entry: type=5 (ItemStack), index=10
+    // Header byte = (type << 5) | (index & 0x1F) = (5 << 5) | 10 = 0xAA
+    writeByte(pkt, 0xAA);
+    writeShort(pkt, itemId);
+    writeByte(pkt, static_cast<uint8_t>(stackSize));
+    writeShort(pkt, damage);
+    writeByte(pkt, 0); // No NBT tag (TAG_End = 0)
+    writeByte(pkt, 0x7F); // DataWatcher terminator
+    conn.sendPacket(std::move(pkt));
+}
+
+void PlayHandler::sendCollectItem(Connection& conn, int32_t collectedEntityId, int32_t collectorEntityId) {
+    // Java reference: S0DPacketCollectItem.writePacketData()
+    // Format: Int collectedEntityId, Int collectorEntityId
+    std::vector<uint8_t> pkt;
+    writeVarInt(pkt, ClientboundPacket::CollectItem);
+    writeInt(pkt, collectedEntityId);
+    writeInt(pkt, collectorEntityId);
+    conn.sendPacket(std::move(pkt));
+}
+
 void PlayHandler::handlePlayerPosition(const uint8_t* data, size_t length, Connection& conn) {
     // Java reference: NetHandlerPlayServer.processPlayer()
     // C04PacketPlayerPosition: Double x, Double y, Double stance, Double z, Bool onGround
@@ -1139,6 +1201,9 @@ void PlayHandler::handlePlayerDigging(const uint8_t* data, size_t length, Connec
         // Status 2 = finished digging (survival). We treat both as instant break for now.
         Block* existingBlock = world->getBlock(blockX, blockY, blockZ);
         if (existingBlock && Block::getIdFromBlock(existingBlock) != 0) {
+            int32_t brokenBlockId = Block::getIdFromBlock(existingBlock);
+            int32_t brokenMeta = world->getBlockMetadata(blockX, blockY, blockZ);
+
             // Set to air (block ID 0)
             world->setBlock(blockX, blockY, blockZ, Block::getBlockById(0));
             world->setBlockMetadata(blockX, blockY, blockZ, 0);
@@ -1156,6 +1221,13 @@ void PlayHandler::handlePlayerDigging(const uint8_t* data, size_t length, Connec
                 static_cast<double>(blockY) + 0.5,
                 static_cast<double>(blockZ) + 0.5,
                 1.0f, 0.8f);
+
+            // Spawn item drop — Java reference: Block.dropBlockAsItem
+            server_.spawnItemDrop(
+                static_cast<double>(blockX),
+                static_cast<double>(blockY),
+                static_cast<double>(blockZ),
+                brokenBlockId, brokenMeta, 1);
         }
     }
     // status 1 = cancel — nothing to do in creative mode

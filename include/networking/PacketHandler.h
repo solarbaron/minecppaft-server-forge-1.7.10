@@ -273,6 +273,28 @@ public:
                          double x, double y, double z,
                          float volume, float pitch);
 
+    /**
+     * Send a SpawnObject packet (for item drops, projectiles, etc.)
+     * Java reference: S0EPacketSpawnObject
+     */
+    void sendSpawnObject(Connection& conn, int32_t entityId, int8_t type,
+                         double x, double y, double z,
+                         float yaw, float pitch, int32_t data,
+                         double motionX, double motionY, double motionZ);
+
+    /**
+     * Send entity metadata with an ItemStack at DataWatcher slot 10.
+     * Java reference: S1CPacketEntityMetadata + DataWatcher
+     */
+    void sendEntityMetadataItem(Connection& conn, int32_t entityId,
+                                int16_t itemId, int8_t stackSize, int16_t damage);
+
+    /**
+     * Send collect item animation (item flies to player).
+     * Java reference: S0DPacketCollectItem
+     */
+    void sendCollectItem(Connection& conn, int32_t collectedEntityId, int32_t collectorEntityId);
+
     // ─── Getters for player state ──────────────────────────────────────
     int32_t getEntityId() const { return entityId_; }
     const std::string& getUuid() const { return uuid_; }

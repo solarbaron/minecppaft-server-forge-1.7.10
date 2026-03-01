@@ -197,6 +197,9 @@ void MinecraftServer::tick() {
         world->tick();
     }
 
+    // Tick item entities (physics, despawn, pickup)
+    tickItemEntities();
+
     // Send S03 TimeUpdate to all players every 20 ticks (1 second)
     // Java reference: WorldServer.tick() sends S03PacketTimeUpdate every 20 ticks
     if (ticks > 0 && ticks % 20 == 0 && !worlds_.empty()) {
@@ -353,6 +356,145 @@ void MinecraftServer::saveAllWorlds() {
         }
     }
     std::cout << "[Server] World data saved.\n";
+}
+
+int32_t MinecraftServer::spawnItemDrop(double x, double y, double z,
+                                       int32_t blockId, int32_t metadata, int32_t count) {
+    // Java reference: Block.dropBlockAsItem / EntityItem constructor
+    if (blockId == 0) return -1;  // Don't drop air
+
+    int32_t eid = nextItemEntityId_.fetch_add(1, std::memory_order_relaxed);
+
+    EntityItem entity;
+    entity.entityId = eid;
+    entity.itemId = blockId;
+    entity.itemMeta = static_cast<int32_t>(metadata);
+    entity.stackSize = count;
+    entity.spawn(x + 0.5, y + 0.5, z + 0.5);  // Center of block
+    entity.delayBeforeCanPickup = 10;  // Java: 10 tick pickup delay
+
+    // Broadcast spawn to all players
+    {
+        std::lock_guard<std::mutex> lock(connectionsMutex_);
+        for (auto& conn : connections_) {
+            if (conn->isConnected() && conn->getState() == ConnectionState::Play) {
+                auto handler = conn->getHandler();
+                auto* playHandler = dynamic_cast<PlayHandler*>(handler.get());
+                if (playHandler) {
+                    // S0E SpawnObject: type=2 (Item), data=1 (needed for velocity)
+                    playHandler->sendSpawnObject(*conn, eid, 2,
+                        entity.posX, entity.posY, entity.posZ,
+                        entity.rotationYaw, 0.0f, 1,
+                        entity.motionX, entity.motionY, entity.motionZ);
+                    // S1C EntityMetadata with ItemStack at slot 10
+                    playHandler->sendEntityMetadataItem(*conn, eid,
+                        static_cast<int16_t>(blockId),
+                        static_cast<int8_t>(count),
+                        static_cast<int16_t>(metadata));
+                }
+            }
+        }
+    }
+
+    // Store in tracked entities
+    {
+        std::lock_guard<std::mutex> lock(itemEntitiesMutex_);
+        DroppedItem di;
+        di.entity = entity;
+        di.spawnTick = tickCount_.load(std::memory_order_relaxed);
+        itemEntities_.push_back(std::move(di));
+    }
+
+    return eid;
+}
+
+void MinecraftServer::tickItemEntities() {
+    // Tick all tracked item entities
+    std::lock_guard<std::mutex> lock(itemEntitiesMutex_);
+
+    std::vector<int32_t> deadEntityIds;
+
+    for (auto& di : itemEntities_) {
+        auto& e = di.entity;
+        if (e.isDead) continue;
+
+        // Simple physics tick (ground slipperiness = 0.6 default)
+        auto result = e.onUpdate(0.6f, false);
+
+        // Apply simple gravity movement (no full collision)
+        e.posX += e.motionX;
+        e.posY += e.motionY;
+        e.posZ += e.motionZ;
+
+        // Simple ground check: don't go below Y=0
+        if (e.posY < 0.5) {
+            e.posY = 0.5;
+            e.onGround = true;
+            e.motionY = 0;
+        }
+
+        if (result.shouldDie) {
+            e.isDead = true;
+            deadEntityIds.push_back(e.entityId);
+            continue;
+        }
+
+        // Check for player pickup
+        if (e.delayBeforeCanPickup == 0) {
+            std::lock_guard<std::mutex> connLock(connectionsMutex_);
+            for (auto& conn : connections_) {
+                if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                auto handler = conn->getHandler();
+                auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                if (!ph) continue;
+
+                // Check distance to player (1.0 block radius)
+                double dx = ph->getPlayerX() - e.posX;
+                double dy = ph->getPlayerY() + 0.5 - e.posY;
+                double dz = ph->getPlayerZ() - e.posZ;
+                double distSq = dx * dx + dy * dy + dz * dz;
+
+                if (distSq < 1.0) {
+                    // Pickup! broadcast collect animation
+                    for (auto& c2 : connections_) {
+                        if (!c2->isConnected() || c2->getState() != ConnectionState::Play) continue;
+                        auto h2 = c2->getHandler();
+                        auto* ph2 = dynamic_cast<PlayHandler*>(h2.get());
+                        if (ph2) {
+                            ph2->sendCollectItem(*c2, e.entityId, ph->getEntityId());
+                        }
+                    }
+
+                    // Play pickup sound
+                    broadcastSound("random.pop", e.posX, e.posY, e.posZ, 0.2f, 1.0f);
+
+                    e.isDead = true;
+                    deadEntityIds.push_back(e.entityId);
+                    break;
+                }
+            }
+        }
+    }
+
+    // Broadcast destroy for dead entities
+    if (!deadEntityIds.empty()) {
+        std::lock_guard<std::mutex> connLock(connectionsMutex_);
+        for (auto& conn : connections_) {
+            if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+            auto handler = conn->getHandler();
+            auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+            if (ph) {
+                ph->sendDestroyEntities(*conn, deadEntityIds);
+            }
+        }
+    }
+
+    // Remove dead entities from tracking
+    itemEntities_.erase(
+        std::remove_if(itemEntities_.begin(), itemEntities_.end(),
+            [](const DroppedItem& di) { return di.entity.isDead; }),
+        itemEntities_.end()
+    );
 }
 
 } // namespace mccpp

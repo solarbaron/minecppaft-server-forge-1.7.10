@@ -10,6 +10,7 @@
  */
 #pragma once
 
+#include "entity/EntityItem.h"
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -147,6 +148,20 @@ public:
     void saveAllWorlds();
 
     /**
+     * Spawn a dropped item entity at the given position.
+     * Broadcasts S0E + S1C to all connected players.
+     * Returns the entity ID of the spawned item.
+     */
+    int32_t spawnItemDrop(double x, double y, double z,
+                          int32_t blockId, int32_t metadata, int32_t count = 1);
+
+    /**
+     * Tick all item entities (physics, despawn, pickup).
+     * Called from the main server tick.
+     */
+    void tickItemEntities();
+
+    /**
      * Register a new client connection (called from TcpListener callback).
      * Thread-safe.
      */
@@ -194,6 +209,15 @@ private:
 
     // ─── Timing (Java reference: MinecraftServer.run() tick timing) ─────
     using Clock = std::chrono::steady_clock;
+
+    // ─── Item entities ──────────────────────────────────────────────────
+    struct DroppedItem {
+        EntityItem entity;
+        int64_t spawnTick = 0;
+    };
+    mutable std::mutex itemEntitiesMutex_;
+    std::vector<DroppedItem> itemEntities_;
+    std::atomic<int32_t> nextItemEntityId_{100000};
 };
 
 } // namespace mccpp
