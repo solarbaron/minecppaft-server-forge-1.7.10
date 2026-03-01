@@ -681,6 +681,52 @@ void MinecraftServer::broadcastParticle(const std::string& particleName,
     }
 }
 
+void MinecraftServer::broadcastEffect(int32_t effectId, int32_t x, int32_t y, int32_t z,
+                                       int32_t data, bool disableRelativeVolume) {
+    // Java reference: WorldManager.playAuxSFX() → S28 Effect
+    auto writeVarInt = [](std::vector<uint8_t>& buf, int32_t value) {
+        uint32_t uval = static_cast<uint32_t>(value);
+        do {
+            uint8_t b = uval & 0x7F;
+            uval >>= 7;
+            if (uval != 0) b |= 0x80;
+            buf.push_back(b);
+        } while (uval != 0);
+    };
+    auto writeInt = [](std::vector<uint8_t>& buf, int32_t value) {
+        buf.push_back((value >> 24) & 0xFF);
+        buf.push_back((value >> 16) & 0xFF);
+        buf.push_back((value >> 8) & 0xFF);
+        buf.push_back(value & 0xFF);
+    };
+
+    std::vector<uint8_t> pkt;
+    writeVarInt(pkt, 0x28); // S28 Effect
+    writeInt(pkt, effectId);
+    writeInt(pkt, x);
+    pkt.push_back(static_cast<uint8_t>(y));
+    writeInt(pkt, z);
+    writeInt(pkt, data);
+    pkt.push_back(disableRelativeVolume ? 1 : 0);
+
+    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    for (auto& conn : connections_) {
+        if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+        auto copy = pkt;
+        conn->sendPacket(std::move(copy));
+    }
+}
+
+MinecraftServer::BrewingStandData& MinecraftServer::getOrCreateBrewingStand(int64_t posKey) {
+    std::lock_guard<std::mutex> lock(brewingStandMutex_);
+    return brewingStandStorage_[posKey];
+}
+
+MinecraftServer::DispenserData& MinecraftServer::getOrCreateDispenser(int64_t posKey) {
+    std::lock_guard<std::mutex> lock(dispenserMutex_);
+    return dispenserStorage_[posKey];
+}
+
 void MinecraftServer::createExplosion(double x, double y, double z, float power,
                                        bool causesFire, bool breakBlocks) {
     // Java reference: Explosion.doExplosionA() + doExplosionB()

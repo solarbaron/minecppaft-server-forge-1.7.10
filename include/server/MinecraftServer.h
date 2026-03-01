@@ -207,6 +207,39 @@ public:
                            float speed, int32_t count);
 
     /**
+     * Broadcast S28 Effect to all connected players.
+     * Java reference: WorldServer.playAuxSFXAtEntity() / WorldManager.playAuxSFX()
+     * effectId 2001 = block break particles, data = blockID
+     * effectId 2002 = splash potion, data = potionID
+     * effectId 1000 = click sound, 1001 = fire charge, 1003 = door, 1005 = bone meal
+     */
+    void broadcastEffect(int32_t effectId, int32_t x, int32_t y, int32_t z,
+                          int32_t data, bool disableRelativeVolume = false);
+
+    /**
+     * Open a brewing stand container for a player.
+     * Java reference: TileEntityBrewingStand + ContainerBrewingStand
+     */
+    struct BrewingStandData {
+        std::array<std::optional<ItemStack>, 4> slots; // 0-2 = potion, 3 = ingredient
+        int32_t brewTime = 0;
+    };
+    BrewingStandData& getOrCreateBrewingStand(int64_t posKey);
+    std::map<int64_t, BrewingStandData> brewingStandStorage_;
+    mutable std::mutex brewingStandMutex_;
+
+    /**
+     * Dispenser/Dropper storage (9 slots each).
+     * Java reference: TileEntityDispenser
+     */
+    struct DispenserData {
+        std::array<std::optional<ItemStack>, 9> slots;
+    };
+    DispenserData& getOrCreateDispenser(int64_t posKey);
+    std::map<int64_t, DispenserData> dispenserStorage_;
+    mutable std::mutex dispenserMutex_;
+
+    /**
      * Save all world chunks to disk.\n     * Java reference: MinecraftServer.saveAllWorlds()\n     */
     void saveAllWorlds();
 

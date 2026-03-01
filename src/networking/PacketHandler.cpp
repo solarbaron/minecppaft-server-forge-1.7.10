@@ -1907,6 +1907,7 @@ void PlayHandler::handlePlayerDigging(const uint8_t* data, size_t length, Connec
             world->setBlock(blockX, blockY, blockZ, Block::getBlockById(0));
             world->setBlockMetadata(blockX, blockY, blockZ, 0);
             server_.broadcastBlockChange(blockX, blockY, blockZ, 0, 0);
+            server_.broadcastEffect(2001, blockX, blockY, blockZ, brokenBlockId);
             server_.broadcastSound(getBreakSound(brokenBlockId),
                 static_cast<double>(blockX) + 0.5,
                 static_cast<double>(blockY) + 0.5,
@@ -1925,6 +1926,7 @@ void PlayHandler::handlePlayerDigging(const uint8_t* data, size_t length, Connec
                 world->setBlock(blockX, blockY, blockZ, Block::getBlockById(0));
                 world->setBlockMetadata(blockX, blockY, blockZ, 0);
                 server_.broadcastBlockChange(blockX, blockY, blockZ, 0, 0);
+                server_.broadcastEffect(2001, blockX, blockY, blockZ, brokenBlockId);
                 server_.broadcastSound(getBreakSound(brokenBlockId),
                     static_cast<double>(blockX) + 0.5,
                     static_cast<double>(blockY) + 0.5,
@@ -1981,6 +1983,7 @@ void PlayHandler::handlePlayerDigging(const uint8_t* data, size_t length, Connec
         world->setBlock(blockX, blockY, blockZ, Block::getBlockById(0));
         world->setBlockMetadata(blockX, blockY, blockZ, 0);
         server_.broadcastBlockChange(blockX, blockY, blockZ, 0, 0);
+        server_.broadcastEffect(2001, blockX, blockY, blockZ, brokenBlockId);
 
         // Play break sound — material-based
         server_.broadcastSound(getBreakSound(brokenBlockId),
@@ -2204,6 +2207,101 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
         }
 
         // Send S30 WindowItems (37 slots: 1 enchant + 36 player inv)
+        sendWindowItems(conn);
+        return;
+    }
+
+    // Brewing Stand (block ID 117) — Java: BlockBrewingStand.onBlockActivated()
+    if (clickedBlockId == 117 && !isSneaking_) {
+        openWindowId_ = 11;
+        openWindowType_ = 5; // Brewing stand
+
+        int64_t key = (static_cast<int64_t>(blockX) & 0x3FFFFFFLL) << 38 |
+                      (static_cast<int64_t>(blockY) & 0xFFFLL) << 26 |
+                      (static_cast<int64_t>(blockZ) & 0x3FFFFFFLL);
+
+        auto& brewData = server_.getOrCreateBrewingStand(key);
+
+        // S2D OpenWindow (type 5 = brewing stand)
+        {
+            std::vector<uint8_t> pkt;
+            writeVarInt(pkt, ClientboundPacket::OpenWindow);
+            writeByte(pkt, static_cast<uint8_t>(openWindowId_));
+            writeByte(pkt, 5); // Type 5 = brewing stand
+            writeString(pkt, "Brewing Stand");
+            writeByte(pkt, 4); // 4 slots: 3 potion output + 1 ingredient
+            writeByte(pkt, 1); // Use provided title
+            conn.sendPacket(std::move(pkt));
+        }
+
+        // S31 WindowProperty — brew time
+        {
+            std::vector<uint8_t> propPkt;
+            writeVarInt(propPkt, ClientboundPacket::WindowProperty);
+            writeByte(propPkt, static_cast<uint8_t>(openWindowId_));
+            writeShort(propPkt, 0); // Property 0 = brew time
+            writeShort(propPkt, static_cast<int16_t>(brewData.brewTime));
+            conn.sendPacket(std::move(propPkt));
+        }
+
+        // S30 WindowItems (40 slots: 4 brewing + 36 player inv)
+        sendWindowItems(conn);
+        return;
+    }
+
+    // Dispenser (block ID 23) / Dropper (block ID 158)
+    // Java: BlockDispenser.onBlockActivated() / BlockDropper
+    if ((clickedBlockId == 23 || clickedBlockId == 158) && !isSneaking_) {
+        openWindowId_ = 12;
+        openWindowType_ = (clickedBlockId == 23) ? 3 : 6; // 3=dispenser, 6=dropper
+
+        int64_t key = (static_cast<int64_t>(blockX) & 0x3FFFFFFLL) << 38 |
+                      (static_cast<int64_t>(blockY) & 0xFFFLL) << 26 |
+                      (static_cast<int64_t>(blockZ) & 0x3FFFFFFLL);
+
+        auto& dispData = server_.getOrCreateDispenser(key);
+
+        // S2D OpenWindow
+        {
+            std::vector<uint8_t> pkt;
+            writeVarInt(pkt, ClientboundPacket::OpenWindow);
+            writeByte(pkt, static_cast<uint8_t>(openWindowId_));
+            writeByte(pkt, static_cast<uint8_t>(openWindowType_));
+            writeString(pkt, (clickedBlockId == 23) ? "Dispenser" : "Dropper");
+            writeByte(pkt, 9); // 9 slots
+            writeByte(pkt, 1); // Use provided title
+            conn.sendPacket(std::move(pkt));
+        }
+
+        // S30 WindowItems (45 slots: 9 container + 36 player inv)
+        sendWindowItems(conn);
+        return;
+    }
+
+    // Hopper (block ID 154) — Java: BlockHopper.onBlockActivated()
+    if (clickedBlockId == 154 && !isSneaking_) {
+        openWindowId_ = 13;
+        openWindowType_ = 5; // Hopper uses same type as brewing stand? No, type 9
+
+        int64_t key = (static_cast<int64_t>(blockX) & 0x3FFFFFFLL) << 38 |
+                      (static_cast<int64_t>(blockY) & 0xFFFLL) << 26 |
+                      (static_cast<int64_t>(blockZ) & 0x3FFFFFFLL);
+
+        // Reuse dispenser storage for hoppers (they also have 5 slots)
+        auto& hopData = server_.getOrCreateDispenser(key);
+
+        // S2D OpenWindow (type 9 = hopper)
+        {
+            std::vector<uint8_t> pkt;
+            writeVarInt(pkt, ClientboundPacket::OpenWindow);
+            writeByte(pkt, static_cast<uint8_t>(openWindowId_));
+            writeByte(pkt, 9); // Type 9 = hopper
+            writeString(pkt, "Hopper");
+            writeByte(pkt, 5); // 5 slots
+            writeByte(pkt, 1);
+            conn.sendPacket(std::move(pkt));
+        }
+
         sendWindowItems(conn);
         return;
     }
