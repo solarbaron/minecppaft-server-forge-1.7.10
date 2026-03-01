@@ -327,5 +327,19 @@ void MinecraftServer::broadcastPlayerPosition(PlayHandler& movedHandler) {
     }
 }
 
+void MinecraftServer::broadcastSound(const std::string& soundName, double x, double y, double z,
+                                      float volume, float pitch) {
+    // Java reference: WorldServer.playSoundEffect() → sends S29PacketSoundEffect to all players
+    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    for (auto& conn : connections_) {
+        if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+        auto handler = conn->getHandler();
+        auto* play = dynamic_cast<PlayHandler*>(handler.get());
+        if (!play) continue;
+
+        play->sendSoundEffect(*conn, soundName, x, y, z, volume, pitch);
+    }
+}
+
 } // namespace mccpp
 

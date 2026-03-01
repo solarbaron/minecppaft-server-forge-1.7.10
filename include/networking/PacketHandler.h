@@ -265,6 +265,14 @@ public:
      */
     void sendEntityHeadLook(Connection& conn, int32_t entityId, float yaw);
 
+    /**
+     * Send a named sound effect to the client.
+     * Java reference: S29PacketSoundEffect
+     */
+    void sendSoundEffect(Connection& conn, const std::string& soundName,
+                         double x, double y, double z,
+                         float volume, float pitch);
+
     // ─── Getters for player state ──────────────────────────────────────
     int32_t getEntityId() const { return entityId_; }
     const std::string& getUuid() const { return uuid_; }

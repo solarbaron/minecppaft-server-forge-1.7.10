@@ -136,6 +136,13 @@ public:
     void broadcastPlayerPosition(PlayHandler& movedHandler);
 
     /**
+     * Broadcast a sound effect to all connected players.
+     * Java reference: WorldServer.playSoundEffect()
+     */
+    void broadcastSound(const std::string& soundName, double x, double y, double z,
+                        float volume, float pitch);
+
+    /**
      * Register a new client connection (called from TcpListener callback).
      * Thread-safe.
      */

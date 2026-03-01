@@ -1018,6 +1018,26 @@ void PlayHandler::sendEntityHeadLook(Connection& conn, int32_t entityId, float y
     conn.sendPacket(std::move(pkt));
 }
 
+void PlayHandler::sendSoundEffect(Connection& conn, const std::string& soundName,
+                                   double x, double y, double z,
+                                   float volume, float pitch) {
+    // Java reference: S29PacketSoundEffect.writePacketData()
+    // Format: String name, Int x*8, Int y*8, Int z*8, Float volume, Byte pitch*63
+    std::vector<uint8_t> pkt;
+    writeVarInt(pkt, ClientboundPacket::SoundEffect);
+    writeString(pkt, soundName);
+    writeInt(pkt, static_cast<int32_t>(x * 8.0));
+    writeInt(pkt, static_cast<int32_t>(y * 8.0));
+    writeInt(pkt, static_cast<int32_t>(z * 8.0));
+    writeFloat(pkt, volume);
+    // pitch encoding: (int)(pitch * 63.0f), clamped to [0, 255]
+    int pitchInt = static_cast<int>(pitch * 63.0f);
+    if (pitchInt < 0) pitchInt = 0;
+    if (pitchInt > 255) pitchInt = 255;
+    writeByte(pkt, static_cast<uint8_t>(pitchInt));
+    conn.sendPacket(std::move(pkt));
+}
+
 void PlayHandler::handlePlayerPosition(const uint8_t* data, size_t length, Connection& conn) {
     // Java reference: NetHandlerPlayServer.processPlayer()
     // C04PacketPlayerPosition: Double x, Double y, Double stance, Double z, Bool onGround
@@ -1128,6 +1148,14 @@ void PlayHandler::handlePlayerDigging(const uint8_t* data, size_t length, Connec
 
             // Broadcast block change to all players
             server_.broadcastBlockChange(blockX, blockY, blockZ, 0, 0);
+
+            // Play break sound — Java reference: worldObj.playAuxSFXAtEntity
+            // Using generic "dig.stone" sound; volume=1.0, pitch=0.8 (matches vanilla)
+            server_.broadcastSound("dig.stone",
+                static_cast<double>(blockX) + 0.5,
+                static_cast<double>(blockY) + 0.5,
+                static_cast<double>(blockZ) + 0.5,
+                1.0f, 0.8f);
         }
     }
     // status 1 = cancel — nothing to do in creative mode
@@ -1219,6 +1247,14 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
 
     // Broadcast block change to all players
     server_.broadcastBlockChange(placeX, placeY, placeZ, placeBlockId, 0);
+
+    // Play place sound — Java reference: Block.onBlockPlacedBy / stepSound
+    // Using generic "dig.stone" sound; volume=1.0, pitch=0.8 (matches vanilla)
+    server_.broadcastSound("dig.stone",
+        static_cast<double>(placeX) + 0.5,
+        static_cast<double>(placeY) + 0.5,
+        static_cast<double>(placeZ) + 0.5,
+        1.0f, 0.8f);
 }
 
 } // namespace mccpp
