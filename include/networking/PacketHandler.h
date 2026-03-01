@@ -218,6 +218,8 @@ public:
      * Send a block change to the client.
      * Java reference: S23PacketBlockChange
      */
+    void sendEntityEquipment(Connection& conn, int32_t entityId, int16_t equipSlot,
+                              const std::optional<ItemStack>& stack);
     void sendBlockChange(Connection& conn, int32_t x, int32_t y, int32_t z,
                          int32_t blockId, int32_t metadata);
 
@@ -391,6 +393,17 @@ public:
      * Reason 3 = change game mode (value = gamemode int)
      */
     void sendChangeGameState(Connection& conn, uint8_t reason, float value);
+
+    // Equipment accessors — for S04 EntityEquipment broadcasting
+    std::optional<ItemStack> getHeldItem() const {
+        return inventory_.getCurrentItem();
+    }
+    // equipSlot: 1=boots, 2=leggings, 3=chestplate, 4=helmet → armor index 0-3
+    std::optional<ItemStack> getArmorItem(int16_t equipSlot) const {
+        int32_t armorIdx = equipSlot - 1; // S04 slot 1→armor[0], 2→armor[1], etc.
+        if (armorIdx < 0 || armorIdx >= InventoryPlayer::ARMOR_SIZE) return std::nullopt;
+        return inventory_.getArmorInventory()[armorIdx];
+    }
 
     /**
      * Save player data to world/playerdata/<uuid>.dat

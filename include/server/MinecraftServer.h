@@ -202,6 +202,9 @@ public:
      */
     void broadcastEntityMetadataFlags(int32_t entityId, uint8_t flags);
 
+    // Broadcast S04 EntityEquipment for a player to all other players
+    void broadcastEquipment(PlayHandler& handler, int16_t equipSlot);
+
     /**
      * Handle a player attacking another entity (player-to-player combat).
      * Java reference: EntityPlayerMP.attackTargetEntityWithCurrentItem()

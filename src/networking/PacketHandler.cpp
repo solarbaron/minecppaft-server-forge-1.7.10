@@ -1041,6 +1041,19 @@ void PlayHandler::sendSetSlot(Connection& conn, int8_t windowId, int16_t slot,
     conn.sendPacket(std::move(pkt));
 }
 
+void PlayHandler::sendEntityEquipment(Connection& conn, int32_t entityId, int16_t equipSlot,
+                                       const std::optional<ItemStack>& stack) {
+    // Java reference: S04PacketEntityEquipment.writePacketData()
+    // Format: Int entityId, Short slot, ItemStack
+    // slot: 0=held, 1=boots, 2=leggings, 3=chestplate, 4=helmet
+    std::vector<uint8_t> pkt;
+    writeVarInt(pkt, ClientboundPacket::EntityEquipment);
+    writeInt(pkt, entityId);
+    writeShort(pkt, equipSlot);
+    writeItemStack(pkt, stack);
+    conn.sendPacket(std::move(pkt));
+}
+
 void PlayHandler::sendEntityTeleport(Connection& conn, int32_t entityId,
                                       double x, double y, double z,
                                       float yaw, float pitch) {
@@ -2808,6 +2821,9 @@ void PlayHandler::handleHeldItemChange(const uint8_t* data, size_t length, Conne
     currentSlot_ = pkt.slotId;
     // Java: this.playerEntity.inventory.currentItem = slotId;
     // Java: this.playerEntity.markPlayerActive();
+
+    // Broadcast held item to other players — Java: EntityTrackerEntry equipment sync
+    server_.broadcastEquipment(*this, 0);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

@@ -326,6 +326,33 @@ void MinecraftServer::onPlayerJoined(Connection& joinedConn, PlayHandler& joined
 
     // Send own PlayerListItem to self (so own name shows in tab list)
     joinedHandler.sendPlayerListItem(joinedConn, joinedHandler.getPlayerName(), true, 0);
+
+    // Broadcast equipment for all players
+    // Send existing players' equipment to the new player, and new player's to existing
+    for (auto& conn : connections_) {
+        if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+        auto handler = conn->getHandler();
+        auto* otherPlay = dynamic_cast<PlayHandler*>(handler.get());
+        if (!otherPlay) continue;
+        if (otherPlay->getEntityId() == joinedHandler.getEntityId()) continue;
+
+        // Send existing player's held item to the new player
+        auto otherHeld = otherPlay->getHeldItem();
+        joinedHandler.sendEntityEquipment(joinedConn, otherPlay->getEntityId(), 0, otherHeld);
+        // Send armor slots 1-4
+        for (int16_t s = 1; s <= 4; ++s) {
+            auto armorItem = otherPlay->getArmorItem(s);
+            joinedHandler.sendEntityEquipment(joinedConn, otherPlay->getEntityId(), s, armorItem);
+        }
+
+        // Send the new player's held item to existing players
+        auto newHeld = joinedHandler.getHeldItem();
+        otherPlay->sendEntityEquipment(*conn, joinedHandler.getEntityId(), 0, newHeld);
+        for (int16_t s = 1; s <= 4; ++s) {
+            auto armorItem = joinedHandler.getArmorItem(s);
+            otherPlay->sendEntityEquipment(*conn, joinedHandler.getEntityId(), s, armorItem);
+        }
+    }
 }
 
 void MinecraftServer::onPlayerLeft(PlayHandler& leftHandler) {
@@ -570,6 +597,27 @@ void MinecraftServer::broadcastEntityMetadataFlags(int32_t entityId, uint8_t fla
         auto* play = dynamic_cast<PlayHandler*>(handler.get());
         if (!play || play->getEntityId() == entityId) continue;
         conn->sendPacket(pkt);
+    }
+}
+
+void MinecraftServer::broadcastEquipment(PlayHandler& handler, int16_t equipSlot) {
+    // Java reference: EntityTrackerEntry.func_151261_b() → S04PacketEntityEquipment
+    // Broadcast a single equipment slot change to all other players
+    int32_t entityId = handler.getEntityId();
+    std::optional<ItemStack> item;
+    if (equipSlot == 0) {
+        item = handler.getHeldItem();
+    } else {
+        item = handler.getArmorItem(equipSlot);
+    }
+
+    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    for (auto& conn : connections_) {
+        if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+        auto h = conn->getHandler();
+        auto* play = dynamic_cast<PlayHandler*>(h.get());
+        if (!play || play->getEntityId() == entityId) continue;
+        play->sendEntityEquipment(*conn, entityId, equipSlot, item);
     }
 }
 
