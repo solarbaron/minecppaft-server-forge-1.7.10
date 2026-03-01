@@ -172,6 +172,18 @@ public:
      */
     void removeConnection(Connection* conn);
 
+    /**
+     * Broadcast S1A EntityStatus to all connected players.
+     * Java reference: WorldServer.setEntityState()
+     */
+    void broadcastEntityEvent(int32_t entityId, int8_t status);
+
+    /**
+     * Handle a player attacking another entity (player-to-player combat).
+     * Java reference: EntityPlayerMP.attackTargetEntityWithCurrentItem()
+     */
+    void handlePlayerAttack(PlayHandler& attacker, int32_t targetEntityId);
+
 private:
     /**
      * Execute a single server tick.

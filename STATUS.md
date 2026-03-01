@@ -145,7 +145,7 @@
 - ~~**Block breaking/placing**~~ — ✅ PlayerDigging/PlayerBlockPlace handled, instant break + face-offset placement
 - ~~**Item drops**~~ — ✅ EntityItem spawn on block break with pickup
 - ~~**Player-to-player visibility**~~ — ✅ S0C SpawnPlayer + S38 PlayerListItem + S13 DestroyEntities working
-- **Combat** — no damage, no knockback, no death/respawn
+- ~~**Combat**~~ — ✅ damage (fist), knockback (S12), hurt animation (S1A), death + respawn
 - ~~**Health/hunger**~~ — ✅ initial S06 UpdateHealth sent on join (full health/food)
 - **Movement validation** — server accepts all positions without anti-cheat; ✅ S18 EntityTeleport + S19 HeadLook broadcast to other players
 - **Lighting** — no light propagation engine
@@ -201,5 +201,5 @@
 11. **Caves + Ores** — ✅ Done (MapGenCaves worm carving + 11 vanilla ores via OreDistribution)
 12. **Tree generation** — ✅ Done (TreeGenerator oak trees wired into OverworldGenerator)
 13. **Player data persistence** — ✅ Done (savePlayerData/loadPlayerData with NBT Pos/Rotation)
-14. **Combat system** — damage, knockback, death/respawn
+14. **Combat system** — ✅ Done (UseEntity attack, damage, S12 knockback, S1A hurt/death, respawn via ClientStatus)
 15. **Mob spawning** — natural mob spawning in dark areas

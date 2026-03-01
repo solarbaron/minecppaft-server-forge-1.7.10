@@ -619,11 +619,17 @@ void PlayHandler::handlePacket(int32_t packetId,
         case ServerboundPacket::ConfirmTransaction:
         case ServerboundPacket::CreativeInventory:
         case ServerboundPacket::UpdateSign:
+            // Silently consume unimplemented inventory/sign packets
+            break;
         case ServerboundPacket::UseEntity:
+            handleUseEntity(data, length, conn);
+            break;
+        case ServerboundPacket::ClientStatus:
+            handleClientStatus(data, length, conn);
+            break;
         case ServerboundPacket::SteerVehicle:
         case ServerboundPacket::TabComplete:
         case ServerboundPacket::EnchantItem:
-        case ServerboundPacket::ClientStatus:
             // Silently consume unimplemented packets
             break;
         default:
@@ -1436,6 +1442,135 @@ bool PlayHandler::loadPlayerData() {
     std::cout << "[Load] Loaded player data for " << playerName_
               << " at (" << playerX_ << ", " << playerY_ << ", " << playerZ_ << ")\n";
     return true;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Combat packet handlers
+// ═══════════════════════════════════════════════════════════════════════════
+
+void PlayHandler::handleUseEntity(const uint8_t* data, size_t length, Connection& conn) {
+    // Java reference: C02PacketUseEntity
+    // Format: Int entityId, VarInt action (0=interact, 1=attack, 2=interact_at)
+    if (length < 5) return;
+
+    int32_t targetEntityId = readInt(data);
+    auto actionResult = readVarInt(data + 4, length - 4);
+    int32_t action = actionResult.value;
+
+    if (action == 1) {
+        // ATTACK — Java: EntityPlayer.attackTargetEntityWithCurrentItem()
+        server_.handlePlayerAttack(*this, targetEntityId);
+    }
+    // action 0 (interact) and 2 (interact_at) not implemented yet
+}
+
+void PlayHandler::handleClientStatus(const uint8_t* data, size_t length, Connection& conn) {
+    // Java reference: C16PacketClientStatus
+    // Format: VarInt actionId (0=PERFORM_RESPAWN, 1=REQUEST_STATS, 2=OPEN_INVENTORY_ACHIEVEMENT)
+    if (length < 1) return;
+
+    auto actionResult = readVarInt(data, length);
+    int32_t actionId = actionResult.value;
+
+    if (actionId == 0 && dead_) {
+        // PERFORM_RESPAWN — Java: EntityPlayerMP.onDeath → respawn
+        // Reset health and state
+        health_ = 20.0f;
+        food_ = 20;
+        saturation_ = 5.0f;
+        dead_ = false;
+
+        // Get spawn coordinates
+        auto* overworld = server_.getWorlds().empty() ? nullptr : server_.getWorlds()[0].get();
+        double spawnX = 0.0, spawnY = 80.0, spawnZ = 0.0;
+        if (overworld) {
+            spawnY = static_cast<double>(overworld->getSpawnY());
+        }
+
+        playerX_ = spawnX;
+        playerY_ = spawnY;
+        playerZ_ = spawnZ;
+        playerYaw_ = 0.0f;
+        playerPitch_ = 0.0f;
+
+        // Send S07 Respawn packet
+        // Java reference: S07PacketRespawn
+        {
+            std::vector<uint8_t> pkt;
+            writeVarInt(pkt, ClientboundPacket::Respawn);
+            writeInt(pkt, 0);          // Dimension: 0 = Overworld
+            writeUByte(pkt, 1);        // Difficulty: 1 = Easy
+            writeUByte(pkt, 0);        // Gamemode: 0 = Survival
+            writeString(pkt, "flat");  // Level type
+            conn.sendPacket(std::move(pkt));
+        }
+
+        // Send chunks around spawn
+        int playerChunkX = static_cast<int>(playerX_) >> 4;
+        int playerChunkZ = static_cast<int>(playerZ_) >> 4;
+        if (overworld) {
+            for (int cx = playerChunkX - 2; cx <= playerChunkX + 2; ++cx) {
+                for (int cz = playerChunkZ - 2; cz <= playerChunkZ + 2; ++cz) {
+                    Chunk* chunk = overworld->getChunkFromChunkCoords(cx, cz);
+                    if (chunk) sendChunkData(conn, chunk);
+                }
+            }
+        }
+
+        // Send position
+        {
+            std::vector<uint8_t> pkt;
+            writeVarInt(pkt, ClientboundPacket::PlayerPosAndLook);
+            writeDouble(pkt, playerX_);
+            writeDouble(pkt, playerY_);
+            writeDouble(pkt, playerZ_);
+            writeFloat(pkt, playerYaw_);
+            writeFloat(pkt, playerPitch_);
+            writeBool(pkt, false);
+            conn.sendPacket(std::move(pkt));
+        }
+
+        // Send full health
+        sendUpdateHealth(conn, health_, food_, saturation_);
+
+        // Re-broadcast spawn to other players
+        server_.onPlayerJoined(conn, *this);
+
+        std::cout << "[Combat] " << playerName_ << " respawned at spawn\n";
+    }
+}
+
+void PlayHandler::sendEntityStatus(Connection& conn, int32_t entityId, int8_t status) {
+    // Java reference: S1APacketEntityStatus
+    std::vector<uint8_t> pkt;
+    writeVarInt(pkt, ClientboundPacket::EntityStatus);
+    writeInt(pkt, entityId);
+    writeByte(pkt, status);
+    conn.sendPacket(std::move(pkt));
+}
+
+void PlayHandler::sendEntityVelocity(Connection& conn, int32_t entityId, double vx, double vy, double vz) {
+    // Java reference: S12PacketEntityVelocity
+    // velocity = clamped to [-3.9, 3.9], sent as short = (int)(v * 8000)
+    auto clampVel = [](double v) -> int16_t {
+        double c = std::max(-3.9, std::min(3.9, v));
+        return static_cast<int16_t>(c * 8000.0);
+    };
+    std::vector<uint8_t> pkt;
+    writeVarInt(pkt, ClientboundPacket::EntityVelocity);
+    writeInt(pkt, entityId);
+    writeShort(pkt, clampVel(vx));
+    writeShort(pkt, clampVel(vy));
+    writeShort(pkt, clampVel(vz));
+    conn.sendPacket(std::move(pkt));
+}
+
+void PlayHandler::applyDamage(float amount) {
+    // Java reference: EntityLivingBase.damageEntity()
+    health_ = std::max(0.0f, health_ - amount);
+    if (health_ <= 0.0f) {
+        dead_ = true;
+    }
 }
 
 } // namespace mccpp

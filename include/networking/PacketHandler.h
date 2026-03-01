@@ -295,6 +295,24 @@ public:
      */
     void sendCollectItem(Connection& conn, int32_t collectedEntityId, int32_t collectorEntityId);
 
+    /**
+     * Send S1A EntityStatus to the client.
+     * Java reference: S1APacketEntityStatus
+     */
+    void sendEntityStatus(Connection& conn, int32_t entityId, int8_t status);
+
+    /**
+     * Send S12 EntityVelocity to the client.
+     * Java reference: S12PacketEntityVelocity
+     */
+    void sendEntityVelocity(Connection& conn, int32_t entityId, double vx, double vy, double vz);
+
+    /**
+     * Apply damage to this player, reducing health.
+     * Java reference: EntityLivingBase.damageEntity()
+     */
+    void applyDamage(float amount);
+
     // ─── Getters for player state ──────────────────────────────────────
     int32_t getEntityId() const { return entityId_; }
     const std::string& getUuid() const { return uuid_; }
@@ -303,6 +321,10 @@ public:
     double getPlayerZ() const { return playerZ_; }
     float getPlayerYaw() const { return playerYaw_; }
     float getPlayerPitch() const { return playerPitch_; }
+    float getHealth() const { return health_; }
+    int32_t getFood() const { return food_; }
+    float getSaturation() const { return saturation_; }
+    bool isDead() const { return dead_; }
 
     /**
      * Save player data to world/playerdata/<uuid>.dat
@@ -327,6 +349,8 @@ private:
     void handleClientSettings(const uint8_t* data, size_t length, Connection& conn);
     void handlePlayerDigging(const uint8_t* data, size_t length, Connection& conn);
     void handlePlayerBlockPlace(const uint8_t* data, size_t length, Connection& conn);
+    void handleUseEntity(const uint8_t* data, size_t length, Connection& conn);
+    void handleClientStatus(const uint8_t* data, size_t length, Connection& conn);
 
     MinecraftServer& server_;
     std::string playerName_;
@@ -350,6 +374,13 @@ private:
     // Player inventory
     InventoryPlayer inventory_;
     std::unique_ptr<ContainerPlayer> container_;
+
+    // Combat state — Java: EntityPlayer fields
+    float health_ = 20.0f;        // EntityLivingBase.health
+    int32_t food_ = 20;           // FoodStats.foodLevel
+    float saturation_ = 5.0f;     // FoodStats.foodSaturationLevel
+    int hurtResistantTime_ = 0;   // EntityLivingBase.hurtResistantTime (20 tick cooldown)
+    bool dead_ = false;           // EntityLivingBase.dead
 };
 
 } // namespace mccpp

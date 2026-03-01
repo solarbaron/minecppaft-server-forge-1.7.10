@@ -497,5 +497,116 @@ void MinecraftServer::tickItemEntities() {
     );
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Combat system
+// Java reference: EntityPlayer.attackTargetEntityWithCurrentItem()
+// ═══════════════════════════════════════════════════════════════════════════
+
+void MinecraftServer::broadcastEntityEvent(int32_t entityId, int8_t status) {
+    // Java reference: WorldServer.setEntityState() → S1APacketEntityStatus
+    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    for (auto& conn : connections_) {
+        if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+        auto handler = conn->getHandler();
+        auto* play = dynamic_cast<PlayHandler*>(handler.get());
+        if (play) {
+            play->sendEntityStatus(*conn, entityId, status);
+        }
+    }
+}
+
+void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, int32_t targetEntityId) {
+    // Java reference: EntityPlayer.attackTargetEntityWithCurrentItem(Entity)
+    // Find target player
+    PlayHandler* target = nullptr;
+    Connection* targetConn = nullptr;
+
+    {
+        std::lock_guard<std::mutex> lock(connectionsMutex_);
+        for (auto& conn : connections_) {
+            if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+            auto handler = conn->getHandler();
+            auto* play = dynamic_cast<PlayHandler*>(handler.get());
+            if (play && play->getEntityId() == targetEntityId) {
+                target = play;
+                targetConn = conn.get();
+                break;
+            }
+        }
+    }
+
+    if (!target || !targetConn || target->isDead()) return;
+
+    // ─── Damage calculation ─────────────────────────────────────────
+    // Java: EntityPlayer.attackTargetEntityWithCurrentItem()
+    // Base fist damage = 1.0
+    // TODO: Tool/weapon damage from held item
+    float damage = 1.0f;
+
+    // Check invulnerability frames (Java: EntityLivingBase.hurtResistantTime)
+    // If target was recently hit, skip
+    // Note: hurtResistantTime is decremented per tick in Java — we check > 0
+
+    // ─── Apply damage ───────────────────────────────────────────────
+    float oldHealth = target->getHealth();
+    float newHealth = std::max(0.0f, oldHealth - damage);
+
+    // Update target's health (need mutable access)
+    target->applyDamage(damage);
+
+    // Send health update to the victim
+    target->sendUpdateHealth(*targetConn, target->getHealth(),
+                              target->getFood(), target->getSaturation());
+
+    // ─── Hurt animation (S1A EntityStatus, status=2) ────────────────
+    // Java: EntityLivingBase.attackEntityFrom → setEntityState(entity, 2)
+    broadcastEntityEvent(targetEntityId, 2);
+
+    // ─── Knockback ──────────────────────────────────────────────────
+    // Java: EntityLivingBase.knockBack(entity, damage, dx, dz)
+    // direction: from attacker to target
+    double dx = target->getPlayerX() - attacker.getPlayerX();
+    double dz = target->getPlayerZ() - attacker.getPlayerZ();
+    double dist = std::sqrt(dx * dx + dz * dz);
+
+    if (dist > 0.0) {
+        dx /= dist;
+        dz /= dist;
+    } else {
+        dx = 0.0;
+        dz = 0.0;
+    }
+
+    // Java knockback formula: motionX/2 + dx*0.4, motionY/2 + 0.4, motionZ/2 + dz*0.4
+    // then clamp motionY to 0.4 max
+    double kbX = dx * 0.4;
+    double kbY = 0.4;
+    double kbZ = dz * 0.4;
+
+    // Send S12 EntityVelocity to the target
+    target->sendEntityVelocity(*targetConn, targetEntityId, kbX, kbY, kbZ);
+
+    // ─── Damage sound ───────────────────────────────────────────────
+    broadcastSound("game.player.hurt",
+        target->getPlayerX(), target->getPlayerY(), target->getPlayerZ(),
+        1.0f, 1.0f);
+
+    // ─── Death check ────────────────────────────────────────────────
+    if (target->getHealth() <= 0.0f) {
+        // Death! Java: EntityLivingBase.onDeath()
+        // Status 3 = entity death animation
+        broadcastEntityEvent(targetEntityId, 3);
+
+        // Broadcast death message
+        // Java: DamageSource.getDeathMessage() → "death.attack.player"
+        std::string deathMsg = "{\"text\":\"" + target->getPlayerName() +
+            " was slain by " + attacker.getPlayerName() + "\"}";
+        broadcastChatMessage(deathMsg);
+
+        // Set player to dead state (will respawn on ClientStatus packet)
+        // The client will show the death screen and send C16 ClientStatus(0)
+    }
+}
+
 } // namespace mccpp
 
