@@ -2339,6 +2339,125 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
         }
     }
 
+    // ─── Bucket interactions ──────────────────────────────────────────
+    // Java: ItemBucket.onItemRightClick → tryPlaceContainedLiquid / ItemBucket → tryPickup
+
+    // Water bucket (326) / Lava bucket (327) — place liquid source
+    auto heldItem = inventory_.getCurrentItem();
+    if (heldItem && (heldItem->getItemId() == 326 || heldItem->getItemId() == 327)) {
+        int32_t liquidBlockId = (heldItem->getItemId() == 326) ? 9 : 11; // Still water / still lava
+        // Place at face offset
+        int32_t px = blockX, py = static_cast<int32_t>(blockY), pz = blockZ;
+        switch (direction) {
+            case 0: --py; break; case 1: ++py; break;
+            case 2: --pz; break; case 3: ++pz; break;
+            case 4: --px; break; case 5: ++px; break;
+            default: break;
+        }
+        if (py >= 0 && py < 256 && !server_.getWorlds().empty()) {
+            auto& w = server_.getWorlds()[0];
+            Block* target = w->getBlock(px, py, pz);
+            int targetId = target ? Block::getIdFromBlock(target) : 0;
+            // Only place into air or replaceable blocks (tall grass, etc.)
+            if (targetId == 0 || targetId == 31 || targetId == 32 || targetId == 37 || targetId == 38) {
+                w->setBlock(px, py, pz, Block::getBlockById(liquidBlockId));
+                w->setBlockMetadata(px, py, pz, 0);
+                server_.broadcastBlockChange(px, py, pz, liquidBlockId, 0);
+                // Play liquid place sound
+                server_.broadcastSound(liquidBlockId == 9 ? "random.splash" : "random.fizz",
+                    static_cast<double>(px) + 0.5, static_cast<double>(py) + 0.5,
+                    static_cast<double>(pz) + 0.5, 1.0f, 1.0f);
+                // Replace bucket with empty bucket (consume in survival)
+                if (gameMode_ != 1) {
+                    ItemStack emptyBucket(325, 1, 0);
+                    inventory_.setInventorySlotContents(inventory_.getCurrentSlot(), emptyBucket);
+                    sendWindowItems(conn);
+                }
+            }
+        }
+        return;
+    }
+
+    // Empty bucket (325) — pick up water/lava source
+    if (heldItem && heldItem->getItemId() == 325) {
+        Block* target = world->getBlock(blockX, static_cast<int32_t>(blockY), blockZ);
+        int targetId = target ? Block::getIdFromBlock(target) : 0;
+        int targetMeta = world->getBlockMetadata(blockX, static_cast<int32_t>(blockY), blockZ);
+        // Can only pick up source blocks (meta == 0):
+        // Still water (9), flowing water (8), still lava (11), flowing lava (10)
+        if ((targetId == 8 || targetId == 9) && targetMeta == 0) {
+            // Pick up water
+            world->setBlock(blockX, static_cast<int32_t>(blockY), blockZ, Block::getBlockById(0));
+            server_.broadcastBlockChange(blockX, static_cast<int32_t>(blockY), blockZ, 0, 0);
+            if (gameMode_ != 1) {
+                ItemStack waterBucket(326, 1, 0);
+                inventory_.setInventorySlotContents(inventory_.getCurrentSlot(), waterBucket);
+                sendWindowItems(conn);
+            }
+            return;
+        }
+        if ((targetId == 10 || targetId == 11) && targetMeta == 0) {
+            // Pick up lava
+            world->setBlock(blockX, static_cast<int32_t>(blockY), blockZ, Block::getBlockById(0));
+            server_.broadcastBlockChange(blockX, static_cast<int32_t>(blockY), blockZ, 0, 0);
+            if (gameMode_ != 1) {
+                ItemStack lavaBucket(327, 1, 0);
+                inventory_.setInventorySlotContents(inventory_.getCurrentSlot(), lavaBucket);
+                sendWindowItems(conn);
+            }
+            return;
+        }
+    }
+
+    // Bonemeal (351 with damage 15) — Java: ItemDye.onItemUse()
+    // Triggers growth particles (S28 effect 2005) and potentially grows plants
+    if (heldItem && heldItem->getItemId() == 351 && heldItem->getDamage() == 15) {
+        int32_t bx = blockX, by = static_cast<int32_t>(blockY), bz = blockZ;
+        // Spawn bonemeal particles
+        server_.broadcastEffect(2005, bx, by, bz, 0);
+        // Consume in survival
+        if (gameMode_ != 1) {
+            if (heldItem->getStackSize() > 1) {
+                ItemStack newStack(351, heldItem->getStackSize() - 1, 15);
+                inventory_.setInventorySlotContents(inventory_.getCurrentSlot(), newStack);
+            } else {
+                inventory_.setInventorySlotContents(inventory_.getCurrentSlot(), std::nullopt);
+            }
+            sendWindowItems(conn);
+        }
+        // Growth mechanics: grow grass → flowers, saplings → trees, crops advance
+        if (!server_.getWorlds().empty()) {
+            auto& w = server_.getWorlds()[0];
+            // Grass block (2) → spawn flowers in 7×7 area
+            if (clickedBlockId == 2) {
+                std::mt19937 rng(std::random_device{}());
+                for (int i = 0; i < 5; ++i) {
+                    int fx = bx + std::uniform_int_distribution<>(-3, 3)(rng);
+                    int fz = bz + std::uniform_int_distribution<>(-3, 3)(rng);
+                    int fy = by + 1;
+                    Block* above = w->getBlock(fx, fy, fz);
+                    int aboveId = above ? Block::getIdFromBlock(above) : 0;
+                    if (aboveId == 0) {
+                        // Place tall grass (31, meta 1)
+                        w->setBlock(fx, fy, fz, Block::getBlockById(31));
+                        w->setBlockMetadata(fx, fy, fz, 1);
+                        server_.broadcastBlockChange(fx, fy, fz, 31, 1);
+                    }
+                }
+            }
+            // Wheat (59), Carrots (141), Potatoes (142) — advance to max growth (meta 7)
+            if (clickedBlockId == 59 || clickedBlockId == 141 || clickedBlockId == 142) {
+                int meta = w->getBlockMetadata(bx, by, bz);
+                std::mt19937 rngCrop(std::random_device{}());
+                int growth = std::uniform_int_distribution<>(2, 5)(rngCrop);
+                int newMeta = std::min(meta + growth, 7);
+                w->setBlockMetadata(bx, by, bz, newMeta);
+                server_.broadcastBlockChange(bx, by, bz, clickedBlockId, newMeta);
+            }
+        }
+        return;
+    }
+
     // Bed (block ID 26) — Java: BlockBed.onBlockActivated()
     if (clickedBlockId == 26 && !isSneaking_) {
         int64_t worldTime = server_.getWorldTime() % 24000;
