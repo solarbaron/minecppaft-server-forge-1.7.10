@@ -159,6 +159,13 @@ public:
     void broadcastSound(const std::string& soundName, double x, double y, double z,
                         float volume, float pitch);
 
+    /** Get current world time of day (0-23999). Java reference: WorldServer.getWorldTime() */
+    int64_t getWorldTime() const;
+    /** Get total ticks since server started. Used as world age in S03 TimeUpdate. */
+    int64_t getWorldAge() const { return tickCounter_.load(); }
+    /** Broadcast S03 TimeUpdate to all connected players. */
+    void broadcastTimeUpdate();
+
     /**
      * Save all world chunks to disk.\n     * Java reference: MinecraftServer.saveAllWorlds()\n     */
     void saveAllWorlds();
@@ -420,6 +427,7 @@ private:
     CommandHandler commandHandler_;
 
     // ─── Timing (Java reference: MinecraftServer.run() tick timing) ─────
+    std::atomic<int64_t> tickCounter_{0}; // Total ticks since server start (world age)
     using Clock = std::chrono::steady_clock;
 
     // ─── Item entities ──────────────────────────────────────────────────

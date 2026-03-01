@@ -1135,8 +1135,16 @@ void PlayHandler::closeOpenWindow(Connection& conn) {
         workbenchResult_ = std::nullopt;
     }
 
-    // Chest: just clear the pointer (items stay in chest)
+    // Chest/Ender Chest: clear pointer + play close sound
     if (openWindowType_ == 0) {
+        // Play chest close sound at the chest/ender chest position
+        if (chestInventory_) {
+            server_.broadcastSound("random.chestclose",
+                static_cast<double>(openChestX_) + 0.5,
+                static_cast<double>(openChestY_) + 0.5,
+                static_cast<double>(openChestZ_) + 0.5,
+                0.5f, 1.0f);
+        }
         chestInventory_ = nullptr;
         isEnderChest_ = false;
     }
@@ -2105,6 +2113,33 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
     // Ender Chest (block ID 130) — Java: BlockEnderChest.onBlockActivated()
     if (clickedBlockId == 130 && !isSneaking_) {
         openEnderChest(conn, blockX, static_cast<int32_t>(blockY), blockZ);
+        return;
+    }
+
+    // Bed (block ID 26) — Java: BlockBed.onBlockActivated()
+    if (clickedBlockId == 26 && !isSneaking_) {
+        int64_t worldTime = server_.getWorldTime() % 24000;
+        if (worldTime >= 12541 || worldTime < 0) {
+            // Night time — set spawn and skip to morning
+            // Java: EntityPlayer.trySleep() → S0A UseBed
+            std::vector<uint8_t> bedPkt;
+            writeVarInt(bedPkt, ClientboundPacket::UseBed);
+            writeInt(bedPkt, entityId_);
+            writeInt(bedPkt, blockX);
+            writeByte(bedPkt, static_cast<uint8_t>(blockY));
+            writeInt(bedPkt, blockZ);
+            conn.sendPacket(std::move(bedPkt));
+
+            // Skip to morning
+            server_.setWorldTime(0);
+
+            // Broadcast time update to all players
+            server_.broadcastTimeUpdate();
+
+            sendChatMessage(conn, "\xC2\xA7" "7Good morning!");
+        } else {
+            sendChatMessage(conn, "\xC2\xA7" "cYou can only sleep at night");
+        }
         return;
     }
 

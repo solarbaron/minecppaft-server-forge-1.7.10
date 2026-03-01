@@ -240,6 +240,16 @@ void MinecraftServer::tick() {
     tickItemEntities();
     tickFurnaces();
 
+    // Tick world time — Java: WorldServer.tick()
+    tickCounter_.fetch_add(1);
+    if (!worlds_.empty()) {
+        worlds_[0]->setWorldTime(worlds_[0]->getWorldTime() + 1);
+    }
+    // Send S03 TimeUpdate every 20 ticks (1 second)
+    if (tickCounter_.load() % 20 == 0) {
+        broadcastTimeUpdate();
+    }
+
     // Tick mob entities (despawn tracking)
     tickMobs();
 
@@ -487,6 +497,24 @@ void MinecraftServer::broadcastSound(const std::string& soundName, double x, dou
         if (!play) continue;
 
         play->sendSoundEffect(*conn, soundName, x, y, z, volume, pitch);
+    }
+}
+
+int64_t MinecraftServer::getWorldTime() const {
+    if (!worlds_.empty()) return worlds_[0]->getWorldTime();
+    return 0;
+}
+
+void MinecraftServer::broadcastTimeUpdate() {
+    int64_t age = getWorldAge();
+    int64_t time = getWorldTime();
+    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    for (auto& conn : connections_) {
+        if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+        auto handler = conn->getHandler();
+        auto* play = dynamic_cast<PlayHandler*>(handler.get());
+        if (!play) continue;
+        play->sendTimeUpdate(*conn, age, time);
     }
 }
 
