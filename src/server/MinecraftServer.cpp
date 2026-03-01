@@ -194,6 +194,25 @@ void MinecraftServer::tick() {
         world->tick();
     }
 
+    // Send S03 TimeUpdate to all players every 20 ticks (1 second)
+    // Java reference: WorldServer.tick() sends S03PacketTimeUpdate every 20 ticks
+    if (ticks > 0 && ticks % 20 == 0 && !worlds_.empty()) {
+        WorldServer* world = worlds_[0].get();
+        int64_t totalWorldTime = world->getTotalWorldTime();
+        int64_t worldTime = world->getWorldTime();
+
+        std::lock_guard<std::mutex> lock(connectionsMutex_);
+        for (auto& conn : connections_) {
+            if (conn->isConnected() && conn->getState() == ConnectionState::Play) {
+                auto handler = conn->getHandler();
+                auto* playHandler = dynamic_cast<PlayHandler*>(handler.get());
+                if (playHandler) {
+                    playHandler->sendTimeUpdate(*conn, totalWorldTime, worldTime);
+                }
+            }
+        }
+    }
+
     // Periodic status logging (every 6000 ticks = 5 minutes)
     if (ticks > 0 && ticks % 6000 == 0) {
         std::lock_guard<std::mutex> lock(connectionsMutex_);

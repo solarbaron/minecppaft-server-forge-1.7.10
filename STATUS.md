@@ -137,7 +137,7 @@
 - **Sound/Particles** — S28 Effect, S29 SoundEffect, S2A Particle
 - **Explosions** — S27 Explosion
 - **Weather** — S2B ChangeGameState (rain start/stop)
-- **Time** — S03 TimeUpdate — packet implemented, not auto-sent
+- **Time** — ✅ S03 TimeUpdate — auto-sent every 20 ticks (day/night cycle working)
 - **Health** — S06 UpdateHealth — packet implemented, not auto-sent
 - **Block changes** — ✅ S23 BlockChange — working, broadcast on break/place
 
@@ -188,7 +188,7 @@
 1. ~~**Chat→Command bridge**~~ — ✅ Done
 2. ~~**Block breaking/placing**~~ — ✅ Done
 3. **Player visibility** — send S0C SpawnPlayer + S38 PlayerListItem so players see each other
-4. **Time sync** — send S03 TimeUpdate each tick
+4. ~~**Time sync**~~ — ✅ Done (S03 every 20 ticks)
 5. **Health sync** — send S06 UpdateHealth when food/health changes
 6. **Item drops** — EntityItem spawning + S0E SpawnObject + pickup
 7. **Inventory sync** — S30 WindowItems on join, S2F SetSlot on change
