@@ -159,7 +159,7 @@
 - ~~**Survival inventory consumption**~~ — ✅ Block place decrements held stack in survival (creative exempt) + S2F sync
 - ~~**Item drops**~~ — ✅ EntityItem spawn on block break with pickup
 - ~~**Player-to-player visibility**~~ — ✅ S0C SpawnPlayer + S38 PlayerListItem + S13 DestroyEntities working
-- ~~**Combat**~~ — ✅ damage (fist), knockback (S12), hurt animation (S1A), death + respawn
+- ~~**Combat**~~ — ✅ damage (weapon damage table: swords/axes/picks/shovels × 5 materials), armor reduction (vanilla formula), knockback (S12), hurt animation (S1A), death + respawn
 - ~~**Fall damage**~~ — ✅ Server-side: accumulate fallDistance, damage=ceil(dist-3), fall sounds, death message
 - ~~**Drowning**~~ — ✅ Air supply (300 ticks = 15s), depletes in water, 2 damage when exhausted, death message
 - ~~**Suffocation**~~ — ✅ 1 damage/tick when head inside opaque full-cube block (60+ block whitelist), death message
@@ -244,3 +244,4 @@
 30. **ClickWindow (C0E)** — ✅ Done (modes 0-4: left/right click, shift-click, number key swap, creative clone, drop. Cursor item tracking, S32 confirm, window resync)
 31. **Block placement metadata** — ✅ Done (stairs orientation+upside-down, slabs upper/lower, logs axis, torches/ladders wall mount, furnace/chest/pumpkin yaw facing, pistons, buttons, repeaters, anvils)
 32. **Entity equipment display** — ✅ Done (S04 EntityEquipment: held item + 4 armor slots broadcast on join + held item change via C09)
+33. **Weapon damage + armor reduction** — ✅ Done (getWeaponDamage: 25 weapons with Java-parity damage, getTotalArmorValue: 20 armor pieces, applyArmorCalculations formula, attack exhaustion 0.3)

@@ -405,6 +405,88 @@ public:
         return inventory_.getArmorInventory()[armorIdx];
     }
 
+    // Java: SharedMonsterAttributes.attackDamage base=2.0, modified by held weapon
+    // Sword: 4 + matDmg, Axe: 3 + matDmg, Pick: 2 + matDmg, Shovel: 1 + matDmg
+    // matDmg: wood/gold=0, stone=1, iron=2, diamond=3
+    float getWeaponDamage() const {
+        auto held = inventory_.getCurrentItem();
+        if (!held) return 2.0f; // fist
+        int32_t id = held->getItemId();
+        switch (id) {
+            // Swords: 4.0 + material damage
+            case 268: return 4.0f;  // Wooden sword (4+0)
+            case 272: return 5.0f;  // Stone sword (4+1)
+            case 267: return 6.0f;  // Iron sword (4+2)
+            case 276: return 7.0f;  // Diamond sword (4+3)
+            case 283: return 4.0f;  // Golden sword (4+0)
+            // Axes: 3.0 + material damage
+            case 271: return 3.0f;  // Wooden axe (3+0)
+            case 275: return 4.0f;  // Stone axe (3+1)
+            case 258: return 5.0f;  // Iron axe (3+2)
+            case 279: return 6.0f;  // Diamond axe (3+3)
+            case 286: return 3.0f;  // Golden axe (3+0)
+            // Pickaxes: 2.0 + material damage
+            case 270: return 2.0f;  // Wooden pick (2+0)
+            case 274: return 3.0f;  // Stone pick (2+1)
+            case 257: return 4.0f;  // Iron pick (2+2)
+            case 278: return 5.0f;  // Diamond pick (2+3)
+            case 285: return 2.0f;  // Golden pick (2+0)
+            // Shovels: 1.0 + material damage
+            case 269: return 1.0f;  // Wooden shovel (1+0)
+            case 273: return 2.0f;  // Stone shovel (1+1)
+            case 256: return 3.0f;  // Iron shovel (1+2)
+            case 277: return 4.0f;  // Diamond shovel (1+3)
+            case 284: return 1.0f;  // Golden shovel (1+0)
+            default: return 2.0f;   // Unknown item = fist base
+        }
+    }
+
+    // Java: EntityLivingBase.getTotalArmorValue() → sum of ItemArmor.damageReduceAmount
+    // Armor indices: S04 slot 1=boots, 2=legs, 3=chest, 4=helmet
+    // damageReductionAmountArray per material (helmet, chest, legs, boots):
+    //   Leather: [1,3,2,1]=7  Chain: [2,5,4,1]=12  Iron: [2,6,5,2]=15
+    //   Gold: [2,5,3,1]=11  Diamond: [3,8,6,3]=20
+    int32_t getTotalArmorValue() const {
+        int32_t total = 0;
+        for (int16_t slot = 1; slot <= 4; ++slot) {
+            auto armor = getArmorItem(slot);
+            if (!armor) continue;
+            int32_t id = armor->getItemId();
+            // Helmets (slot 4 → armorType 0)
+            // Chestplates (slot 3 → armorType 1)
+            // Leggings (slot 2 → armorType 2)
+            // Boots (slot 1 → armorType 3)
+            switch (id) {
+                // Leather: helmet=1, chest=3, legs=2, boots=1
+                case 298: total += 1; break; // Leather helmet
+                case 299: total += 3; break; // Leather chestplate
+                case 300: total += 2; break; // Leather leggings
+                case 301: total += 1; break; // Leather boots
+                // Chain: helmet=2, chest=5, legs=4, boots=1
+                case 302: total += 2; break; // Chain helmet
+                case 303: total += 5; break; // Chain chestplate
+                case 304: total += 4; break; // Chain leggings
+                case 305: total += 1; break; // Chain boots
+                // Iron: helmet=2, chest=6, legs=5, boots=2
+                case 306: total += 2; break; // Iron helmet
+                case 307: total += 6; break; // Iron chestplate
+                case 308: total += 5; break; // Iron leggings
+                case 309: total += 2; break; // Iron boots
+                // Diamond: helmet=3, chest=8, legs=6, boots=3
+                case 310: total += 3; break; // Diamond helmet
+                case 311: total += 8; break; // Diamond chestplate
+                case 312: total += 6; break; // Diamond leggings
+                case 313: total += 3; break; // Diamond boots
+                // Gold: helmet=2, chest=5, legs=3, boots=1
+                case 314: total += 2; break; // Gold helmet
+                case 315: total += 5; break; // Gold chestplate
+                case 316: total += 3; break; // Gold leggings
+                case 317: total += 1; break; // Gold boots
+            }
+        }
+        return total;
+    }
+
     /**
      * Save player data to world/playerdata/<uuid>.dat
      * Java reference: SaveHandler.writePlayerData()

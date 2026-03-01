@@ -645,24 +645,30 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, int32_t targetEn
 
     // ─── Damage calculation ─────────────────────────────────────────
     // Java: EntityPlayer.attackTargetEntityWithCurrentItem()
-    // Base fist damage = 1.0
-    // TODO: Tool/weapon damage from held item
-    float damage = 1.0f;
+    // Damage from held weapon via attribute modifier system
+    float damage = attacker.getWeaponDamage();
 
-    // Check invulnerability frames (Java: EntityLivingBase.hurtResistantTime)
-    // If target was recently hit, skip
-    // Note: hurtResistantTime is decremented per tick in Java — we check > 0
+    // ─── Armor reduction ────────────────────────────────────────────
+    // Java: EntityLivingBase.applyArmorCalculations()
+    // Formula: damage = damage * (25 - totalArmorValue) / 25.0f
+    int32_t armorValue = target->getTotalArmorValue();
+    if (armorValue > 0) {
+        float reduced = damage * static_cast<float>(25 - armorValue) / 25.0f;
+        damage = reduced;
+    }
+
+    // Skip if no damage
+    if (damage <= 0.0f) return;
 
     // ─── Apply damage ───────────────────────────────────────────────
-    float oldHealth = target->getHealth();
-    float newHealth = std::max(0.0f, oldHealth - damage);
-
-    // Update target's health (need mutable access)
     target->applyDamage(damage);
 
     // Send health update to the victim
     target->sendUpdateHealth(*targetConn, target->getHealth(),
                               target->getFood(), target->getSaturation());
+
+    // Java: EntityPlayer.addExhaustion(0.3f) on attack
+    attacker.getFoodStats().addExhaustion(0.3f);
 
     // ─── Hurt animation (S1A EntityStatus, status=2) ────────────────
     // Java: EntityLivingBase.attackEntityFrom → setEntityState(entity, 2)
