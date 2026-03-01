@@ -54,8 +54,60 @@ public:
     void setDamage(int32_t dmg) { damage_ = dmg < 0 ? 0 : dmg; }
 
     // ─── Stack operations ──────────────────────────────────────────────
-    // Java: ItemStack.getMaxStackSize() — delegates to Item; default 64
-    int32_t getMaxStackSize() const { return 64; }
+    // Java: ItemStack.getMaxStackSize() — delegates to Item.maxStackSize
+    int32_t getMaxStackSize() const {
+        // Items with maxStackSize = 1 (tools, weapons, armor, etc.)
+        switch (itemId_) {
+            // Swords
+            case 268: case 272: case 267: case 276: case 283:
+            // Shovels
+            case 269: case 273: case 256: case 277: case 284:
+            // Pickaxes
+            case 270: case 274: case 257: case 278: case 285:
+            // Axes
+            case 271: case 275: case 258: case 279: case 286:
+            // Hoes
+            case 290: case 291: case 292: case 293: case 294:
+            // Armor (leather 298-301, chain 302-305, iron 306-309, diamond 310-313, gold 314-317)
+            case 298: case 299: case 300: case 301:
+            case 302: case 303: case 304: case 305:
+            case 306: case 307: case 308: case 309:
+            case 310: case 311: case 312: case 313:
+            case 314: case 315: case 316: case 317:
+            // Bow, fishing rod, flint and steel, shears
+            case 261: case 346: case 259: case 359:
+            // Buckets (water=326, lava=327, milk=335, empty=325)
+            case 325: case 326: case 327: case 335:
+            // Boat, minecarts
+            case 333: case 328: case 342: case 343: case 407: case 408:
+            // Saddle, horse armor
+            case 329: case 417: case 418: case 419:
+            // Bed, door items (wood=324, iron=330)
+            case 355: case 324: case 330:
+            // Cake
+            case 354:
+            // Music discs (2256-2267)
+            case 2256: case 2257: case 2258: case 2259: case 2260: case 2261:
+            case 2262: case 2263: case 2264: case 2265: case 2266: case 2267:
+            // Mushroom stew, written book, enchanted book, map, compass, clock
+            case 282: case 387: case 403: case 358: case 345: case 347:
+            // Carrot on a stick
+            case 398:
+            // Potions, water bottle
+            case 373:
+                return 1;
+            // Items with maxStackSize = 16
+            case 344: // Eggs
+            case 332: // Snowballs
+            case 368: // Ender pearls
+            case 323: // Signs
+            case 395: // Empty map
+            case 384: // Bottle o' Enchanting
+                return 16;
+            default:
+                return 64;
+        }
+    }
 
     // Java: ItemStack.isStackable()
     bool isStackable() const { return getMaxStackSize() > 1; }

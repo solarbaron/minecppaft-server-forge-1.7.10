@@ -44,8 +44,9 @@
 - **Materials** — Air, Rock, Wood, Cloth, Fire, Water, Lava, Plants, etc.
 
 ### Crafting
-- **Shaped/Shapeless Recipes** — 11 crafting recipes registered
+- **Shaped/Shapeless Recipes** — 90+ crafting recipes registered (all 5 tool tiers, 5 sword tiers, 4 armor sets, building blocks, utility items, redstone, food, storage blocks)
 - **Smelting** — 22 smelting recipes with XP values
+- **Stack sizes** — per-item max stack sizes (tools/weapons/armor=1, eggs/snowballs/ender pearls=16, default=64)
 
 ### Server
 - **MinecraftServer** — main tick loop (20 TPS), "Can't keep up" detection, connection management
@@ -247,3 +248,4 @@
 33. **Weapon damage + armor reduction** — ✅ Done (getWeaponDamage: 25 weapons with Java-parity damage, getTotalArmorValue: 20 armor pieces, applyArmorCalculations formula, attack exhaustion 0.3)
 34. **2×2 crafting grid** — ✅ Done (InventoryCrafting/InventoryCraftResult IInventory, updateCraftingResult via CraftingManager, ingredient decrement on pickup, shift-click support, CloseWindow drops grid items)
 35. **Item durability** — ✅ Done (getMaxDurability for 50+ items, damageHeldItem on combat/block break, damageArmor damage/4 per piece, sword 2x on block break, creative exempt)
+36. **Item stack sizes + recipe expansion** — ✅ Done (getMaxStackSize per-item lookup: tools/weapons/armor=1, eggs/snowballs=16. Recipes expanded from 11 to 90+: all tools/weapons/armor/building/utility/redstone/food/storage)
