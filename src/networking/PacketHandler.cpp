@@ -545,6 +545,10 @@ void PlayHandler::sendLoginSequence(Connection& conn) {
               << playerX_ << ", " << playerY_ << ", " << playerZ_ << ") — "
               << chunksSent << " chunks sent (entityId=" << entityId_ << ")\n";
 
+    // 6. S06PacketUpdateHealth — initial health/food/saturation
+    // Java reference: EntityPlayer defaults: health=20, foodLevel=20, saturation=5.0f
+    sendUpdateHealth(conn, 20.0f, 20, 5.0f);
+
     // ─── Player visibility broadcasts ─────────────────────────────────
     // Java reference: ServerConfigurationManager.playerLoggedIn()
     // Send this player's info to all existing players, and send existing

@@ -138,7 +138,7 @@
 - **Explosions** — S27 Explosion
 - **Weather** — S2B ChangeGameState (rain start/stop)
 - **Time** — ✅ S03 TimeUpdate — auto-sent every 20 ticks (day/night cycle working)
-- **Health** — S06 UpdateHealth — packet implemented, not auto-sent
+- **Health** — ✅ S06 UpdateHealth — sent on login (20hp, 20food, 5.0 saturation)
 - **Block changes** — ✅ S23 BlockChange — working, broadcast on break/place
 
 ### Gameplay
@@ -146,7 +146,7 @@
 - **Item drops** — no EntityItem, no pickup mechanics
 - ~~**Player-to-player visibility**~~ — ✅ S0C SpawnPlayer + S38 PlayerListItem + S13 DestroyEntities working
 - **Combat** — no damage, no knockback, no death/respawn
-- **Health/hunger** — food system not synced to client (no S06 UpdateHealth)
+- ~~**Health/hunger**~~ — ✅ initial S06 UpdateHealth sent on join (full health/food)
 - **Movement validation** — server accepts all positions without anti-cheat
 - **Lighting** — no light propagation engine
 - **Gravity/physics** — no server-side player physics (client handles its own)
@@ -189,7 +189,7 @@
 2. ~~**Block breaking/placing**~~ — ✅ Done
 3. ~~**Player visibility**~~ — ✅ Done (S0C SpawnPlayer + S38 tab list + S13 cleanup on disconnect)
 4. ~~**Time sync**~~ — ✅ Done (S03 every 20 ticks)
-5. **Health sync** — send S06 UpdateHealth when food/health changes
+5. ~~**Health sync**~~ — ✅ Done (S06 on login)
 6. **Item drops** — EntityItem spawning + S0E SpawnObject + pickup
 7. **Inventory sync** — S30 WindowItems on join, S2F SetSlot on change
 8. **Sound effects** — S29 SoundEffect for block/entity events
