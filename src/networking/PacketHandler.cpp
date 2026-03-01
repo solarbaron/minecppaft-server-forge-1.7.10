@@ -2468,6 +2468,83 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
         return;
     }
 
+    // Trapped Chest (block ID 146) — same as normal chest but sends redstone signal
+    // Java: BlockChest.onBlockActivated() — same behavior
+    if (clickedBlockId == 146 && !isSneaking_) {
+        openChest(conn, blockX, static_cast<int32_t>(blockY), blockZ);
+        return;
+    }
+
+    // Cake (block ID 92) — Java: BlockCake.func_150033_b()
+    // Each right-click eats a slice (metadata 0-6), restores 2 food, plays eating sound
+    if (clickedBlockId == 92 && !isSneaking_) {
+        if (foodStats_.getFoodLevel() < 20) { // Can only eat if not full
+            if (!server_.getWorlds().empty()) {
+                auto& w = server_.getWorlds()[0];
+                int32_t by = static_cast<int32_t>(blockY);
+                int meta = w->getBlockMetadata(blockX, by, blockZ);
+                if (meta < 6) {
+                    // Eat a slice
+                    w->setBlockMetadata(blockX, by, blockZ, meta + 1);
+                    server_.broadcastBlockChange(blockX, by, blockZ, 92, meta + 1);
+                    // Restore 2 food, 0.4 saturation per slice
+                    foodStats_.addStats(2, 0.4f);
+                    sendUpdateHealth(conn, health_, foodStats_.getFoodLevel(), foodStats_.getSaturationLevel());
+                    // Eating sound
+                    server_.broadcastSound("random.eat",
+                        static_cast<double>(blockX) + 0.5, static_cast<double>(by) + 0.5,
+                        static_cast<double>(blockZ) + 0.5, 1.0f, 1.0f);
+                } else {
+                    // Last slice eaten — remove cake
+                    w->setBlock(blockX, by, blockZ, Block::getBlockById(0));
+                    w->setBlockMetadata(blockX, by, blockZ, 0);
+                    server_.broadcastBlockChange(blockX, by, blockZ, 0, 0);
+                    server_.broadcastEffect(2001, blockX, by, blockZ, 92);
+                    foodStats_.addStats(2, 0.4f);
+                    sendUpdateHealth(conn, health_, foodStats_.getFoodLevel(), foodStats_.getSaturationLevel());
+                    server_.broadcastSound("random.eat",
+                        static_cast<double>(blockX) + 0.5, static_cast<double>(by) + 0.5,
+                        static_cast<double>(blockZ) + 0.5, 1.0f, 1.0f);
+                }
+            }
+        }
+        return;
+    }
+
+    // Beacon (block ID 138) — Java: BlockBeacon.onBlockActivated()
+    // Opens beacon GUI (S2D window type 7)
+    if (clickedBlockId == 138 && !isSneaking_) {
+        openWindowId_ = 15;
+        openWindowType_ = 7; // Beacon
+
+        {
+            std::vector<uint8_t> pkt;
+            writeVarInt(pkt, ClientboundPacket::OpenWindow);
+            writeByte(pkt, static_cast<uint8_t>(openWindowId_));
+            writeByte(pkt, 7); // Type 7 = beacon
+            writeString(pkt, "Beacon");
+            writeByte(pkt, 1); // 1 slot (payment slot)
+            writeByte(pkt, 1);
+            conn.sendPacket(std::move(pkt));
+        }
+
+        // S31 WindowProperty — send beacon properties (power level, effect IDs)
+        // Property 0 = power level (0-4)
+        // Property 1 = primary effect
+        // Property 2 = secondary effect
+        for (int i = 0; i < 3; ++i) {
+            std::vector<uint8_t> propPkt;
+            writeVarInt(propPkt, ClientboundPacket::WindowProperty);
+            writeByte(propPkt, static_cast<uint8_t>(openWindowId_));
+            writeShort(propPkt, static_cast<int16_t>(i));
+            writeShort(propPkt, 0); // Default: no power/effects
+            conn.sendPacket(std::move(propPkt));
+        }
+
+        sendWindowItems(conn);
+        return;
+    }
+
     // Note block (25) — play note and increment pitch
     // Java: BlockNote.onBlockActivated()
     // Repeater (block IDs 93=unpowered, 94=powered) — Java: BlockRedstoneRepeater.onBlockActivated()
