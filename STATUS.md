@@ -245,3 +245,4 @@
 31. **Block placement metadata** — ✅ Done (stairs orientation+upside-down, slabs upper/lower, logs axis, torches/ladders wall mount, furnace/chest/pumpkin yaw facing, pistons, buttons, repeaters, anvils)
 32. **Entity equipment display** — ✅ Done (S04 EntityEquipment: held item + 4 armor slots broadcast on join + held item change via C09)
 33. **Weapon damage + armor reduction** — ✅ Done (getWeaponDamage: 25 weapons with Java-parity damage, getTotalArmorValue: 20 armor pieces, applyArmorCalculations formula, attack exhaustion 0.3)
+34. **2×2 crafting grid** — ✅ Done (InventoryCrafting/InventoryCraftResult IInventory, updateCraftingResult via CraftingManager, ingredient decrement on pickup, shift-click support, CloseWindow drops grid items)

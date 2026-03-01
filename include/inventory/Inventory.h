@@ -298,6 +298,93 @@ protected:
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
+// InventoryCraftResult — Single-slot inventory for crafting output.
+// Java reference: net.minecraft.inventory.InventoryCraftResult
+// ═══════════════════════════════════════════════════════════════════════════
+
+class InventoryCraftResult : public IInventory {
+public:
+    int32_t getSizeInventory() const override { return 1; }
+    std::optional<ItemStack> getStackInSlot(int32_t index) const override {
+        return index == 0 ? result_ : std::nullopt;
+    }
+    std::optional<ItemStack> decrStackSize(int32_t index, int32_t count) override {
+        if (index != 0 || !result_) return std::nullopt;
+        auto& s = *result_;
+        if (s.getStackSize() <= count) {
+            auto out = result_;
+            result_ = std::nullopt;
+            return out;
+        }
+        auto split = s.splitStack(count);
+        if (s.getStackSize() <= 0) result_ = std::nullopt;
+        return split;
+    }
+    std::optional<ItemStack> getStackInSlotOnClosing(int32_t index) override {
+        if (index != 0) return std::nullopt;
+        auto out = result_;
+        result_ = std::nullopt;
+        return out;
+    }
+    void setInventorySlotContents(int32_t index, const std::optional<ItemStack>& stack) override {
+        if (index == 0) result_ = stack;
+    }
+    std::string getInventoryName() const override { return "Result"; }
+    bool isCustomInventoryName() const override { return false; }
+    int32_t getInventoryStackLimit() const override { return 64; }
+    void markDirty() override {}
+    bool isItemValidForSlot(int32_t, const ItemStack&) const override { return false; }
+
+private:
+    std::optional<ItemStack> result_;
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// InventoryCrafting — Grid inventory for the 2×2 (or 3×3) crafting area.
+// Java reference: net.minecraft.inventory.InventoryCrafting
+// ═══════════════════════════════════════════════════════════════════════════
+
+class InventoryCrafting : public IInventory {
+public:
+    explicit InventoryCrafting(int32_t size = 4) : items_(size, std::nullopt) {}
+
+    int32_t getSizeInventory() const override { return static_cast<int32_t>(items_.size()); }
+    std::optional<ItemStack> getStackInSlot(int32_t index) const override {
+        if (index >= 0 && index < static_cast<int32_t>(items_.size())) return items_[index];
+        return std::nullopt;
+    }
+    std::optional<ItemStack> decrStackSize(int32_t index, int32_t count) override {
+        if (index < 0 || index >= static_cast<int32_t>(items_.size()) || !items_[index]) return std::nullopt;
+        auto& s = items_[index].value();
+        if (s.getStackSize() <= count) {
+            auto out = items_[index];
+            items_[index] = std::nullopt;
+            return out;
+        }
+        auto split = s.splitStack(count);
+        if (s.getStackSize() <= 0) items_[index] = std::nullopt;
+        return split;
+    }
+    std::optional<ItemStack> getStackInSlotOnClosing(int32_t index) override {
+        if (index < 0 || index >= static_cast<int32_t>(items_.size())) return std::nullopt;
+        auto out = items_[index];
+        items_[index] = std::nullopt;
+        return out;
+    }
+    void setInventorySlotContents(int32_t index, const std::optional<ItemStack>& stack) override {
+        if (index >= 0 && index < static_cast<int32_t>(items_.size())) items_[index] = stack;
+    }
+    std::string getInventoryName() const override { return "container.crafting"; }
+    bool isCustomInventoryName() const override { return false; }
+    int32_t getInventoryStackLimit() const override { return 64; }
+    void markDirty() override {}
+    bool isItemValidForSlot(int32_t, const ItemStack&) const override { return true; }
+
+private:
+    std::vector<std::optional<ItemStack>> items_;
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
 // ContainerPlayer — The player's default inventory container.
 // Java reference: net.minecraft.inventory.ContainerPlayer
 //
@@ -315,6 +402,18 @@ public:
     explicit ContainerPlayer(InventoryPlayer& playerInventory);
 
     bool canInteractWith() const override { return true; }
+
+    // Java: ContainerPlayer.onCraftMatrixChanged() + CraftingManager.findMatchingRecipe()
+    // Call after any change to crafting grid slots (1-4) to update output (slot 0)
+    void updateCraftingResult();
+
+    // Access the crafting inventories (for dropping items on close)
+    InventoryCrafting& getCraftMatrix() { return craftMatrix_; }
+    InventoryCraftResult& getCraftResult() { return craftResult_; }
+
+private:
+    InventoryCrafting craftMatrix_{4};      // 2×2 crafting grid
+    InventoryCraftResult craftResult_;       // Crafting output
 };
 
 } // namespace mccpp

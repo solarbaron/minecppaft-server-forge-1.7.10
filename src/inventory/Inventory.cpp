@@ -16,6 +16,7 @@
  */
 
 #include "inventory/Inventory.h"
+#include "crafting/Crafting.h"
 
 #include <algorithm>
 
@@ -204,20 +205,16 @@ ContainerPlayer::ContainerPlayer(InventoryPlayer& playerInventory) {
     // Reference: net.minecraft.inventory.ContainerPlayer
     //
     // Full layout (45 slots):
-    //   0:      Crafting output (InventoryCraftResult, not backed by player inv)
-    //   1-4:    Crafting grid (2x2) (InventoryCrafting, not backed by player inv)
+    //   0:      Crafting output (InventoryCraftResult)
+    //   1-4:    Crafting grid (2x2) (InventoryCrafting)
     //   5-8:    Armor (head=5, chest=6, legs=7, feet=8)
     //   9-35:   Main inventory
     //   36-44:  Hotbar
 
     // Slot 0: Crafting output
     // Java: this.addSlotToContainer(new SlotCrafting(..., craftResult, 0, 144, 36))
-    // Use playerInventory as placeholder since we don't have InventoryCraftResult yet
-    // This references an unused area of playerInventory just to fill the slot
     addSlotToContainer(std::make_unique<Slot>(
-        &playerInventory,
-        0,  // Dummy slot index — won't be used for actual crafting
-        144, 36
+        &craftResult_, 0, 144, 36
     ));
 
     // Slots 1-4: Crafting grid (2x2)
@@ -225,8 +222,8 @@ ContainerPlayer::ContainerPlayer(InventoryPlayer& playerInventory) {
     for (int32_t row = 0; row < 2; ++row) {
         for (int32_t col = 0; col < 2; ++col) {
             addSlotToContainer(std::make_unique<Slot>(
-                &playerInventory,
-                0,  // Dummy slot index — won't be used for actual crafting
+                &craftMatrix_,
+                col + row * 2,  // Linear index into 2x2 grid
                 88 + col * 18,
                 26 + row * 18
             ));
@@ -268,6 +265,18 @@ ContainerPlayer::ContainerPlayer(InventoryPlayer& playerInventory) {
             142
         ));
     }
+}
+
+void ContainerPlayer::updateCraftingResult() {
+    // Java: ContainerPlayer.onCraftMatrixChanged() → CraftingManager.findMatchingRecipe()
+    // Build a CraftingGrid from the 2x2 matrix and check against registered recipes
+    CraftingGrid grid(2, 2);
+    for (int32_t i = 0; i < 4; ++i) {
+        grid.setStack(i % 2, i / 2, craftMatrix_.getStackInSlot(i));
+    }
+
+    auto result = CraftingManager::getInstance().findMatchingRecipe(grid);
+    craftResult_.setInventorySlotContents(0, result);
 }
 
 } // namespace mccpp

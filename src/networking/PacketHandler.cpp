@@ -639,6 +639,22 @@ void PlayHandler::handlePacket(int32_t packetId,
                     cursorItem_->getItemId(), cursorItem_->getDamage(), cursorItem_->getStackSize());
                 cursorItem_ = std::nullopt;
             }
+            // Drop crafting grid items (slots 1-4) — Java: ContainerPlayer.onContainerClosed
+            if (container_) {
+                for (int32_t i = 1; i <= 4; ++i) {
+                    Slot* gridSlot = container_->getSlot(i);
+                    if (!gridSlot) continue;
+                    auto gridStack = gridSlot->getStack();
+                    if (gridStack) {
+                        server_.spawnItemDrop(playerX_, playerY_ + 1.5, playerZ_,
+                            gridStack->getItemId(), gridStack->getDamage(), gridStack->getStackSize());
+                        gridSlot->putStack(std::nullopt);
+                    }
+                }
+                // Clear crafting output
+                Slot* outputSlot = container_->getSlot(0);
+                if (outputSlot) outputSlot->putStack(std::nullopt);
+            }
             break;
         case ServerboundPacket::ClickWindow:
             handleClickWindow(data, length, conn);
@@ -2050,6 +2066,8 @@ void PlayHandler::handleClickWindow(const uint8_t* data, size_t length, Connecti
     // Helper: sync entire window to client after state change
     auto syncWindow = [&]() {
         if (!container_) return;
+        // Update crafting output whenever anything changes
+        container_->updateCraftingResult();
         for (int32_t i = 0; i < slotCount; ++i) {
             Slot* s = container_->getSlot(i);
             if (s) {
@@ -2104,6 +2122,31 @@ void PlayHandler::handleClickWindow(const uint8_t* data, size_t length, Connecti
         if (!slot) { sendConfirm(false); return; }
 
         auto slotStack = slot->getStack();
+
+        // ─── Special handling for crafting output (slot 0) ──────────
+        // Java: SlotCrafting.onPickupFromSlot() — decrement ingredients
+        if (slotId == 0 && slotStack && !cursorItem_) {
+            // Pick up the crafting result
+            cursorItem_ = slotStack;
+            slot->putStack(std::nullopt);
+            // Decrement each ingredient in the 2×2 crafting grid (slots 1-4)
+            for (int32_t i = 1; i <= 4; ++i) {
+                Slot* gridSlot = container_->getSlot(i);
+                if (!gridSlot) continue;
+                auto gridStack = gridSlot->getStack();
+                if (!gridStack) continue;
+                int32_t newSize = gridStack->getStackSize() - 1;
+                if (newSize <= 0) {
+                    gridSlot->putStack(std::nullopt);
+                } else {
+                    gridStack->setStackSize(newSize);
+                    gridSlot->putStack(gridStack);
+                }
+            }
+            sendConfirm(true);
+            syncWindow();
+            return;
+        }
 
         if (!slotStack) {
             // Empty slot — place cursor item into it
@@ -2274,6 +2317,23 @@ void PlayHandler::handleClickWindow(const uint8_t* data, size_t length, Connecti
             slot->putStack(std::nullopt);
         } else {
             slot->putStack(toMove);
+        }
+
+        // If we moved items from the crafting output (slot 0), decrement ingredients
+        if (slotId == 0 && moved) {
+            for (int32_t i = 1; i <= 4; ++i) {
+                Slot* gridSlot = container_->getSlot(i);
+                if (!gridSlot) continue;
+                auto gridStack = gridSlot->getStack();
+                if (!gridStack) continue;
+                int32_t newSize = gridStack->getStackSize() - 1;
+                if (newSize <= 0) {
+                    gridSlot->putStack(std::nullopt);
+                } else {
+                    gridStack->setStackSize(newSize);
+                    gridSlot->putStack(gridStack);
+                }
+            }
         }
 
         sendConfirm(true);
