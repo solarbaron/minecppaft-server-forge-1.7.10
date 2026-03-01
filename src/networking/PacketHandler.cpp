@@ -1116,7 +1116,9 @@ void PlayHandler::sendEntityMetadataItem(Connection& conn, int32_t entityId,
     writeShort(pkt, itemId);
     writeByte(pkt, static_cast<uint8_t>(stackSize));
     writeShort(pkt, damage);
-    writeByte(pkt, 0); // No NBT tag (TAG_End = 0)
+    // NBT tag: Java readItemStackFromBuffer calls readNBTTagCompoundFromBuffer
+    // which does readShort() — Short(-1) = no NBT tag
+    writeShort(pkt, -1);
     writeByte(pkt, 0x7F); // DataWatcher terminator
     conn.sendPacket(std::move(pkt));
 }
