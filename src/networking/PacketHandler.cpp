@@ -2190,6 +2190,131 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
         return;
     }
 
+    // ─── Interactive blocks (metadata toggle + sound + block change) ──────
+    // Java reference: Block.onBlockActivated() for each block type
+
+    // Wooden door (64) — toggle open/close via metadata bit 0x04
+    // Java: BlockDoor.onBlockActivated()
+    if (clickedBlockId == 64 && !isSneaking_) {
+        if (!server_.getWorlds().empty()) {
+            auto& world = server_.getWorlds()[0];
+            int32_t by = static_cast<int32_t>(blockY);
+            int meta = world->getBlockMetadata(blockX, by, blockZ);
+            // Check if upper/lower half
+            if (meta & 0x08) {
+                // Upper half — toggle the lower half
+                by -= 1;
+                meta = world->getBlockMetadata(blockX, by, blockZ);
+            }
+            int newMeta = meta ^ 0x04; // Toggle open bit
+            world->setBlockMetadata(blockX, by, blockZ, newMeta);
+            server_.broadcastBlockChange(blockX, by, blockZ, 64, newMeta);
+            // Also update the other half
+            int32_t otherY = (meta & 0x08) ? by - 1 : by + 1;
+            server_.broadcastBlockChange(blockX, otherY, blockZ, 64,
+                world->getBlockMetadata(blockX, otherY, blockZ));
+            server_.broadcastSound((newMeta & 0x04) ? "random.door_open" : "random.door_close",
+                static_cast<double>(blockX) + 0.5, static_cast<double>(by) + 0.5,
+                static_cast<double>(blockZ) + 0.5, 1.0f, 1.0f);
+        }
+        return;
+    }
+
+    // Trapdoor (96) — toggle open/close via metadata bit 0x04
+    // Java: BlockTrapDoor.onBlockActivated()
+    if (clickedBlockId == 96 && !isSneaking_) {
+        if (!server_.getWorlds().empty()) {
+            auto& world = server_.getWorlds()[0];
+            int32_t by = static_cast<int32_t>(blockY);
+            int meta = world->getBlockMetadata(blockX, by, blockZ);
+            int newMeta = meta ^ 0x04;
+            world->setBlockMetadata(blockX, by, blockZ, newMeta);
+            server_.broadcastBlockChange(blockX, by, blockZ, 96, newMeta);
+            server_.broadcastSound((newMeta & 0x04) ? "random.door_open" : "random.door_close",
+                static_cast<double>(blockX) + 0.5, static_cast<double>(by) + 0.5,
+                static_cast<double>(blockZ) + 0.5, 1.0f, 1.0f);
+        }
+        return;
+    }
+
+    // Fence gate (107) — toggle open/close via metadata bit 0x04
+    // Java: BlockFenceGate.onBlockActivated()
+    if (clickedBlockId == 107 && !isSneaking_) {
+        if (!server_.getWorlds().empty()) {
+            auto& world = server_.getWorlds()[0];
+            int32_t by = static_cast<int32_t>(blockY);
+            int meta = world->getBlockMetadata(blockX, by, blockZ);
+            int newMeta = meta ^ 0x04;
+            world->setBlockMetadata(blockX, by, blockZ, newMeta);
+            server_.broadcastBlockChange(blockX, by, blockZ, 107, newMeta);
+            server_.broadcastSound((newMeta & 0x04) ? "random.door_open" : "random.door_close",
+                static_cast<double>(blockX) + 0.5, static_cast<double>(by) + 0.5,
+                static_cast<double>(blockZ) + 0.5, 1.0f, 1.0f);
+        }
+        return;
+    }
+
+    // Lever (69) — toggle on/off via metadata bit 0x08
+    // Java: BlockLever.onBlockActivated()
+    if (clickedBlockId == 69 && !isSneaking_) {
+        if (!server_.getWorlds().empty()) {
+            auto& world = server_.getWorlds()[0];
+            int32_t by = static_cast<int32_t>(blockY);
+            int meta = world->getBlockMetadata(blockX, by, blockZ);
+            int newMeta = meta ^ 0x08;
+            world->setBlockMetadata(blockX, by, blockZ, newMeta);
+            server_.broadcastBlockChange(blockX, by, blockZ, 69, newMeta);
+            server_.broadcastSound("random.click",
+                static_cast<double>(blockX) + 0.5, static_cast<double>(by) + 0.5,
+                static_cast<double>(blockZ) + 0.5, 0.3f,
+                (newMeta & 0x08) ? 0.6f : 0.5f);
+        }
+        return;
+    }
+
+    // Stone button (77), wooden button (143) — momentary press via metadata bit 0x08
+    // Java: BlockButton.onBlockActivated()
+    if ((clickedBlockId == 77 || clickedBlockId == 143) && !isSneaking_) {
+        if (!server_.getWorlds().empty()) {
+            auto& world = server_.getWorlds()[0];
+            int32_t by = static_cast<int32_t>(blockY);
+            int meta = world->getBlockMetadata(blockX, by, blockZ);
+            if (!(meta & 0x08)) { // Not already pressed
+                int newMeta = meta | 0x08;
+                world->setBlockMetadata(blockX, by, blockZ, newMeta);
+                server_.broadcastBlockChange(blockX, by, blockZ, clickedBlockId, newMeta);
+                server_.broadcastSound("random.click",
+                    static_cast<double>(blockX) + 0.5, static_cast<double>(by) + 0.5,
+                    static_cast<double>(blockZ) + 0.5, 0.3f, 0.6f);
+                // Note: auto-reset after 20/30 ticks not implemented (needs scheduled tick)
+            }
+        }
+        return;
+    }
+
+    // Note block (25) — play note and increment pitch
+    // Java: BlockNote.onBlockActivated()
+    if (clickedBlockId == 25 && !isSneaking_) {
+        if (!server_.getWorlds().empty()) {
+            auto& world = server_.getWorlds()[0];
+            int32_t by = static_cast<int32_t>(blockY);
+            int meta = world->getBlockMetadata(blockX, by, blockZ);
+            int newMeta = (meta + 1) % 25; // 0-24 pitch range
+            world->setBlockMetadata(blockX, by, blockZ, newMeta);
+            // Play note — S28 Block Action (noteblock event)
+            float pitch = std::pow(2.0f, static_cast<float>(newMeta - 12) / 12.0f);
+            server_.broadcastSound("note.harp",
+                static_cast<double>(blockX) + 0.5, static_cast<double>(by) + 0.5,
+                static_cast<double>(blockZ) + 0.5, 3.0f, pitch);
+            // Spawn note particle
+            server_.broadcastParticle("note",
+                static_cast<float>(blockX) + 0.5f, static_cast<float>(by) + 1.2f,
+                static_cast<float>(blockZ) + 0.5f,
+                static_cast<float>(newMeta) / 24.0f, 0.0f, 0.0f, 0.0f, 1);
+        }
+        return;
+    }
+
     // Calculate the position of the new block based on the face clicked
     // Java reference: same offset logic as processPlayerBlockPlacement
     int32_t placeX = blockX;
