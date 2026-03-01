@@ -774,12 +774,85 @@ void PlayHandler::handleChatMessage(const uint8_t* data, size_t length, Connecti
         return;
     }
 
-    std::cout << "[Chat] <" << playerName_ << "> " << message << "\n";
+    if (!message.empty() && message[0] == '/') {
+        // Java: NetHandlerPlayServer.processChatMessage() -> handleSlashCommand()
+        // Dispatch command via CommandHandler
+        std::cout << "[Command] " << playerName_ << " issued: " << message << "\n";
 
-    // Broadcast to all connections (echo format: <PlayerName> message)
-    // For now, just echo back to the sender
-    std::string formatted = "<" + playerName_ + "> " + message;
-    sendChatMessage(conn, formatted);
+        // Create a PlayerCommandSender that routes addChatMessage() back to this client
+        // Java: EntityPlayerMP implements ICommandSender
+        class PlayerCommandSender : public ICommandSender {
+        public:
+            PlayerCommandSender(PlayHandler& handler, Connection& conn, const std::string& name)
+                : handler_(handler), conn_(conn), name_(name) {}
+            std::string getCommandSenderName() const override { return name_; }
+            void addChatMessage(const std::string& msg) override {
+                handler_.sendChatMessage(conn_, msg);
+            }
+            bool canCommandSenderUseCommand(int32_t /*permLevel*/, const std::string& /*cmd*/) const override {
+                return true; // All players are ops in offline mode for now
+            }
+        private:
+            PlayHandler& handler_;
+            Connection& conn_;
+            std::string name_;
+        };
+
+        PlayerCommandSender sender(*this, conn, playerName_);
+        server_.getCommandHandler().executeCommand(sender, message);
+    } else {
+        // Regular chat message — broadcast to all players
+        std::cout << "[Chat] <" << playerName_ << "> " << message << "\n";
+        std::string formatted = "<" + playerName_ + "> " + message;
+        server_.broadcastChatMessage(formatted);
+    }
+}
+
+void PlayHandler::sendTimeUpdate(Connection& conn, int64_t worldAge, int64_t timeOfDay) {
+    // Java reference: S03PacketTimeUpdate
+    // Format: Long worldAge, Long timeOfDay
+    std::vector<uint8_t> pkt;
+    writeVarInt(pkt, ClientboundPacket::TimeUpdate);
+    writeLong(pkt, worldAge);
+    writeLong(pkt, timeOfDay);
+    conn.sendPacket(std::move(pkt));
+}
+
+void PlayHandler::sendUpdateHealth(Connection& conn, float health, int32_t food, float saturation) {
+    // Java reference: S06PacketUpdateHealth
+    // Format: Float health, VarInt food, Float foodSaturation
+    std::vector<uint8_t> pkt;
+    writeVarInt(pkt, ClientboundPacket::UpdateHealth);
+    writeFloat(pkt, health);
+    writeVarInt(pkt, food);
+    writeFloat(pkt, saturation);
+    conn.sendPacket(std::move(pkt));
+}
+
+void PlayHandler::sendBlockChange(Connection& conn, int32_t x, int32_t y, int32_t z,
+                                    int32_t blockId, int32_t metadata) {
+    // Java reference: S23PacketBlockChange
+    // Format: Int x, UByte y, Int z, VarInt blockType, UByte metadata
+    std::vector<uint8_t> pkt;
+    writeVarInt(pkt, ClientboundPacket::BlockChange);
+    writeInt(pkt, x);
+    writeByte(pkt, static_cast<uint8_t>(y));
+    writeInt(pkt, z);
+    writeVarInt(pkt, blockId);
+    writeByte(pkt, static_cast<uint8_t>(metadata));
+    conn.sendPacket(std::move(pkt));
+}
+
+void PlayHandler::sendPlayerListItem(Connection& conn, const std::string& playerName,
+                                       bool online, int16_t ping) {
+    // Java reference: S38PacketPlayerListItem
+    // Format: String playerName, Boolean online, Short ping  
+    std::vector<uint8_t> pkt;
+    writeVarInt(pkt, ClientboundPacket::PlayerListItem);
+    writeString(pkt, playerName);
+    writeBool(pkt, online);
+    writeShort(pkt, ping);
+    conn.sendPacket(std::move(pkt));
 }
 
 void PlayHandler::handlePlayerPosition(const uint8_t* data, size_t length, Connection& /*conn*/) {

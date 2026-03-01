@@ -15,7 +15,7 @@
 - **Status** (Server List Ping) — responds with MOTD, player count, protocol info, ping/pong
 - **Login** — offline-mode auth, MD5-based UUID generation, LoginSuccess packet
 - **Play State Transition** — Login→Play state change, handler swap
-- **Play Packets Handled:** KeepAlive (echo), ChatMessage, Player/PlayerPosition/PlayerLook/PlayerPosAndLook, ClientSettings, PluginMessage (silently consumed), PlayerAbilities
+- **Play Packets Handled:** KeepAlive (echo), ChatMessage (with `/` command dispatch), Player/PlayerPosition/PlayerLook/PlayerPosAndLook, ClientSettings, PluginMessage (silently consumed), PlayerAbilities
 - **Play Packets Silently Consumed:** HeldItemChange, Animation, EntityAction, PlayerDigging, PlayerBlockPlace, CloseWindow, ClickWindow, ConfirmTransaction, CreativeInventory, UpdateSign, UseEntity, SteerVehicle, TabComplete, EnchantItem, ClientStatus
 
 ### Login Sequence (sent to client on join)
@@ -53,21 +53,21 @@
 
 ## 🔶 Partially Implemented (Headers + Stubs)
 
-### Commands (12 commands registered, no client-side dispatch yet)
+### Commands (12 commands, chat→command bridge ✅)
 | Command | Status |
 |---------|--------|
-| `/stop` | Server-side only (no chat→command bridge) |
-| `/say` | Server-side only |
-| `/help` | Server-side only |
-| `/gamemode` | Server-side only |
-| `/time` | Server-side only |
-| `/give` | Server-side only |
-| `/tp` | Server-side only |
-| `/gamerule` | Server-side only |
-| `/difficulty` | Server-side only |
-| `/seed` | Server-side only |
-| `/list` | Server-side only |
-| `/kill` | Server-side only |
+| `/stop` | ✅ Working via chat |
+| `/say` | ✅ Working via chat |
+| `/help` | ✅ Working via chat |
+| `/gamemode` | ✅ Working via chat (no actual mode change yet) |
+| `/time` | ✅ Working via chat (no actual time change yet) |
+| `/give` | ✅ Working via chat (no actual item give yet) |
+| `/tp` | ✅ Working via chat (no actual teleport yet) |
+| `/gamerule` | ✅ Working via chat |
+| `/difficulty` | ✅ Working via chat |
+| `/seed` | ✅ Working via chat |
+| `/list` | ✅ Working via chat |
+| `/kill` | ✅ Working via chat (no actual kill yet) |
 
 ### Entity System
 - **Entity base** — ID counter, UUID, position/rotation, bounding box
@@ -132,12 +132,14 @@
 - **Block changes** — S23 BlockChange, S22 MultiBlockChange
 - **Entity packets** — S0C SpawnPlayer, S0E SpawnObject, S0F SpawnMob, S12 EntityVelocity, S14 Entity, S15 EntityRelMove, S16 EntityLook, S17 EntityLookRelMove, S18 EntityTeleport, S19 EntityHeadLook, S1A EntityStatus, S1B AttachEntity, S1C EntityMetadata, S1D EntityEffect, S1E RemoveEntityEffect
 - **Inventory** — S2D OpenWindow, S2E CloseWindow, S2F SetSlot, S30 WindowItems, S31 WindowProperty, S32 ConfirmTransaction
-- **Chat** — S02 ChatMessage (outbound, for command responses)
-- **Player Info** — S38 PlayerListItem (tab list)
+- **Chat** — ✅ S02 ChatMessage (outbound, for command responses and chat broadcast)
+- **Player Info** — S38 PlayerListItem (tab list) — packet implemented, not auto-sent
 - **Sound/Particles** — S28 Effect, S29 SoundEffect, S2A Particle
 - **Explosions** — S27 Explosion
 - **Weather** — S2B ChangeGameState (rain start/stop)
-- **Time** — S03 TimeUpdate
+- **Time** — S03 TimeUpdate — packet implemented, not auto-sent
+- **Health** — S06 UpdateHealth — packet implemented, not auto-sent
+- **Block changes** — S23 BlockChange — packet implemented, not auto-sent
 
 ### Gameplay
 - **Block breaking/placing** — PlayerDigging/PlayerBlockPlace not processed
@@ -183,7 +185,7 @@
 
 ## 🎯 Recommended Next Priorities
 
-1. **Chat→Command bridge** — wire incoming chat messages starting with `/` to CommandHandler
+1. ~~**Chat→Command bridge**~~ — ✅ Done
 2. **Block breaking/placing** — handle PlayerDigging + PlayerBlockPlace, send S23 BlockChange
 3. **Player visibility** — send S0C SpawnPlayer + S38 PlayerListItem so players see each other
 4. **Time sync** — send S03 TimeUpdate each tick

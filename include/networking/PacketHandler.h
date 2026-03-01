@@ -17,6 +17,8 @@
 #include <string>
 #include <vector>
 
+#include "command/CommandSystem.h"
+
 namespace mccpp {
 
 class Connection;      // forward decl
@@ -190,6 +192,34 @@ public:
 
     const std::string& getPlayerName() const { return playerName_; }
     int getKeepAliveId() const { return lastKeepAliveId_; }
+
+    // ─── Outbound Play Packets ─────────────────────────────────────────
+
+    /**
+     * Send a time update to the client.
+     * Java reference: S03PacketTimeUpdate
+     */
+    void sendTimeUpdate(Connection& conn, int64_t worldAge, int64_t timeOfDay);
+
+    /**
+     * Send health/food/saturation update to the client.
+     * Java reference: S06PacketUpdateHealth
+     */
+    void sendUpdateHealth(Connection& conn, float health, int32_t food, float saturation);
+
+    /**
+     * Send a block change to the client.
+     * Java reference: S23PacketBlockChange
+     */
+    void sendBlockChange(Connection& conn, int32_t x, int32_t y, int32_t z,
+                         int32_t blockId, int32_t metadata);
+
+    /**
+     * Send player list item (tab list) update.
+     * Java reference: S38PacketPlayerListItem
+     */
+    void sendPlayerListItem(Connection& conn, const std::string& playerName,
+                            bool online, int16_t ping);
 
 private:
     void handleKeepAlive(const uint8_t* data, size_t length, Connection& conn);

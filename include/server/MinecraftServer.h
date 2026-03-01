@@ -19,6 +19,8 @@
 #include <thread>
 #include <vector>
 
+#include "command/CommandSystem.h"
+
 namespace mccpp {
 
 class TcpListener;   // forward decl
@@ -96,6 +98,18 @@ public:
     const std::vector<std::unique_ptr<WorldServer>>& getWorlds() const { return worlds_; }
 
     /**
+     * Get the command handler for dispatching commands.
+     * Java reference: MinecraftServer.getCommandManager()
+     */
+    CommandHandler& getCommandHandler() { return commandHandler_; }
+
+    /**
+     * Broadcast a chat message to all connected players.
+     * Java reference: MinecraftServer.addChatMessage / PlayerList.sendChatMsg
+     */
+    void broadcastChatMessage(const std::string& message);
+
+    /**
      * Register a new client connection (called from TcpListener callback).
      * Thread-safe.
      */
@@ -137,6 +151,9 @@ private:
 
     // ─── Worlds ──────────────────────────────────────────────────────────
     std::vector<std::unique_ptr<WorldServer>> worlds_;
+
+    // ─── Commands ────────────────────────────────────────────────────────
+    CommandHandler commandHandler_;
 
     // ─── Timing (Java reference: MinecraftServer.run() tick timing) ─────
     using Clock = std::chrono::steady_clock;

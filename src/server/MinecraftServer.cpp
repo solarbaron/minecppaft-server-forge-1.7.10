@@ -209,4 +209,20 @@ void MinecraftServer::onClientAccepted(int fd, const std::string& address, uint1
     addConnection(conn);
 }
 
+void MinecraftServer::broadcastChatMessage(const std::string& message) {
+    // Java reference: PlayerList.sendChatMsg(IChatComponent)
+    // Send to all players in Play state
+    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    for (auto& conn : connections_) {
+        if (conn->isConnected() && conn->getState() == ConnectionState::Play) {
+            auto handler = conn->getHandler();
+            auto* playHandler = dynamic_cast<PlayHandler*>(handler.get());
+            if (playHandler) {
+                playHandler->sendChatMessage(*conn, message);
+            }
+        }
+    }
+}
+
 } // namespace mccpp
+
