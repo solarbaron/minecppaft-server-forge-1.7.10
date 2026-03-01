@@ -148,7 +148,9 @@
 - **Chunk streaming** — ✅ Dynamic S21 send/unload as player moves across chunk boundaries
 
 ### Gameplay
-- ~~**Block breaking/placing**~~ — ✅ PlayerDigging/PlayerBlockPlace handled, instant break + face-offset placement
+- ~~**Block breaking/placing**~~ — ✅ PlayerDigging/PlayerBlockPlace handled; **creative instant-break** (no drops), **survival timed break** (status 0→2 with drop table), hardness-0 instant-break, unbreakable rejection
+- ~~**Block drop tables**~~ — ✅ 60+ entries matching Java `getItemDropped` (stone→cobblestone, coal ore→coal, diamond ore→diamond, etc.)
+- ~~**Material break sounds**~~ — ✅ 8 sound types (dig.stone/wood/grass/gravel/sand/cloth/snow/glass) mapped by block ID
 - ~~**Item drops**~~ — ✅ EntityItem spawn on block break with pickup
 - ~~**Player-to-player visibility**~~ — ✅ S0C SpawnPlayer + S38 PlayerListItem + S13 DestroyEntities working
 - ~~**Combat**~~ — ✅ damage (fist), knockback (S12), hurt animation (S1A), death + respawn
@@ -219,3 +221,4 @@
 19. **Chunk streaming** — ✅ Done (dynamic S21 send/unload on player movement, VIEW_DISTANCE=7, sorted by distance)
 20. **Experience sync** — ✅ Done (S1F SetExperience sent on login)
 21. **Protocol audit** — ✅ Done (all 24 packet functions verified against Java references — field widths correct)
+22. **Survival block breaking** — ✅ Done (creative/survival split, timed break, 60+ drop table entries, material sounds, exhaustion)

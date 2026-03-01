@@ -1230,6 +1230,8 @@ void PlayHandler::handleClientSettings(const uint8_t* data, size_t length, Conne
 
 void PlayHandler::handlePlayerDigging(const uint8_t* data, size_t length, Connection& conn) {
     // Java reference: NetHandlerPlayServer.processPlayerDigging()
+    // → ItemInWorldManager.onBlockClicked() (status 0)
+    // → ItemInWorldManager.blockRemoving() (status 2)
     // C07PacketPlayerDigging format:
     //   UByte status, Int blockX, UByte blockY, Int blockZ, UByte face
     if (length < 11) return;
@@ -1242,9 +1244,9 @@ void PlayHandler::handlePlayerDigging(const uint8_t* data, size_t length, Connec
     (void)face;
 
     // Status values:
-    // 0 = Started digging (in creative: instant break)
+    // 0 = Started digging (creative: instant break; survival: start)
     // 1 = Cancelled digging
-    // 2 = Finished digging
+    // 2 = Finished digging (survival: break the block)
     // 3 = Drop item stack
     // 4 = Drop item
     // 5 = Shoot arrow / finish eating
@@ -1270,41 +1272,305 @@ void PlayHandler::handlePlayerDigging(const uint8_t* data, size_t length, Connec
     if (worlds.empty()) return;
     WorldServer* world = worlds[0].get();
 
-    if (status == 0 || status == 2) {
-        // Java: status 0 = start digging. In creative mode, instant break.
-        // Status 2 = finished digging (survival). We treat both as instant break for now.
-        Block* existingBlock = world->getBlock(blockX, blockY, blockZ);
-        if (existingBlock && Block::getIdFromBlock(existingBlock) != 0) {
-            int32_t brokenBlockId = Block::getIdFromBlock(existingBlock);
-            int32_t brokenMeta = world->getBlockMetadata(blockX, blockY, blockZ);
+    // ─── Helper: get the break sound for a block's material ────────────
+    // Java reference: Block$SoundType — each block has a stepSound
+    // dig.stone, dig.wood, dig.gravel, dig.grass, dig.cloth, dig.sand, dig.snow, dig.glass
+    auto getBreakSound = [](int32_t blockId) -> const char* {
+        // Check material type based on block ID
+        // Java reference: Block.registerBlocks() sets stepSound per block
+        switch (blockId) {
+            // Wood family — dig.wood
+            case 5:   // planks
+            case 17:  // log
+            case 25:  // noteblock
+            case 47:  // bookshelf
+            case 50:  // torch
+            case 53:  // oak_stairs
+            case 54:  // chest
+            case 58:  // crafting_table
+            case 63:  // sign
+            case 64:  // wooden_door
+            case 84:  // jukebox
+            case 85:  // fence
+            case 96:  // trapdoor
+            case 107: // fence_gate
+            case 125: // double_wooden_slab
+            case 126: // wooden_slab
+            case 134: case 135: case 136: // spruce/birch/jungle stairs
+            case 143: // wooden button
+            case 154: // hopper
+            case 162: // log2
+            case 163: case 164: // acacia/dark_oak stairs
+                return "dig.wood";
 
-            // Set to air (block ID 0)
+            // Grass family — dig.grass
+            case 2:   // grass
+            case 6:   // sapling
+            case 18:  // leaves
+            case 31:  // tallgrass
+            case 32:  // deadbush
+            case 37:  case 38: // flowers
+            case 39:  case 40: // mushrooms
+            case 86:  case 91: // pumpkin
+            case 83:  // reeds
+            case 104: case 105: // stems
+            case 106: // vine
+            case 111: // waterlily
+            case 161: // leaves2
+            case 170: // hay_block
+            case 175: // double_plant
+                return "dig.grass";
+
+            // Gravel/dirt — dig.gravel
+            case 3:   // dirt
+            case 13:  // gravel
+            case 60:  // farmland
+            case 110: // mycelium
+                return "dig.gravel";
+
+            // Sand — dig.sand
+            case 12:  // sand
+            case 88:  // soul_sand
+                return "dig.sand";
+
+            // Cloth — dig.cloth
+            case 35:  // wool
+            case 81:  // cactus
+            case 92:  // cake
+            case 171: // carpet
+                return "dig.cloth";
+
+            // Snow — dig.snow
+            case 78:  // snow_layer
+            case 80:  // snow
+                return "dig.snow";
+
+            // Glass — dig.glass (actually uses random.glass usually)
+            case 20:  // glass
+            case 79:  // ice
+            case 89:  // glowstone
+            case 95:  // stained_glass
+            case 102: // glass_pane
+            case 160: // stained_glass_pane
+            case 174: // packed_ice
+                return "dig.glass";
+
+            // Metal — dig.stone with higher pitch
+            case 27: case 28: case 66: case 157: // rails
+            case 41: case 42: case 57: case 133: // metal blocks
+            case 52:  // mob_spawner
+            case 71:  // iron_door
+            case 101: // iron_bars
+            case 145: // anvil
+                return "dig.stone";
+
+            // Default: stone for most blocks
+            default:
+                return "dig.stone";
+        }
+    };
+
+    // ─── Helper: get the item drop for a block ─────────────────────────
+    // Java reference: Block.getItemDropped() — overridden per subclass
+    // Returns: {itemId, quantity, metadata}. itemId=-1 means no drop.
+    struct BlockDrop { int32_t itemId; int32_t quantity; int32_t metadata; };
+    auto getBlockDrop = [](int32_t blockId, int32_t blockMeta) -> BlockDrop {
+        switch (blockId) {
+            // Blocks that drop nothing
+            case 0:   return {-1, 0, 0}; // air
+            case 7:   return {-1, 0, 0}; // bedrock (unbreakable)
+            case 8: case 9: return {-1, 0, 0};   // water
+            case 10: case 11: return {-1, 0, 0};  // lava
+            case 18: case 161: return {-1, 0, 0}; // leaves (chance-based, skip for now)
+            case 20: return {-1, 0, 0};  // glass
+            case 30: return {287, 1, 0}; // web → string (item 287)
+            case 34: return {-1, 0, 0};  // piston_head
+            case 36: return {-1, 0, 0};  // piston_extension
+            case 51: return {-1, 0, 0};  // fire
+            case 52: return {-1, 0, 0};  // mob_spawner
+            case 59: return {296, 1, 0}; // wheat crop → wheat (only when mature, simplified)
+            case 78: return {332, 1, 0}; // snow_layer → snowball
+            case 79: return {-1, 0, 0};  // ice
+            case 90: return {-1, 0, 0};  // portal
+            case 95: return {-1, 0, 0};  // stained glass
+            case 97: return {-1, 0, 0};  // silverfish block
+            case 102: return {-1, 0, 0}; // glass pane
+            case 119: return {-1, 0, 0}; // end portal
+            case 120: return {-1, 0, 0}; // end portal frame
+            case 132: return {-1, 0, 0}; // tripwire
+            case 160: return {-1, 0, 0}; // stained glass pane
+
+            // ─── Blocks that drop a DIFFERENT item ────────────────
+            // Java: BlockStone.getItemDropped → cobblestone (ID 4)
+            case 1:   return {4, 1, 0};   // stone → cobblestone
+            // Java: BlockGrass.getItemDropped → dirt (ID 3)
+            case 2:   return {3, 1, 0};   // grass → dirt
+            // Java: BlockOre coal → coal item (ID 263)
+            case 16:  return {263, 1, 0};  // coal_ore → coal
+            // Java: BlockOre diamond → diamond (ID 264)
+            case 56:  return {264, 1, 0};  // diamond_ore → diamond
+            // Java: BlockOre lapis → dye:4 (ID 351, meta 4)
+            case 21:  return {351, 4, 4};  // lapis_ore → 4-8 lapis lazuli (simplified to 4)
+            // Java: BlockOre redstone → redstone dust (ID 331), quantity 4-5
+            case 73: case 74: return {331, 4, 0}; // redstone_ore → 4 redstone dust
+            // Java: BlockOre emerald → emerald (ID 388)
+            case 129: return {388, 1, 0};  // emerald_ore → emerald
+            // Java: BlockOre quartz → quartz item (ID 406)
+            case 153: return {406, 1, 0};  // quartz_ore → quartz
+            // Java: BlockGlowstone → 2-4 glowstone dust (ID 348)
+            case 89:  return {348, 3, 0};  // glowstone → 3 glowstone dust (avg)
+            // Java: BlockClay → 4 clay balls (ID 337)
+            case 82:  return {337, 4, 0};  // clay → 4 clay balls
+            // Java: BlockMelon → 3-7 melon slices (ID 360)
+            case 103: return {360, 4, 0};  // melon → 4 melon slices (avg)
+            // Java: BlockSnow → 4 snowballs (ID 332)
+            case 80:  return {332, 4, 0};  // snow block → 4 snowballs
+            // Java: BlockTallGrass → seeds sometimes; simplified to no drop
+            case 31:  return {-1, 0, 0};   // tall grass → nothing (chance seed drop)
+            case 32:  return {-1, 0, 0};   // dead bush → nothing
+
+            // Door drops the item
+            case 64:  return {324, 1, 0};  // wooden door → door item
+            case 71:  return {330, 1, 0};  // iron door → iron door item
+            // Bed drops bed item
+            case 26:  return {355, 1, 0};  // bed → bed item
+            // Redstone wire → redstone dust
+            case 55:  return {331, 1, 0};  // redstone wire → redstone
+            // Repeater → repeater item
+            case 93: case 94: return {356, 1, 0}; // repeater
+            // Comparator → comparator item
+            case 149: case 150: return {404, 1, 0};
+            // Sugar cane → sugar cane item
+            case 83:  return {338, 1, 0};  // reeds → item
+            // Cake drops nothing (already partially eaten)
+            case 92:  return {-1, 0, 0};
+            // Lit furnace → furnace
+            case 62:  return {61, 1, 0};
+            // Lit redstone lamp → redstone lamp
+            case 124: return {123, 1, 0};
+
+            // ─── Default: block drops itself as item ──────────────
+            // Java: Block.getItemDropped → Item.getItemFromBlock(this)
+            // For most blocks, block ID == item ID
+            default:
+                return {blockId, 1, 0};
+        }
+    };
+
+    // ═══════════════════════════════════════════════════════════════════
+    // Status 0: Start digging
+    // ═══════════════════════════════════════════════════════════════════
+    if (status == 0) {
+        Block* existingBlock = world->getBlock(blockX, blockY, blockZ);
+        if (!existingBlock || Block::getIdFromBlock(existingBlock) == 0) return;
+
+        int32_t brokenBlockId = Block::getIdFromBlock(existingBlock);
+        int32_t brokenMeta = world->getBlockMetadata(blockX, blockY, blockZ);
+
+        if (gameMode_ == 1) {
+            // ─── CREATIVE: instant break ──────────────────────────
+            // Java: ItemInWorldManager.onBlockClicked → isCreative → tryHarvestBlock
             world->setBlock(blockX, blockY, blockZ, Block::getBlockById(0));
             world->setBlockMetadata(blockX, blockY, blockZ, 0);
-
-            std::cout << "[World] " << playerName_ << " broke block at "
-                      << blockX << "," << (int)blockY << "," << blockZ << "\n";
-
-            // Broadcast block change to all players
             server_.broadcastBlockChange(blockX, blockY, blockZ, 0, 0);
-
-            // Play break sound — Java reference: worldObj.playAuxSFXAtEntity
-            // Using generic "dig.stone" sound; volume=1.0, pitch=0.8 (matches vanilla)
-            server_.broadcastSound("dig.stone",
+            server_.broadcastSound(getBreakSound(brokenBlockId),
                 static_cast<double>(blockX) + 0.5,
                 static_cast<double>(blockY) + 0.5,
                 static_cast<double>(blockZ) + 0.5,
                 1.0f, 0.8f);
+            std::cout << "[World] " << playerName_ << " broke block at "
+                      << blockX << "," << (int)blockY << "," << blockZ << " (creative)\n";
+            // Creative: no item drops (Java: tryHarvestBlock skips harvestBlock in creative)
+        } else {
+            // ─── SURVIVAL: just acknowledge start ─────────────────
+            // Java: ItemInWorldManager.onBlockClicked → check instant-break
+            // If hardness == 0 (e.g., tall grass, torch), break instantly
+            float hardness = existingBlock->getHardness();
+            if (hardness == 0.0f) {
+                // Instant-break blocks (hardness 0) — same as creative path
+                world->setBlock(blockX, blockY, blockZ, Block::getBlockById(0));
+                world->setBlockMetadata(blockX, blockY, blockZ, 0);
+                server_.broadcastBlockChange(blockX, blockY, blockZ, 0, 0);
+                server_.broadcastSound(getBreakSound(brokenBlockId),
+                    static_cast<double>(blockX) + 0.5,
+                    static_cast<double>(blockY) + 0.5,
+                    static_cast<double>(blockZ) + 0.5,
+                    1.0f, 0.8f);
+                // Spawn drop
+                auto drop = getBlockDrop(brokenBlockId, brokenMeta);
+                if (drop.itemId >= 0 && drop.quantity > 0) {
+                    server_.spawnItemDrop(
+                        static_cast<double>(blockX),
+                        static_cast<double>(blockY),
+                        static_cast<double>(blockZ),
+                        drop.itemId, drop.metadata, drop.quantity);
+                }
+                // Exhaustion — Java: EntityPlayer.addExhaustion(0.025f) via harvestBlock
+                foodStats_.addExhaustion(0.025f);
+                std::cout << "[World] " << playerName_ << " broke block at "
+                          << blockX << "," << (int)blockY << "," << blockZ << " (instant)\n";
+            }
+            // Else: client is starting to mine — we just wait for status 2
+        }
+        return;
+    }
 
-            // Spawn item drop — Java reference: Block.dropBlockAsItem
+    // ═══════════════════════════════════════════════════════════════════
+    // Status 1: Cancel digging — nothing to do
+    // ═══════════════════════════════════════════════════════════════════
+    if (status == 1) {
+        return;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // Status 2: Finished digging (survival mode)
+    // Java: ItemInWorldManager.blockRemoving → tryHarvestBlock → block.harvestBlock
+    // ═══════════════════════════════════════════════════════════════════
+    if (status == 2) {
+        // In creative, status 2 should not happen (client sends 0 only)
+        // But handle it gracefully
+        Block* existingBlock = world->getBlock(blockX, blockY, blockZ);
+        if (!existingBlock || Block::getIdFromBlock(existingBlock) == 0) return;
+
+        int32_t brokenBlockId = Block::getIdFromBlock(existingBlock);
+        int32_t brokenMeta = world->getBlockMetadata(blockX, blockY, blockZ);
+
+        // Don't allow breaking unbreakable blocks (hardness < 0)
+        float hardness = existingBlock->getHardness();
+        if (hardness < 0.0f) {
+            // Send block back to client — Java: sendPacket(new S23PacketBlockChange)
+            sendBlockChange(conn, blockX, blockY, blockZ, brokenBlockId, brokenMeta);
+            return;
+        }
+
+        // Break the block
+        world->setBlock(blockX, blockY, blockZ, Block::getBlockById(0));
+        world->setBlockMetadata(blockX, blockY, blockZ, 0);
+        server_.broadcastBlockChange(blockX, blockY, blockZ, 0, 0);
+
+        // Play break sound — material-based
+        server_.broadcastSound(getBreakSound(brokenBlockId),
+            static_cast<double>(blockX) + 0.5,
+            static_cast<double>(blockY) + 0.5,
+            static_cast<double>(blockZ) + 0.5,
+            1.0f, 0.8f);
+
+        // Spawn item drop — Java: block.harvestBlock → dropBlockAsItem → getItemDropped
+        auto drop = getBlockDrop(brokenBlockId, brokenMeta);
+        if (drop.itemId >= 0 && drop.quantity > 0) {
             server_.spawnItemDrop(
                 static_cast<double>(blockX),
                 static_cast<double>(blockY),
                 static_cast<double>(blockZ),
-                brokenBlockId, brokenMeta, 1);
+                drop.itemId, drop.metadata, drop.quantity);
         }
+
+        // Exhaustion — Java: EntityPlayer.addExhaustion(0.025f) via harvestBlock
+        foodStats_.addExhaustion(0.025f);
+
+        std::cout << "[World] " << playerName_ << " broke block at "
+                  << blockX << "," << (int)blockY << "," << blockZ << "\n";
     }
-    // status 1 = cancel — nothing to do in creative mode
 }
 
 void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Connection& conn) {
