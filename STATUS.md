@@ -148,6 +148,14 @@
 - ✅ **Trapped Chest** (146) — opens like normal chest
 - ❌ Pressure plates, daylight sensors, trip wires
 
+### Random Block Ticks
+- ✅ **Crop growth** — wheat (59), carrot (141), potato (142) meta 0→7
+- ✅ **Sapling growth** — stage bit then oak tree generation
+- ✅ **Grass spread** — grass block spreads to adjacent dirt
+- ✅ **Farmland hydration** — 9×9 water check, decay without water
+- ✅ **Melon/pumpkin stems** — grow, then place fruit adjacent
+- ✅ **Leaf decay** — natural leaves without logs (4-block manhattan) decay
+
 ### Biomes & World Gen
 - **BiomeRegistry** — 355 lines, biome types registered
 - **NoiseGen** — 391 lines, Perlin/Simplex noise generators
@@ -168,7 +176,7 @@
 - **Inventory** — ~~S2D OpenWindow~~, ~~S2E CloseWindow~~, ~~S2F SetSlot~~, ~~S30 WindowItems~~, ~~S31 WindowProperty~~, ~~S32 ConfirmTransaction~~
 - **Chat** — ✅ S02 ChatMessage (outbound, for command responses and chat broadcast)
 - **Player Info** — S38 PlayerListItem (tab list) — packet implemented, not auto-sent
-- **Sound/Particles** — S28 Effect, ~~S29 SoundEffect~~, ~~S2A Particle~~
+- **Sound/Particles** — ~~S28 Effect~~, ~~S29 SoundEffect~~, ~~S2A Particle~~
 - **Explosions** — ✅ S27 Explosion — 5-phase createExplosion, TNT ignition
 - **Signs** — ✅ S33 UpdateSign — C12 handler + per-position storage + broadcast
 - **Weather** — ✅ S2B ChangeGameState — rain/thunder cycle with timer countdown, strength ramp, client sync on change and join
@@ -298,3 +306,7 @@
 57. **Trapped chest + cake + beacon** — ✅ Done (trapped chest 146 like normal chest, cake 92 eat slices meta 0-6 +2 food, beacon 138 S2D type 7)
 58. **Bucket mechanics** — ✅ Done (water 326 → place water source 9, lava 327 → place lava source 11, empty 325 → pick up water/lava sources, survival consumption)
 59. **Item use mechanics** — ✅ Done (bonemeal 351:15 → S28 effect 2005 + grass/crop growth, hoe 290-294 → grass/dirt→farmland 60, flint+steel 259 → fire block 51 placement)
+60. **Door item placement** — ✅ Done (item 324→block 64, item 330→block 71, 2-block tall with yaw-facing, upper/lower halves, survival consumption)
+61. **Seed planting** — ✅ Done (wheat/carrot/potato/melon/pumpkin seeds on farmland only, item→block mapping for 16 items > 255)
+62. **Random block tick** — ✅ Done (crop growth 0→7, sapling→tree, grass spread, farmland hydration/decay, melon/pumpkin fruit placement, leaf decay)
+63. **Crop harvest drops** — ✅ Done (wheat→wheat+seeds at meta 7, carrot/potato metadata-aware drops, melon/pumpkin stem→seeds)
