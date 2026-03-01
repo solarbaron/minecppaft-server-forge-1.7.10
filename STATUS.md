@@ -158,6 +158,9 @@
 - ~~**Item drops**~~ — ✅ EntityItem spawn on block break with pickup
 - ~~**Player-to-player visibility**~~ — ✅ S0C SpawnPlayer + S38 PlayerListItem + S13 DestroyEntities working
 - ~~**Combat**~~ — ✅ damage (fist), knockback (S12), hurt animation (S1A), death + respawn
+- ~~**Fall damage**~~ — ✅ Server-side: accumulate fallDistance, damage=ceil(dist-3), fall sounds, death message
+- ~~**Drowning**~~ — ✅ Air supply (300 ticks = 15s), depletes in water, 2 damage when exhausted, death message
+- ~~**Suffocation**~~ — ✅ 1 damage/tick when head inside solid block, death message
 - ~~**Health/hunger**~~ — ✅ Full FoodStats system: exhaustion→saturation→hunger drain, natural health regen (food≥18), starvation damage (food=0), movement exhaustion, food eating, NBT save/load
 - **Movement validation** — server accepts all positions without anti-cheat; ✅ S18 EntityTeleport + S19 HeadLook broadcast to other players
 - **Lighting** — no light propagation engine
@@ -229,3 +232,6 @@
 23. **Player item drop** — ✅ Done (Q=single item, Ctrl+Q=full stack, inventory decrement + S2F SetSlot sync)
 24. **Food consumption** — ✅ Done (eating food decrements held item stack count + S2F sync)
 25. **Survival block place** — ✅ Done (consumes held item in survival, material place sounds)
+26. **Fall damage** — ✅ Done (accumulates fallDistance, damage=ceil(dist-3), fall sounds, death message, creative exempt)
+27. **Drowning** — ✅ Done (air supply 300 ticks, depletes in water, 2 dmg at exhaustion, death: "drowned")
+28. **Suffocation** — ✅ Done (1 dmg/tick in solid blocks, death: "suffocated in a wall")

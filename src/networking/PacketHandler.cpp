@@ -2559,6 +2559,67 @@ void PlayHandler::handleCreativeInventory(const uint8_t* data, size_t length, Co
 void PlayHandler::tickFood(Connection& conn) {
     if (dead_) return;
 
+    // ─── Drowning — Java: EntityLivingBase.onEntityUpdate() ────────────
+    // Check if player's head is in water (block at head Y level)
+    // Water block IDs: 8 (flowing_water), 9 (water)
+    auto& worlds = server_.getWorlds();
+    if (!worlds.empty() && gameMode_ != 1) {
+        WorldServer* world = worlds[0].get();
+        int32_t headBlockX = static_cast<int32_t>(std::floor(playerX_));
+        int32_t headBlockY = static_cast<int32_t>(std::floor(playerY_ + 1.62)); // eye height
+        int32_t headBlockZ = static_cast<int32_t>(std::floor(playerZ_));
+
+        Block* headBlock = world->getBlock(headBlockX, headBlockY, headBlockZ);
+        int32_t headBlockId = headBlock ? Block::getIdFromBlock(headBlock) : 0;
+
+        bool isInWater = (headBlockId == 8 || headBlockId == 9);
+        bool isInSolidBlock = false;
+
+        // Check suffocation — Java: isEntityInsideOpaqueBlock()
+        // Player's head is inside a full solid block (not air, water, etc.)
+        if (!isInWater && headBlock && headBlockId != 0) {
+            // Simplified: if block is solid and full-cube, suffocation applies
+            float hardness = headBlock->getHardness();
+            if (hardness >= 0.0f) { // not air, not portal, not unbreakable special blocks
+                isInSolidBlock = true;
+            }
+        }
+
+        if (isInWater) {
+            // Deplete air — Java: decreaseAirSupply, air goes from 300 down
+            --airSupply_;
+            if (airSupply_ <= -20) {
+                airSupply_ = 0;
+                // Drowning damage — Java: attackEntityFrom(DamageSource.drown, 2.0f)
+                health_ -= 2.0f;
+                if (health_ < 0.0f) health_ = 0.0f;
+                sendUpdateHealth(conn, health_, foodStats_.getFoodLevel(), foodStats_.getSaturationLevel());
+                server_.broadcastSound("game.player.hurt", playerX_, playerY_, playerZ_, 1.0f, 1.0f);
+                std::cout << "[Drown] " << playerName_ << " is drowning (hp=" << health_ << ")\n";
+                if (health_ <= 0.0f) {
+                    dead_ = true;
+                    server_.broadcastEntityEvent(entityId_, 3);
+                    server_.broadcastChatMessage(playerName_ + " drowned");
+                }
+            }
+        } else {
+            // Restore air when not in water — Java: setAir(300)
+            airSupply_ = 300;
+        }
+
+        // Suffocation damage — Java: attackEntityFrom(DamageSource.inWall, 1.0f)
+        if (isInSolidBlock && !isInWater) {
+            health_ -= 1.0f;
+            if (health_ < 0.0f) health_ = 0.0f;
+            sendUpdateHealth(conn, health_, foodStats_.getFoodLevel(), foodStats_.getSaturationLevel());
+            if (health_ <= 0.0f) {
+                dead_ = true;
+                server_.broadcastEntityEvent(entityId_, 3);
+                server_.broadcastChatMessage(playerName_ + " suffocated in a wall");
+            }
+        }
+    }
+
     // Get difficulty — WorldServer doesn't expose difficulty yet, default to Normal
     // Java: entityPlayer.worldObj.difficultySetting
     int32_t difficulty = 2; // Normal (TODO: expose difficulty on WorldServer)
