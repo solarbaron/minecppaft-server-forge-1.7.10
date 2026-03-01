@@ -1140,6 +1140,12 @@ void PlayHandler::closeOpenWindow(Connection& conn) {
         chestInventory_ = nullptr;
     }
 
+    // Furnace: clear pointer (items stay in furnace)
+    if (openWindowType_ == 2) {
+        furnaceData_ = nullptr;
+        openFurnaceKey_ = 0;
+    }
+
     // Drop cursor item
     if (cursorItem_) {
         server_.spawnItemDrop(playerX_, playerY_ + 1.5, playerZ_,
@@ -1195,6 +1201,60 @@ void PlayHandler::openChest(Connection& conn, int32_t blockX, int32_t blockY, in
         static_cast<double>(blockY) + 0.5,
         static_cast<double>(blockZ) + 0.5,
         0.5f, 1.0f);
+}
+
+void PlayHandler::openFurnace(Connection& conn, int32_t blockX, int32_t blockY, int32_t blockZ) {
+    // Java: ContainerFurnace — S2D OpenWindow type 2 "minecraft:furnace"
+    if (openWindowId_ > 0) {
+        closeOpenWindow(conn);
+    }
+
+    openWindowId_ = nextWindowId_++;
+    if (nextWindowId_ > 100) nextWindowId_ = 1;
+    openWindowType_ = 2; // furnace
+
+    furnaceData_ = static_cast<void*>(&server_.getOrCreateFurnace(blockX, blockY, blockZ));
+    auto* furnace = static_cast<MinecraftServer::FurnaceData*>(furnaceData_);
+    openFurnaceKey_ = MinecraftServer::packBlockPos(blockX, blockY, blockZ);
+
+    // Send S2D OpenWindow (type 2 = furnace, 3 slots)
+    sendOpenWindow(conn, openWindowId_, 2, "Furnace", 3);
+
+    // Send window contents — 39 slots (3 furnace + 27 main inv + 9 hotbar)
+    std::vector<uint8_t> pkt;
+    writeVarInt(pkt, ClientboundPacket::WindowItems);
+    writeByte(pkt, static_cast<uint8_t>(openWindowId_));
+    writeShort(pkt, 39); // 39 slots total
+
+    for (int i = 0; i < 3; ++i) {
+        writeItemStack(pkt, furnace->slots[i]);
+    }
+    // Slots 3-29: main inventory (player slots 9-35)
+    for (int i = 9; i < 36; ++i) {
+        writeItemStack(pkt, inventory_.getStackInSlot(i));
+    }
+    // Slots 30-38: hotbar (player slots 0-8)
+    for (int i = 0; i < 9; ++i) {
+        writeItemStack(pkt, inventory_.getStackInSlot(i));
+    }
+
+    conn.sendPacket(std::move(pkt));
+
+    // Send initial progress bar values (S31)
+    sendWindowProperty(conn, openWindowId_, 0, furnace->furnaceCookTime);
+    sendWindowProperty(conn, openWindowId_, 1, furnace->furnaceBurnTime);
+    sendWindowProperty(conn, openWindowId_, 2, furnace->currentItemBurnTime);
+}
+
+void PlayHandler::sendWindowProperty(Connection& conn, int8_t windowId,
+                                      int16_t property, int16_t value) {
+    // S31 WindowProperty — furnace progress bars
+    std::vector<uint8_t> pkt;
+    writeVarInt(pkt, ClientboundPacket::WindowProperty);
+    writeByte(pkt, static_cast<uint8_t>(windowId));
+    writeShort(pkt, property);
+    writeShort(pkt, value);
+    conn.sendPacket(std::move(pkt));
 }
 
 void PlayHandler::sendEntityEquipment(Connection& conn, int32_t entityId, int16_t equipSlot,
@@ -1952,6 +2012,12 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
         return;
     }
 
+    // Furnace (block ID 61=furnace, 62=lit_furnace) — Java: BlockFurnace.onBlockActivated()
+    if ((clickedBlockId == 61 || clickedBlockId == 62) && !isSneaking_) {
+        openFurnace(conn, blockX, static_cast<int32_t>(blockY), blockZ);
+        return;
+    }
+
     // Calculate the position of the new block based on the face clicked
     // Java reference: same offset logic as processPlayerBlockPlacement
     int32_t placeX = blockX;
@@ -2267,6 +2333,145 @@ void PlayHandler::handleClickWindow(const uint8_t* data, size_t length, Connecti
         // Sync cursor item — slot -1
         sendSetSlot(conn, -1, -1, cursorItem_);
     };
+
+    // ═══════════════════════════════════════════════════════════════════
+    // Furnace window handler
+    // ═══════════════════════════════════════════════════════════════════
+    if (windowId > 0 && windowId == openWindowId_ && openWindowType_ == 2 && furnaceData_) {
+        auto* furnace = static_cast<MinecraftServer::FurnaceData*>(furnaceData_);
+        // Furnace slot layout (Java: ContainerFurnace):
+        //   0       = input
+        //   1       = fuel
+        //   2       = output (can only pick up)
+        //   3-29    = main inventory (player slots 9-35)
+        //   30-38   = hotbar (player slots 0-8)
+
+        auto getFurnaceSlotRef = [&](int16_t s) -> std::optional<ItemStack>* {
+            if (s >= 0 && s < 3) return &furnace->slots[s];
+            return nullptr;
+        };
+        auto getInvSlotForFurnace = [&](int16_t s) -> int32_t {
+            if (s >= 3 && s <= 29) return s - 3 + 9;   // main inv: 9-35
+            if (s >= 30 && s <= 38) return s - 30;      // hotbar: 0-8
+            return -1;
+        };
+        auto syncFurnaceWindow = [&]() {
+            for (int i = 0; i < 3; ++i)
+                sendSetSlot(conn, openWindowId_, static_cast<int16_t>(i), furnace->slots[i]);
+            for (int i = 9; i < 36; ++i)
+                sendSetSlot(conn, openWindowId_, static_cast<int16_t>(i - 6), inventory_.getStackInSlot(i));
+            for (int i = 0; i < 9; ++i)
+                sendSetSlot(conn, openWindowId_, static_cast<int16_t>(30 + i), inventory_.getStackInSlot(i));
+            sendSetSlot(conn, -1, -1, cursorItem_);
+            // Send progress bars
+            sendWindowProperty(conn, openWindowId_, 0, furnace->furnaceCookTime);
+            sendWindowProperty(conn, openWindowId_, 1, furnace->furnaceBurnTime);
+            sendWindowProperty(conn, openWindowId_, 2, furnace->currentItemBurnTime);
+        };
+
+        if (mode == 0 && (button == 0 || button == 1)) {
+            if (slotId == -999) {
+                if (cursorItem_) {
+                    if (button == 0) {
+                        server_.spawnItemDrop(playerX_, playerY_ + 1.5, playerZ_,
+                            cursorItem_->getItemId(), cursorItem_->getDamage(), cursorItem_->getStackSize());
+                        cursorItem_ = std::nullopt;
+                    } else {
+                        server_.spawnItemDrop(playerX_, playerY_ + 1.5, playerZ_,
+                            cursorItem_->getItemId(), cursorItem_->getDamage(), 1);
+                        int32_t rem = cursorItem_->getStackSize() - 1;
+                        if (rem <= 0) cursorItem_ = std::nullopt;
+                        else cursorItem_->setStackSize(rem);
+                    }
+                }
+                sendConfirm(true);
+                syncFurnaceWindow();
+                return;
+            }
+
+            if (slotId < 0 || slotId > 38) { sendConfirm(false); return; }
+
+            // Output slot (2): can only pick up, not place
+            if (slotId == 2) {
+                if (furnace->slots[2] && !cursorItem_) {
+                    cursorItem_ = furnace->slots[2];
+                    furnace->slots[2] = std::nullopt;
+                } else if (furnace->slots[2] && cursorItem_ &&
+                           cursorItem_->getItemId() == furnace->slots[2]->getItemId() &&
+                           cursorItem_->getDamage() == furnace->slots[2]->getDamage()) {
+                    int32_t newSize = cursorItem_->getStackSize() + furnace->slots[2]->getStackSize();
+                    if (newSize <= 64) {
+                        cursorItem_->setStackSize(newSize);
+                        furnace->slots[2] = std::nullopt;
+                    }
+                }
+                sendConfirm(true);
+                syncFurnaceWindow();
+                return;
+            }
+
+            std::optional<ItemStack>* furnRef = getFurnaceSlotRef(slotId);
+            int32_t invIdx = (furnRef == nullptr) ? getInvSlotForFurnace(slotId) : -1;
+
+            std::optional<ItemStack> slotStack;
+            if (furnRef) slotStack = *furnRef;
+            else if (invIdx >= 0) slotStack = inventory_.getStackInSlot(invIdx);
+            else { sendConfirm(false); return; }
+
+            if (button == 0) {
+                if (furnRef) *furnRef = cursorItem_;
+                else if (invIdx >= 0) inventory_.setInventorySlotContents(invIdx, cursorItem_);
+                cursorItem_ = slotStack;
+            } else {
+                if (cursorItem_ && !slotStack) {
+                    ItemStack placed(cursorItem_->getItemId(), 1, cursorItem_->getDamage());
+                    if (furnRef) *furnRef = placed;
+                    else if (invIdx >= 0) inventory_.setInventorySlotContents(invIdx, placed);
+                    int32_t rem = cursorItem_->getStackSize() - 1;
+                    if (rem <= 0) cursorItem_ = std::nullopt;
+                    else cursorItem_->setStackSize(rem);
+                } else if (cursorItem_ && slotStack &&
+                           cursorItem_->getItemId() == slotStack->getItemId() &&
+                           cursorItem_->getDamage() == slotStack->getDamage()) {
+                    int32_t newSize = slotStack->getStackSize() + 1;
+                    if (newSize <= 64) {
+                        slotStack->setStackSize(newSize);
+                        if (furnRef) *furnRef = slotStack;
+                        else if (invIdx >= 0) inventory_.setInventorySlotContents(invIdx, slotStack);
+                        int32_t rem = cursorItem_->getStackSize() - 1;
+                        if (rem <= 0) cursorItem_ = std::nullopt;
+                        else cursorItem_->setStackSize(rem);
+                    }
+                } else if (!cursorItem_ && slotStack) {
+                    int32_t half = (slotStack->getStackSize() + 1) / 2;
+                    int32_t remaining = slotStack->getStackSize() - half;
+                    cursorItem_ = ItemStack(slotStack->getItemId(), half, slotStack->getDamage());
+                    if (remaining <= 0) {
+                        if (furnRef) *furnRef = std::nullopt;
+                        else if (invIdx >= 0) inventory_.setInventorySlotContents(invIdx, std::nullopt);
+                    } else {
+                        slotStack->setStackSize(remaining);
+                        if (furnRef) *furnRef = slotStack;
+                        else if (invIdx >= 0) inventory_.setInventorySlotContents(invIdx, slotStack);
+                    }
+                } else if (!cursorItem_ && !slotStack) {
+                    // nothing
+                } else {
+                    if (furnRef) *furnRef = cursorItem_;
+                    else if (invIdx >= 0) inventory_.setInventorySlotContents(invIdx, cursorItem_);
+                    cursorItem_ = slotStack;
+                }
+            }
+            sendConfirm(true);
+            syncFurnaceWindow();
+            return;
+        }
+
+        // Other modes — confirm and sync
+        sendConfirm(true);
+        syncFurnaceWindow();
+        return;
+    }
 
     // ═══════════════════════════════════════════════════════════════════
     // Chest (generic container) window handler

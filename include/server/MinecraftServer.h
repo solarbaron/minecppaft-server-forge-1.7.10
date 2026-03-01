@@ -25,6 +25,7 @@
 #include <array>
 
 #include "command/CommandSystem.h"
+#include "crafting/Crafting.h"
 
 namespace mccpp {
 
@@ -183,6 +184,111 @@ public:
      * Java reference: TileEntityChest — simplified to in-memory storage.
      */
     std::array<std::optional<ItemStack>, 27>& getOrCreateChest(int32_t x, int32_t y, int32_t z);
+
+    /**
+     * Get or create a furnace at the given block position.
+     * Java reference: TileEntityFurnace
+     */
+    struct FurnaceData {
+        std::optional<ItemStack> slots[3]; // 0=input, 1=fuel, 2=output
+        int32_t furnaceBurnTime = 0;
+        int32_t currentItemBurnTime = 0;
+        int32_t furnaceCookTime = 0;
+
+        bool isBurning() const { return furnaceBurnTime > 0; }
+
+        // Java: TileEntityFurnace.getItemBurnTime(ItemStack)
+        static int32_t getItemBurnTime(const std::optional<ItemStack>& stack) {
+            if (!stack) return 0;
+            int32_t id = stack->getItemId();
+            // Wooden slabs (id=44 meta>=0? actually 126)
+            if (id == 126) return 150; // wooden_slab
+            // Wood-based blocks: planks(5), logs(17,162), bookshelf(47), chest(54),
+            // crafting_table(58), noteblock(25), jukebox(84), fence(85), stairs(53,134,135,136)
+            if (id == 5 || id == 17 || id == 162 || id == 47 || id == 54 ||
+                id == 58 || id == 25 || id == 84 || id == 85 ||
+                id == 53 || id == 134 || id == 135 || id == 136 ||
+                id == 163 || id == 164 || id == 107 ||
+                id == 96  || id == 167) return 300; // wood material
+            if (id == 173) return 16000; // coal_block
+            // Wooden tools (268-271=sword/shovel/pick/axe, 290=hoe)
+            if (id == 268 || id == 269 || id == 270 || id == 271 || id == 290) return 200;
+            if (id == 280) return 100;  // stick
+            if (id == 263) return 1600; // coal
+            if (id == 327) return 20000; // lava_bucket
+            if (id == 6) return 100;    // sapling
+            if (id == 369) return 2400; // blaze_rod
+            return 0;
+        }
+
+        bool canSmelt() const {
+            if (!slots[0]) return false;
+            auto result = FurnaceRecipes::instance().getSmeltingResult(
+                slots[0]->getItemId(), slots[0]->getDamage());
+            if (!result) return false;
+            if (!slots[2]) return true;
+            if (slots[2]->getItemId() != result->getItemId() ||
+                slots[2]->getDamage() != result->getDamage()) return false;
+            return slots[2]->getStackSize() < 64 &&
+                   slots[2]->getStackSize() < result->getMaxStackSize();
+        }
+
+        void smeltItem() {
+            if (!canSmelt()) return;
+            auto result = FurnaceRecipes::instance().getSmeltingResult(
+                slots[0]->getItemId(), slots[0]->getDamage());
+            if (!result) return;
+            if (!slots[2]) {
+                slots[2] = result->copy();
+            } else {
+                slots[2]->setStackSize(slots[2]->getStackSize() + 1);
+            }
+            int32_t sz = slots[0]->getStackSize() - 1;
+            if (sz <= 0) slots[0] = std::nullopt;
+            else slots[0]->setStackSize(sz);
+        }
+
+        // Returns true if state changed (dirty)
+        bool tick() {
+            bool wasBurning = furnaceBurnTime > 0;
+            bool dirty = false;
+            if (furnaceBurnTime > 0) --furnaceBurnTime;
+            if (furnaceBurnTime != 0 || (slots[1] && slots[0])) {
+                if (furnaceBurnTime == 0 && canSmelt()) {
+                    currentItemBurnTime = furnaceBurnTime = getItemBurnTime(slots[1]);
+                    if (furnaceBurnTime > 0) {
+                        dirty = true;
+                        if (slots[1]) {
+                            int32_t sz = slots[1]->getStackSize() - 1;
+                            if (sz <= 0) slots[1] = std::nullopt;
+                            else slots[1]->setStackSize(sz);
+                        }
+                    }
+                }
+                if (isBurning() && canSmelt()) {
+                    ++furnaceCookTime;
+                    if (furnaceCookTime == 200) {
+                        furnaceCookTime = 0;
+                        smeltItem();
+                        dirty = true;
+                    }
+                } else {
+                    furnaceCookTime = 0;
+                }
+            }
+            if (wasBurning != (furnaceBurnTime > 0)) dirty = true;
+            return dirty;
+        }
+    };
+    FurnaceData& getOrCreateFurnace(int32_t x, int32_t y, int32_t z);
+    void tickFurnaces();
+
+    /** Pack block position into int64 key for tile entity storage. */
+    static int64_t packBlockPos(int32_t x, int32_t y, int32_t z) {
+        return (static_cast<int64_t>(x) << 40) |
+               ((static_cast<int64_t>(z) & 0xFFFFF) << 20) |
+               (static_cast<int64_t>(y) & 0xFFFFF);
+    }
 
     /**
      * Register a new client connection (called from TcpListener callback).
@@ -346,13 +452,12 @@ private:
 
     // ─── Chest storage (in-memory tile entities) ─────────────────────
     // Key: packed position (x << 40 | (z & 0xFFFFF) << 20 | (y & 0xFFFFF))
-    static int64_t packBlockPos(int32_t x, int32_t y, int32_t z) {
-        return (static_cast<int64_t>(x) << 40) |
-               ((static_cast<int64_t>(z) & 0xFFFFF) << 20) |
-               (static_cast<int64_t>(y) & 0xFFFFF);
-    }
     mutable std::mutex chestMutex_;
     std::map<int64_t, std::array<std::optional<ItemStack>, 27>> chestStorage_;
+
+    // ─── Furnace storage (in-memory tile entities) ───────────────────
+    mutable std::mutex furnaceMutex_;
+    std::map<int64_t, FurnaceData> furnaceStorage_;
 };
 
 } // namespace mccpp

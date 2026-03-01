@@ -238,6 +238,7 @@ void MinecraftServer::tick() {
 
     // Tick item entities (physics, despawn, pickup)
     tickItemEntities();
+    tickFurnaces();
 
     // Tick mob entities (despawn tracking)
     tickMobs();
@@ -1136,8 +1137,47 @@ std::array<std::optional<ItemStack>, 27>& MinecraftServer::getOrCreateChest(
     int32_t x, int32_t y, int32_t z) {
     std::lock_guard<std::mutex> lock(chestMutex_);
     int64_t key = packBlockPos(x, y, z);
-    auto& chest = chestStorage_[key]; // Creates with default (empty) on first access
+    auto& chest = chestStorage_[key];
     return chest;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Furnace tile entity storage and ticking
+// Java reference: TileEntityFurnace.updateEntity()
+// ═══════════════════════════════════════════════════════════════════════════
+
+MinecraftServer::FurnaceData& MinecraftServer::getOrCreateFurnace(
+    int32_t x, int32_t y, int32_t z) {
+    std::lock_guard<std::mutex> lock(furnaceMutex_);
+    int64_t key = packBlockPos(x, y, z);
+    return furnaceStorage_[key];
+}
+
+void MinecraftServer::tickFurnaces() {
+    std::lock_guard<std::mutex> lock(furnaceMutex_);
+    for (auto& [key, furnace] : furnaceStorage_) {
+        bool dirty = furnace.tick();
+        if (dirty) {
+            // Send updates to any player who has this furnace open
+            std::lock_guard<std::mutex> connLock(connectionsMutex_);
+            for (auto& conn : connections_) {
+                if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                auto handler = conn->getHandler();
+                auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                if (!ph) continue;
+                if (ph->getOpenWindowType() == 2 && ph->getOpenFurnaceKey() == key) {
+                    // Send S31 WindowProperty for progress bars
+                    ph->sendWindowProperty(*conn, ph->getOpenWindowId(), 0, furnace.furnaceCookTime);
+                    ph->sendWindowProperty(*conn, ph->getOpenWindowId(), 1, furnace.furnaceBurnTime);
+                    ph->sendWindowProperty(*conn, ph->getOpenWindowId(), 2, furnace.currentItemBurnTime);
+                    // Send slot contents
+                    for (int i = 0; i < 3; ++i) {
+                        ph->sendSetSlot(*conn, ph->getOpenWindowId(), static_cast<int16_t>(i), furnace.slots[i]);
+                    }
+                }
+            }
+        }
+    }
 }
 
 } // namespace mccpp

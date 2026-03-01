@@ -284,6 +284,19 @@ public:
     void openChest(Connection& conn, int32_t blockX, int32_t blockY, int32_t blockZ);
 
     /**
+     * Open a furnace container for this player.
+     * Sends S2D OpenWindow type 2 + S30 (window contents) + S31 (progress bars).
+     * Java reference: TileEntityFurnace + ContainerFurnace
+     */
+    void openFurnace(Connection& conn, int32_t blockX, int32_t blockY, int32_t blockZ);
+
+    /**
+     * Send S31 WindowProperty to the client (furnace progress bars).
+     * Java reference: S31PacketWindowProperty
+     */
+    void sendWindowProperty(Connection& conn, int8_t windowId, int16_t property, int16_t value);
+
+    /**
      * Send entity teleport (absolute position) to the client.
      * Java reference: S18PacketEntityTeleport
      */
@@ -699,6 +712,21 @@ private:
     // Pointer to server-side chest storage (owned by MinecraftServer::chestStorage_)
     std::array<std::optional<ItemStack>, 27>* chestInventory_ = nullptr;
     int32_t openChestX_ = 0, openChestY_ = 0, openChestZ_ = 0;
+
+    // ─── Furnace container ───
+    // Pointer to server-side furnace (owned by MinecraftServer::furnaceStorage_)
+    // Typed as void* to avoid MinecraftServer forward-declaration issues;
+    // cast to MinecraftServer::FurnaceData* in PacketHandler.cpp
+    void* furnaceData_ = nullptr;
+    int64_t openFurnaceKey_ = 0;
+
+public:
+    // Accessors for server-side furnace ticking
+    int32_t getOpenWindowType() const { return openWindowType_; }
+    int32_t getOpenWindowId() const { return openWindowId_; }
+    int64_t getOpenFurnaceKey() const { return openFurnaceKey_; }
+    void* getRawFurnaceData() const { return furnaceData_; }
+private:
 
     // Combat state — Java: EntityPlayer fields
     float health_ = 20.0f;        // EntityLivingBase.health
