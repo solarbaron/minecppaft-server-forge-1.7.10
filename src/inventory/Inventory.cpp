@@ -202,13 +202,36 @@ private:
 ContainerPlayer::ContainerPlayer(InventoryPlayer& playerInventory) {
     // Java: ContainerPlayer constructor
     // Reference: net.minecraft.inventory.ContainerPlayer
+    //
+    // Full layout (45 slots):
+    //   0:      Crafting output (InventoryCraftResult, not backed by player inv)
+    //   1-4:    Crafting grid (2x2) (InventoryCrafting, not backed by player inv)
+    //   5-8:    Armor (head=5, chest=6, legs=7, feet=8)
+    //   9-35:   Main inventory
+    //   36-44:  Hotbar
 
-    // Slot 0: Crafting output (not backed by a real inventory yet)
-    // For now, use playerInventory slot 0 as placeholder
-    // In full implementation, this would be InventoryCraftResult
+    // Slot 0: Crafting output
+    // Java: this.addSlotToContainer(new SlotCrafting(..., craftResult, 0, 144, 36))
+    // Use playerInventory as placeholder since we don't have InventoryCraftResult yet
+    // This references an unused area of playerInventory just to fill the slot
+    addSlotToContainer(std::make_unique<Slot>(
+        &playerInventory,
+        0,  // Dummy slot index — won't be used for actual crafting
+        144, 36
+    ));
 
     // Slots 1-4: Crafting grid (2x2)
-    // For now, use dummy — will be InventoryCrafting later
+    // Java: for crafting rows/cols, addSlotToContainer(new Slot(craftMatrix, ...))
+    for (int32_t row = 0; row < 2; ++row) {
+        for (int32_t col = 0; col < 2; ++col) {
+            addSlotToContainer(std::make_unique<Slot>(
+                &playerInventory,
+                0,  // Dummy slot index — won't be used for actual crafting
+                88 + col * 18,
+                26 + row * 18
+            ));
+        }
+    }
 
     // Slots 5-8: Armor slots
     // Java: for (int i = 0; i < 4; ++i) addSlotToContainer(new SlotArmor(...))
