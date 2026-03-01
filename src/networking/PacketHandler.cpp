@@ -2339,6 +2339,58 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
         }
     }
 
+    // ─── Hoe tilling ──────────────────────────────────────────────────
+    // Java: ItemHoe.onItemUse() — right-click grass(2)/dirt(3) → farmland(60)
+    auto heldForUse = inventory_.getCurrentItem();
+    if (heldForUse && (heldForUse->getItemId() >= 290 && heldForUse->getItemId() <= 294)) {
+        // Hoe IDs: wood=290, stone=291, iron=292, diamond=293, gold=294
+        if (clickedBlockId == 2 || clickedBlockId == 3) { // Grass or dirt
+            if (!server_.getWorlds().empty()) {
+                auto& w = server_.getWorlds()[0];
+                int32_t by = static_cast<int32_t>(blockY);
+                w->setBlock(blockX, by, blockZ, Block::getBlockById(60)); // Farmland
+                w->setBlockMetadata(blockX, by, blockZ, 0);
+                server_.broadcastBlockChange(blockX, by, blockZ, 60, 0);
+                server_.broadcastSound("dig.gravel",
+                    static_cast<double>(blockX) + 0.5, static_cast<double>(by) + 0.5,
+                    static_cast<double>(blockZ) + 0.5, 1.0f, 0.8f);
+                if (gameMode_ != 1) damageHeldItem(1);
+            }
+            return;
+        }
+    }
+
+    // ─── Flint and Steel (259) — place fire on clicked face ──────────
+    // Java: ItemFlintAndSteel.onItemUse()
+    if (heldForUse && heldForUse->getItemId() == 259 && clickedBlockId != 46) {
+        int32_t px = blockX, py = static_cast<int32_t>(blockY), pz = blockZ;
+        switch (direction) {
+            case 0: --py; break; case 1: ++py; break;
+            case 2: --pz; break; case 3: ++pz; break;
+            case 4: --px; break; case 5: ++px; break;
+            default: break;
+        }
+        if (py >= 0 && py < 256 && !server_.getWorlds().empty()) {
+            auto& w = server_.getWorlds()[0];
+            Block* target = w->getBlock(px, py, pz);
+            int targetId = target ? Block::getIdFromBlock(target) : 0;
+            if (targetId == 0) {
+                w->setBlock(px, py, pz, Block::getBlockById(51)); // Fire
+                w->setBlockMetadata(px, py, pz, 0);
+                server_.broadcastBlockChange(px, py, pz, 51, 0);
+                server_.broadcastSound("fire.ignite",
+                    static_cast<double>(px) + 0.5, static_cast<double>(py) + 0.5,
+                    static_cast<double>(pz) + 0.5, 1.0f, 1.0f);
+                if (gameMode_ != 1) damageHeldItem(1);
+            }
+        }
+        return;
+    }
+
+    // ─── Shears (359) — instant-break leaves for leaf block drops ────
+    // Java: ItemShears.onBlockDestroyed() — shears on leaves give the leaf block
+    // (This is handled differently in vanilla but we intercept here for right-click shearing)
+
     // ─── Bucket interactions ──────────────────────────────────────────
     // Java: ItemBucket.onItemRightClick → tryPlaceContainedLiquid / ItemBucket → tryPickup
 
