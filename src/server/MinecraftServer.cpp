@@ -667,6 +667,13 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, int32_t targetEn
     target->sendUpdateHealth(*targetConn, target->getHealth(),
                               target->getFood(), target->getSaturation());
 
+    // ─── Durability ─────────────────────────────────────────────────
+    // Java: ItemStack.damageItem(1) on attacker's weapon per hit
+    float rawDamage = attacker.getWeaponDamage();
+    attacker.damageHeldItem(1);
+    // Java: InventoryPlayer.damageArmor(rawDamage) on victim
+    target->damageArmor(rawDamage);
+
     // Java: EntityPlayer.addExhaustion(0.3f) on attack
     attacker.getFoodStats().addExhaustion(0.3f);
 

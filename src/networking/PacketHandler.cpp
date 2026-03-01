@@ -1695,6 +1695,19 @@ void PlayHandler::handlePlayerDigging(const uint8_t* data, size_t length, Connec
         // Exhaustion — Java: EntityPlayer.addExhaustion(0.025f) via harvestBlock
         foodStats_.addExhaustion(0.025f);
 
+        // Tool durability — Java: ItemStack.damageItem via onBlockDestroyed
+        // Swords take 2 damage, other tools take 1, only for blocks with hardness > 0
+        if (hardness > 0.0f) {
+            auto held = inventory_.getCurrentItem();
+            if (held) {
+                int32_t heldId = held->getItemId();
+                // Swords: 2 durability per block (Java: ItemSword.onBlockDestroyed)
+                bool isSword = (heldId == 268 || heldId == 272 || heldId == 267 ||
+                                heldId == 276 || heldId == 283);
+                damageHeldItem(isSword ? 2 : 1);
+            }
+        }
+
         std::cout << "[World] " << playerName_ << " broke block at "
                   << blockX << "," << (int)blockY << "," << blockZ << "\n";
     }

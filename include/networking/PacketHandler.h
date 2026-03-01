@@ -487,6 +487,92 @@ public:
         return total;
     }
 
+    // Java: Item.getMaxDamage() for damageable items
+    // Returns max durability for an item ID, or 0 if not damageable
+    static int32_t getMaxDurability(int32_t itemId) {
+        switch (itemId) {
+            // Wood tools: 59 durability
+            case 268: case 269: case 270: case 271: return 59;  // sword, shovel, pick, axe
+            // Stone tools: 131
+            case 272: case 273: case 274: case 275: return 131;
+            // Iron tools: 250
+            case 256: case 257: case 258: case 267: return 250; // shovel, pick, axe, sword
+            // Diamond tools: 1561
+            case 276: case 277: case 278: case 279: return 1561;
+            // Gold tools: 32
+            case 283: case 284: case 285: case 286: return 32;
+            // Hoe durabilities (same pattern)
+            case 290: return 59;   // Wooden hoe
+            case 291: return 131;  // Stone hoe
+            case 292: return 250;  // Iron hoe
+            case 293: return 1561; // Diamond hoe
+            case 294: return 32;   // Gold hoe
+            // Leather armor: 5*maxDamageFactor, factors [11,16,15,13]
+            case 298: return 55;  case 299: return 80;  case 300: return 75;  case 301: return 65;
+            // Chain armor: 15*[11,16,15,13]
+            case 302: return 165; case 303: return 240; case 304: return 225; case 305: return 195;
+            // Iron armor: 15*[11,16,15,13]
+            case 306: return 165; case 307: return 240; case 308: return 225; case 309: return 195;
+            // Diamond armor: 33*[11,16,15,13]
+            case 310: return 363; case 311: return 528; case 312: return 495; case 313: return 429;
+            // Gold armor: 7*[11,16,15,13]
+            case 314: return 77;  case 315: return 112; case 316: return 105; case 317: return 91;
+            // Bow: 384
+            case 261: return 384;
+            // Shears: 238
+            case 359: return 238;
+            // Fishing rod: 64
+            case 346: return 64;
+            // Flint and steel: 64
+            case 259: return 64;
+            // Carrot on a stick: 25
+            case 398: return 25;
+            default: return 0; // Not damageable
+        }
+    }
+
+    // Damage the held item by n points. If durability exceeded, item breaks (removed).
+    // Java: ItemStack.damageItem(n, entity)
+    void damageHeldItem(int32_t amount) {
+        if (gameMode_ == 1) return; // Creative: no durability loss
+        auto held = inventory_.getCurrentItem();
+        if (!held) return;
+        int32_t maxDur = getMaxDurability(held->getItemId());
+        if (maxDur <= 0) return; // Not damageable
+        int32_t newDamage = held->getDamage() + amount;
+        if (newDamage > maxDur) {
+            // Item breaks — remove from hotbar
+            inventory_.setInventorySlotContents(inventory_.getCurrentSlot(), std::nullopt);
+        } else {
+            held->setDamage(newDamage);
+            inventory_.setInventorySlotContents(inventory_.getCurrentSlot(), held);
+        }
+    }
+
+    // Java: InventoryPlayer.damageArmor(float f)
+    // Damage all worn armor pieces by (incomingDamage / 4, min 1)
+    void damageArmor(float incomingDamage) {
+        if (gameMode_ == 1) return; // Creative: no durability loss
+        int32_t dmg = static_cast<int32_t>(incomingDamage / 4.0f);
+        if (dmg < 1) dmg = 1;
+        // Armor inventory indices: 36=boots, 37=legs, 38=chest, 39=head
+        for (int32_t i = 0; i < InventoryPlayer::ARMOR_SIZE; ++i) {
+            int32_t invIdx = InventoryPlayer::MAIN_SIZE + i; // 36-39
+            auto armor = inventory_.getStackInSlot(invIdx);
+            if (!armor) continue;
+            int32_t maxDur = getMaxDurability(armor->getItemId());
+            if (maxDur <= 0) continue; // Not armor (shouldn't happen)
+            int32_t newDamage = armor->getDamage() + dmg;
+            if (newDamage > maxDur) {
+                // Armor breaks
+                inventory_.setInventorySlotContents(invIdx, std::nullopt);
+            } else {
+                armor->setDamage(newDamage);
+                inventory_.setInventorySlotContents(invIdx, armor);
+            }
+        }
+    }
+
     /**
      * Save player data to world/playerdata/<uuid>.dat
      * Java reference: SaveHandler.writePlayerData()

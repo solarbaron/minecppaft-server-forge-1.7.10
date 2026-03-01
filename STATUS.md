@@ -246,3 +246,4 @@
 32. **Entity equipment display** — ✅ Done (S04 EntityEquipment: held item + 4 armor slots broadcast on join + held item change via C09)
 33. **Weapon damage + armor reduction** — ✅ Done (getWeaponDamage: 25 weapons with Java-parity damage, getTotalArmorValue: 20 armor pieces, applyArmorCalculations formula, attack exhaustion 0.3)
 34. **2×2 crafting grid** — ✅ Done (InventoryCrafting/InventoryCraftResult IInventory, updateCraftingResult via CraftingManager, ingredient decrement on pickup, shift-click support, CloseWindow drops grid items)
+35. **Item durability** — ✅ Done (getMaxDurability for 50+ items, damageHeldItem on combat/block break, damageArmor damage/4 per piece, sword 2x on block break, creative exempt)
