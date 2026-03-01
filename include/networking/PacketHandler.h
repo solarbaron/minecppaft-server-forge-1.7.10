@@ -433,6 +433,21 @@ public:
         return inventory_.getArmorInventory()[armorIdx];
     }
 
+    /**
+     * Try to pick up an item entity into this player's inventory.
+     * Returns true if the item was successfully added.
+     * Java reference: EntityPlayer.onItemPickup + InventoryPlayer.addItemStackToInventory
+     */
+    bool tryPickupItem(Connection& conn, int32_t itemId, int32_t damage, int32_t count) {
+        ItemStack stack(itemId, count, damage);
+        bool added = inventory_.addItemStackToInventory(stack);
+        if (added) {
+            // Sync entire inventory to client
+            sendWindowItems(conn);
+        }
+        return added;
+    }
+
     // Java: SharedMonsterAttributes.attackDamage base=2.0, modified by held weapon
     // Sword: 4 + matDmg, Axe: 3 + matDmg, Pick: 2 + matDmg, Shovel: 1 + matDmg
     // matDmg: wood/gold=0, stone=1, iron=2, diamond=3

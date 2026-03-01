@@ -118,9 +118,10 @@
 - ❌ No server→client inventory sync (no window packets)
 - ✅ Creative inventory action (C10) — set container slots + item drops in creative mode
 - ✅ **ClickWindow (C0E)** — modes 0-4: normal click (left/right pickup/place/merge/swap), shift-click (hotbar↔main), number key swap, creative clone, drop from slot. Cursor item tracking + S32 ConfirmTransaction + full window resync
-- ✅ CloseWindow (C0D) — drops cursor item on close
+- ✅ CloseWindow (C0D) — drops cursor item on close + workbench grid items
 - ✅ Player item drop (Q key) — status 3 (full stack) / 4 (single item), inventory decrement + S2F sync
 - ✅ Food consumption — right-click food decrements stack count from hotbar + S2F sync
+- ✅ **3×3 Crafting Table (Workbench)** — S2D OpenWindow type 1, 46-slot container, 3×3 CraftingGrid recipe matching + grid consumption, right-click block 58 interception
 - ❌ No item pickup/drop in survival mode
 
 ### Biomes & World Gen
@@ -172,7 +173,7 @@
 - **Lighting** — no light propagation engine
 - **Gravity/physics** — no server-side player physics (client handles its own)
 - **Mob spawning** — ✅ Done (natural hostile spawn near players, S0F SpawnMob, despawn >600 ticks)
-- ~~**Functional commands**~~ — ✅ Done (/stop, /gamemode, /time, /give, /tp, /kill, /difficulty, /seed, /list, /say, /gamerule, /help all with actual game effects)
+- ~~**Functional commands**~~ — ✅ Done (/stop, /gamemode, /time, /give, /tp, /kill, /difficulty, /seed, /list, /say, /gamerule, /weather, /help all with actual game effects)
 - ~~**World saving**~~ — ✅ saveAllChunks on shutdown
 - ~~**Player data persistence**~~ — ✅ save/load position and rotation via NBT to world/playerdata/<uuid>.dat
 - ~~**Tab complete**~~ — ✅ Server-side completion for commands and player names (C14→S3A)
@@ -197,7 +198,7 @@
 | networking | 1,193 | ~3,000 | Most complete module |
 | world | 1,148 | ~4,000 | Chunk I/O + flat gen working |
 | block | 815 | ~6,000 | Registry only, no block logic |
-| command | 443 | ~1,100 | 12 commands, fully functional with game effects |
+| command | 443 | ~1,100 | 13 commands, fully functional with game effects |
 | item | 426 | ~1,200 | Registry only |
 | forge | 440 | ~1,000 | JNI bridge skeleton |
 | redstone | 451 | ~800 | Framework only |
@@ -251,3 +252,5 @@
 36. **Item stack sizes + recipe expansion** — ✅ Done (getMaxStackSize per-item lookup: tools/weapons/armor=1, eggs/snowballs=16. Recipes expanded from 11 to 90+: all tools/weapons/armor/building/utility/redstone/food/storage)
 37. **XP gain system** — ✅ Done (xpBarCap vanilla formula, addExperience with level-up, mining XP for 6 ore types, kill XP level*7 cap 100, death reset, NBT persist XpP/XpLevel/XpTotal, persisted XP on login)
 38. **Weather system** — ✅ Done (updateWeather with Java-parity timer countdown/toggle, ±0.01/tick strength ramp, S2B broadcast: rain start/stop reasons 1/2, rain/thunder intensity reasons 7/8, weather sync on player join)
+39. **/weather command** — ✅ Done (clear/rain/thunder modes + optional duration, setWeather server method, tab completion)
+40. **3×3 Crafting Table** — ✅ Done (S2D OpenWindow type 1, 46-slot workbench container, CraftingGrid 3×3 recipe matching, grid consumption on craft, close drops grid items, block 58 activation intercept, sneak bypass)

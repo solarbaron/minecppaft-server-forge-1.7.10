@@ -555,6 +555,11 @@ void MinecraftServer::tickItemEntities() {
                 double distSq = dx * dx + dy * dy + dz * dz;
 
                 if (distSq < 1.0) {
+                    // Try to add item to player inventory
+                    if (!ph->tryPickupItem(*conn, e.itemId, e.itemMeta, e.stackSize)) {
+                        continue; // Inventory full — skip pickup
+                    }
+
                     // Pickup! broadcast collect animation
                     for (auto& c2 : connections_) {
                         if (!c2->isConnected() || c2->getState() != ConnectionState::Play) continue;
