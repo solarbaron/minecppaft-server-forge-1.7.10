@@ -19,6 +19,7 @@
 #include "crafting/Crafting.h"
 
 #include <cmath>
+#include <random>
 
 #include <algorithm>
 #include <array>
@@ -2127,6 +2128,83 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
     // Ender Chest (block ID 130) — Java: BlockEnderChest.onBlockActivated()
     if (clickedBlockId == 130 && !isSneaking_) {
         openEnderChest(conn, blockX, static_cast<int32_t>(blockY), blockZ);
+        return;
+    }
+
+    // Enchanting Table (block ID 116) — Java: BlockEnchantmentTable.onBlockActivated()
+    if (clickedBlockId == 116 && !isSneaking_) {
+        openWindowId_ = 10; // Use unique window ID for enchanting
+        enchantTableX_ = blockX;
+        enchantTableY_ = static_cast<int32_t>(blockY);
+        enchantTableZ_ = blockZ;
+
+        // Count bookshelves in a ring 2 blocks out (Java: ContainerEnchantment.onCraftMatrixChanged)
+        int bookshelfCount = 0;
+        auto& worlds = server_.getWorlds();
+        if (!worlds.empty()) {
+            auto& w = worlds[0];
+            for (int dz = -1; dz <= 1; ++dz) {
+                for (int dx = -1; dx <= 1; ++dx) {
+                    if (dx == 0 && dz == 0) continue;
+                    // Check air gap between table and bookshelf
+                    Block* gap1 = w->getBlock(blockX + dx, enchantTableY_, blockZ + dz);
+                    Block* gap2 = w->getBlock(blockX + dx, enchantTableY_ + 1, blockZ + dz);
+                    int gapId1 = gap1 ? Block::getIdFromBlock(gap1) : 0;
+                    int gapId2 = gap2 ? Block::getIdFromBlock(gap2) : 0;
+                    if (gapId1 != 0 || gapId2 != 0) continue;
+
+                    // Check for bookshelves at distance 2
+                    auto checkShelf = [&](int cx, int cy, int cz) {
+                        Block* b = w->getBlock(cx, cy, cz);
+                        if (b && Block::getIdFromBlock(b) == 47) ++bookshelfCount; // 47 = bookshelf
+                    };
+                    checkShelf(blockX + dx * 2, enchantTableY_, blockZ + dz * 2);
+                    checkShelf(blockX + dx * 2, enchantTableY_ + 1, blockZ + dz * 2);
+                    if (dx != 0 && dz != 0) {
+                        checkShelf(blockX + dx * 2, enchantTableY_, blockZ + dz);
+                        checkShelf(blockX + dx * 2, enchantTableY_ + 1, blockZ + dz);
+                        checkShelf(blockX + dx, enchantTableY_, blockZ + dz * 2);
+                        checkShelf(blockX + dx, enchantTableY_ + 1, blockZ + dz * 2);
+                    }
+                }
+            }
+        }
+        if (bookshelfCount > 15) bookshelfCount = 15;
+
+        // Generate 3 enchantment levels (simplified Java: EnchantmentHelper.calcItemStackEnchantability)
+        std::mt19937 rng(std::random_device{}());
+        for (int i = 0; i < 3; ++i) {
+            int base = 1 + (bookshelfCount > 0 ? std::uniform_int_distribution<>(0, bookshelfCount)(rng) : 0)
+                         + (bookshelfCount > 0 ? std::uniform_int_distribution<>(0, bookshelfCount)(rng) : 0);
+            int level = static_cast<int>(base * (1.0f + static_cast<float>(i) / 3.0f));
+            if (level < i + 1) level = i + 1;
+            enchantLevels_[i] = level;
+        }
+
+        // Send S2D OpenWindow (type 4 = enchanting table)
+        {
+            std::vector<uint8_t> pkt;
+            writeVarInt(pkt, ClientboundPacket::OpenWindow);
+            writeByte(pkt, static_cast<uint8_t>(openWindowId_));
+            writeByte(pkt, 4); // Type 4 = enchanting table
+            writeString(pkt, "Enchant");
+            writeByte(pkt, 0); // 0 slots (enchanting uses a single slot, handled differently)
+            writeByte(pkt, 1); // Use provided title
+            conn.sendPacket(std::move(pkt));
+        }
+
+        // Send S31 WindowProperty for 3 enchantment levels
+        for (int i = 0; i < 3; ++i) {
+            std::vector<uint8_t> propPkt;
+            writeVarInt(propPkt, ClientboundPacket::WindowProperty);
+            writeByte(propPkt, static_cast<uint8_t>(openWindowId_));
+            writeShort(propPkt, static_cast<int16_t>(i));
+            writeShort(propPkt, static_cast<int16_t>(enchantLevels_[i]));
+            conn.sendPacket(std::move(propPkt));
+        }
+
+        // Send S30 WindowItems (37 slots: 1 enchant + 36 player inv)
+        sendWindowItems(conn);
         return;
     }
 

@@ -762,6 +762,11 @@ private:
     void* furnaceData_ = nullptr;
     int64_t openFurnaceKey_ = 0;
 
+    // ─── Enchanting table ───
+    // Java: ContainerEnchantment fields
+    int32_t enchantTableX_ = 0, enchantTableY_ = 0, enchantTableZ_ = 0;
+    int enchantLevels_[3] = {0, 0, 0};
+
 public:
     // Accessors for server-side furnace ticking
     int32_t getOpenWindowType() const { return openWindowType_; }

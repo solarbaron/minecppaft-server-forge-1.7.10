@@ -111,7 +111,10 @@
 - 121 lines + 578-line header
 - Furnace, Chest, Beacon, Brewing Stand, etc. declared
 - ✅ **Chest** — in-memory per-position storage (27 slots), S2D OpenWindow + ClickWindow
-- ❌ No tile entity ticking or interaction for other types
+- ✅ **Furnace** — in-memory smelting with Java-parity tick/canSmelt/smeltItem, S2D type 2, S31 progress
+- ✅ **Ender Chest** — per-player 27-slot storage, block 130 interception
+- ✅ **Signs** — per-position text storage, C12 UpdateSign handler, S33 broadcast
+- ❌ No tile entity ticking or interaction for other types (beacon, brewing stand, hopper)
 
 ### Inventory System
 - Container hierarchy (679-line header)
@@ -123,7 +126,16 @@
 - ✅ Player item drop (Q key) — status 3 (full stack) / 4 (single item), inventory decrement + S2F sync
 - ✅ Food consumption — right-click food decrements stack count from hotbar + S2F sync
 - ✅ **3×3 Crafting Table (Workbench)** — S2D OpenWindow type 1, 46-slot container, 3×3 CraftingGrid recipe matching + grid consumption, right-click block 58 interception
-- ❌ No item pickup/drop in survival mode
+- ❌ No item pickup/drop in survival mode (only creative)
+
+### Interactive Blocks
+- ✅ **Doors** (64) — toggle open/close meta 0x04, both halves sync, open/close sounds
+- ✅ **Trapdoors** (96) — toggle meta 0x04
+- ✅ **Fence gates** (107) — toggle meta 0x04
+- ✅ **Levers** (69) — toggle meta 0x08 with click sound
+- ✅ **Buttons** (77/143) — momentary press meta 0x08
+- ✅ **Note blocks** (25) — pitch 0-24, harp sound + note particle
+- ❌ Repeaters, comparators, daylight sensors, pressure plates
 
 ### Biomes & World Gen
 - **BiomeRegistry** — 355 lines, biome types registered
@@ -140,13 +152,14 @@
 ## ❌ Not Implemented (Critical Missing Features)
 
 ### Networking — Missing Packets
-- **Block changes** — S23 BlockChange, S22 MultiBlockChange
-- **Entity packets** — S0C SpawnPlayer, S0E SpawnObject, S0F SpawnMob, S12 EntityVelocity, S14 Entity, S15 EntityRelMove, S16 EntityLook, S17 EntityLookRelMove, S18 EntityTeleport, S19 EntityHeadLook, S1A EntityStatus, S1B AttachEntity, S1C EntityMetadata, S1D EntityEffect, S1E RemoveEntityEffect
-- **Inventory** — S2D OpenWindow, S2E CloseWindow, S2F SetSlot, S30 WindowItems, S31 WindowProperty, S32 ConfirmTransaction
+- ~~**Block changes** — S23 BlockChange, S22 MultiBlockChange~~
+- **Entity packets** — ~~S0C SpawnPlayer~~, S0E SpawnObject, ~~S0F SpawnMob~~, ~~S12 EntityVelocity~~, S14 Entity, ~~S15 EntityRelMove~~, ~~S16 EntityLook~~, ~~S17 EntityLookRelMove~~, ~~S18 EntityTeleport~~, ~~S19 EntityHeadLook~~, ~~S1A EntityStatus~~, S1B AttachEntity, ~~S1C EntityMetadata~~, S1D EntityEffect, S1E RemoveEntityEffect
+- **Inventory** — ~~S2D OpenWindow~~, ~~S2E CloseWindow~~, ~~S2F SetSlot~~, ~~S30 WindowItems~~, ~~S31 WindowProperty~~, ~~S32 ConfirmTransaction~~
 - **Chat** — ✅ S02 ChatMessage (outbound, for command responses and chat broadcast)
 - **Player Info** — S38 PlayerListItem (tab list) — packet implemented, not auto-sent
-- **Sound/Particles** — S28 Effect, S29 SoundEffect, S2A Particle
-- **Explosions** — S27 Explosion
+- **Sound/Particles** — S28 Effect, ~~S29 SoundEffect~~, ~~S2A Particle~~
+- **Explosions** — ✅ S27 Explosion — 5-phase createExplosion, TNT ignition
+- **Signs** — ✅ S33 UpdateSign — C12 handler + per-position storage + broadcast
 - **Weather** — ✅ S2B ChangeGameState — rain/thunder cycle with timer countdown, strength ramp, client sync on change and join
 - **Time** — ✅ S03 TimeUpdate — auto-sent every 20 ticks (day/night cycle working)
 - **Health** — ✅ S06 UpdateHealth — sent on login, respawn, and whenever health/food changes
@@ -263,3 +276,7 @@
 46. **Chest close sound** — ✅ Done (plays random.chestclose on closeOpenWindow for chest/ender chest windows)
 47. **Bed sleeping** — ✅ Done (block 26 right-click: night check time≥12541, S0A UseBed, setWorldTime(0), broadcastTimeUpdate, "Good morning!" chat; day: "You can only sleep at night")
 48. **World time ticking** — ✅ Done (worldTime+1 per tick via WorldServer, S03 TimeUpdate broadcast every 20 ticks, tickCounter_ atomic for world age, getWorldTime/getWorldAge public methods)
+49. **Explosion system** — ✅ Done (createExplosion 5-phase: 16-ray block destruction with explosion resistance, entity damage/knockback, block drops 1/power chance, S27 Explosion packet with per-player velocity, random.explode sound; TNT ignition with flint & steel item 259 on block 46)
+50. **Sign text handling** — ✅ Done (C12 UpdateSign → setSignText per-position storage + S33 broadcast to all players; sendSignToPlayer for chunk load)
+51. **Particle broadcast** — ✅ Done (broadcastParticle S2A to all connected players)
+52. **Interactive blocks** — ✅ Done (wooden door 64 toggle meta 0x04 both halves, trapdoor 96, fence gate 107, lever 69 toggle meta 0x08, stone/wood button 77/143 press, note block 25 pitch 0-24 + note.harp sound + note particle)
