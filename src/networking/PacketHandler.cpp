@@ -666,9 +666,23 @@ void PlayHandler::handlePacket(int32_t packetId,
             handleClickWindow(data, length, conn);
             break;
         case ServerboundPacket::ConfirmTransaction:
-        case ServerboundPacket::UpdateSign:
-            // Silently consume unimplemented sign packets
             break;
+        case ServerboundPacket::UpdateSign: {
+            // Java: NetHandlerPlayServer.processUpdateSign()
+            // Parse C12 UpdateSign: x(int), y(short), z(int), line1-4(string)
+            if (length >= 14) {
+                PacketReader reader(data, length);
+                int32_t sx = reader.readInt();
+                int16_t sy = reader.readShort();
+                int32_t sz = reader.readInt();
+                std::string l1 = reader.readString(15);
+                std::string l2 = reader.readString(15);
+                std::string l3 = reader.readString(15);
+                std::string l4 = reader.readString(15);
+                server_.setSignText(sx, sy, sz, l1, l2, l3, l4);
+            }
+            break;
+        }
         case ServerboundPacket::CreativeInventory:
             handleCreativeInventory(data, length, conn);
             break;

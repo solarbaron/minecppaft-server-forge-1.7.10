@@ -522,11 +522,163 @@ void MinecraftServer::broadcastTimeUpdate() {
 }
 
 float MinecraftServer::getBlockExplosionResistance(int32_t blockId) {
-    // Delegate to Block registry if block exists
-    // Java reference: Block.getExplosionResistance() = resistance / 5.0f
     Block* block = Block::getBlockById(blockId);
     if (block) return block->getExplosionResistance();
     return 0.0f;
+}
+
+void MinecraftServer::setSignText(int32_t x, int32_t y, int32_t z,
+                                   const std::string& l1, const std::string& l2,
+                                   const std::string& l3, const std::string& l4) {
+    // Store sign text
+    int64_t key = packBlockPos(x, y, z);
+    {
+        std::lock_guard<std::mutex> lock(signsMutex_);
+        signs_[key] = {{l1, l2, l3, l4}};
+    }
+
+    // Broadcast S33 UpdateSign to all connected players
+    // Helper lambdas for packet building
+    auto writeVarInt = [](std::vector<uint8_t>& buf, int32_t value) {
+        uint32_t uval = static_cast<uint32_t>(value);
+        do {
+            uint8_t b = uval & 0x7F;
+            uval >>= 7;
+            if (uval != 0) b |= 0x80;
+            buf.push_back(b);
+        } while (uval != 0);
+    };
+    auto writeString = [&writeVarInt](std::vector<uint8_t>& buf, const std::string& s) {
+        writeVarInt(buf, static_cast<int32_t>(s.size()));
+        buf.insert(buf.end(), s.begin(), s.end());
+    };
+    auto writeInt = [](std::vector<uint8_t>& buf, int32_t value) {
+        buf.push_back((value >> 24) & 0xFF);
+        buf.push_back((value >> 16) & 0xFF);
+        buf.push_back((value >> 8) & 0xFF);
+        buf.push_back(value & 0xFF);
+    };
+    auto writeShort = [](std::vector<uint8_t>& buf, int16_t value) {
+        buf.push_back((value >> 8) & 0xFF);
+        buf.push_back(value & 0xFF);
+    };
+
+    std::vector<uint8_t> pkt;
+    writeVarInt(pkt, 0x33); // S33 UpdateSign
+    writeInt(pkt, x);
+    writeShort(pkt, static_cast<int16_t>(y));
+    writeInt(pkt, z);
+    writeString(pkt, l1);
+    writeString(pkt, l2);
+    writeString(pkt, l3);
+    writeString(pkt, l4);
+
+    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    for (auto& conn : connections_) {
+        if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+        auto copy = pkt; // copy for each connection
+        conn->sendPacket(std::move(copy));
+    }
+}
+
+void MinecraftServer::sendSignToPlayer(PlayHandler& /*handler*/, Connection& conn,
+                                        int32_t x, int32_t y, int32_t z) {
+    int64_t key = packBlockPos(x, y, z);
+    SignData data;
+    {
+        std::lock_guard<std::mutex> lock(signsMutex_);
+        auto it = signs_.find(key);
+        if (it == signs_.end()) return;
+        data = it->second;
+    }
+
+    auto writeVarInt = [](std::vector<uint8_t>& buf, int32_t value) {
+        uint32_t uval = static_cast<uint32_t>(value);
+        do {
+            uint8_t b = uval & 0x7F;
+            uval >>= 7;
+            if (uval != 0) b |= 0x80;
+            buf.push_back(b);
+        } while (uval != 0);
+    };
+    auto writeString = [&writeVarInt](std::vector<uint8_t>& buf, const std::string& s) {
+        writeVarInt(buf, static_cast<int32_t>(s.size()));
+        buf.insert(buf.end(), s.begin(), s.end());
+    };
+    auto writeInt = [](std::vector<uint8_t>& buf, int32_t value) {
+        buf.push_back((value >> 24) & 0xFF);
+        buf.push_back((value >> 16) & 0xFF);
+        buf.push_back((value >> 8) & 0xFF);
+        buf.push_back(value & 0xFF);
+    };
+    auto writeShort = [](std::vector<uint8_t>& buf, int16_t value) {
+        buf.push_back((value >> 8) & 0xFF);
+        buf.push_back(value & 0xFF);
+    };
+
+    std::vector<uint8_t> pkt;
+    writeVarInt(pkt, 0x33);
+    writeInt(pkt, x);
+    writeShort(pkt, static_cast<int16_t>(y));
+    writeInt(pkt, z);
+    writeString(pkt, data.lines[0]);
+    writeString(pkt, data.lines[1]);
+    writeString(pkt, data.lines[2]);
+    writeString(pkt, data.lines[3]);
+    conn.sendPacket(std::move(pkt));
+}
+
+void MinecraftServer::broadcastParticle(const std::string& particleName,
+                                         float x, float y, float z,
+                                         float offsetX, float offsetY, float offsetZ,
+                                         float speed, int32_t count) {
+    // Java reference: WorldServer.spawnParticle() → S2A Particle
+    auto writeVarInt = [](std::vector<uint8_t>& buf, int32_t value) {
+        uint32_t uval = static_cast<uint32_t>(value);
+        do {
+            uint8_t b = uval & 0x7F;
+            uval >>= 7;
+            if (uval != 0) b |= 0x80;
+            buf.push_back(b);
+        } while (uval != 0);
+    };
+    auto writeString = [&writeVarInt](std::vector<uint8_t>& buf, const std::string& s) {
+        writeVarInt(buf, static_cast<int32_t>(s.size()));
+        buf.insert(buf.end(), s.begin(), s.end());
+    };
+    auto writeFloat = [](std::vector<uint8_t>& buf, float value) {
+        uint32_t bits;
+        std::memcpy(&bits, &value, sizeof(bits));
+        buf.push_back((bits >> 24) & 0xFF);
+        buf.push_back((bits >> 16) & 0xFF);
+        buf.push_back((bits >> 8) & 0xFF);
+        buf.push_back(bits & 0xFF);
+    };
+    auto writeInt = [](std::vector<uint8_t>& buf, int32_t value) {
+        buf.push_back((value >> 24) & 0xFF);
+        buf.push_back((value >> 16) & 0xFF);
+        buf.push_back((value >> 8) & 0xFF);
+        buf.push_back(value & 0xFF);
+    };
+
+    std::vector<uint8_t> pkt;
+    writeVarInt(pkt, 0x2A); // S2A Particle
+    writeString(pkt, particleName);
+    writeFloat(pkt, x);
+    writeFloat(pkt, y);
+    writeFloat(pkt, z);
+    writeFloat(pkt, offsetX);
+    writeFloat(pkt, offsetY);
+    writeFloat(pkt, offsetZ);
+    writeFloat(pkt, speed);
+    writeInt(pkt, count);
+
+    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    for (auto& conn : connections_) {
+        if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+        auto copy = pkt;
+        conn->sendPacket(std::move(copy));
+    }
 }
 
 void MinecraftServer::createExplosion(double x, double y, double z, float power,

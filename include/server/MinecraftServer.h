@@ -184,6 +184,29 @@ public:
     static float getBlockExplosionResistance(int32_t blockId);
 
     /**
+     * Store sign text at a position and broadcast S33 UpdateSign to all players.
+     * Java reference: TileEntitySign + NetHandlerPlayServer.processUpdateSign()
+     */
+    void setSignText(int32_t x, int32_t y, int32_t z,
+                     const std::string& l1, const std::string& l2,
+                     const std::string& l3, const std::string& l4);
+
+    /**
+     * Send sign text at a position to a single player (used on chunk load).
+     */
+    void sendSignToPlayer(PlayHandler& handler, Connection& conn,
+                          int32_t x, int32_t y, int32_t z);
+
+    /**
+     * Broadcast S2A Particle to all connected players.
+     * Java reference: WorldServer.spawnParticle()
+     */
+    void broadcastParticle(const std::string& particleName,
+                           float x, float y, float z,
+                           float offsetX, float offsetY, float offsetZ,
+                           float speed, int32_t count);
+
+    /**
      * Save all world chunks to disk.\n     * Java reference: MinecraftServer.saveAllWorlds()\n     */
     void saveAllWorlds();
 
@@ -455,6 +478,14 @@ private:
     mutable std::mutex itemEntitiesMutex_;
     std::vector<DroppedItem> itemEntities_;
     std::atomic<int32_t> nextItemEntityId_{100000};
+
+    // ─── Sign storage ────────────────────────────────────────────────────
+    // Java reference: TileEntitySign
+    struct SignData {
+        std::string lines[4];
+    };
+    mutable std::mutex signsMutex_;
+    std::map<int64_t, SignData> signs_;  // packed pos → text
 
     // ─── Mob entities ───────────────────────────────────────────────
     // Java reference: SpawnerAnimals.findChunksForSpawning()
