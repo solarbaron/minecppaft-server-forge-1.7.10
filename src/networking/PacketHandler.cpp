@@ -561,7 +561,7 @@ void PlayHandler::sendLoginSequence(Connection& conn) {
 
     // 6. S06PacketUpdateHealth — initial health/food/saturation
     // Java reference: EntityPlayer defaults: health=20, foodLevel=20, saturation=5.0f
-    sendUpdateHealth(conn, 20.0f, 20, 5.0f);
+    sendUpdateHealth(conn, health_, foodStats_.getFoodLevel(), foodStats_.getSaturationLevel());
 
     // 7. S30PacketWindowItems — send initial inventory contents
     // Java reference: EntityPlayerMP.onNewPotionEffect / initializeConnectionToPlayer
@@ -1134,11 +1134,26 @@ void PlayHandler::handlePlayerPosition(const uint8_t* data, size_t length, Conne
     // C04PacketPlayerPosition: Double x, Double y, Double stance, Double z, Bool onGround
     // Note: 1.7.10 sends BOTH y (feet) AND stance (head) — 33 bytes total
     if (length < 33) return;
+    double oldX = playerX_, oldZ = playerZ_;
     playerX_ = readDouble(data);
     playerY_ = readDouble(data + 8);
     // stance = readDouble(data + 16) — head Y, not stored separately
     playerZ_ = readDouble(data + 24);
     playerOnGround_ = data[32] != 0;
+
+    // Movement exhaustion — Java: EntityPlayer.addExhaustion per meter
+    double dx = playerX_ - oldX;
+    double dz = playerZ_ - oldZ;
+    double distSq = dx * dx + dz * dz;
+    if (distSq > 0.0001) {
+        float dist = static_cast<float>(std::sqrt(distSq));
+        if (isSprinting_) {
+            foodStats_.addExhaustion(dist * Exhaustion::SPRINT); // 0.1 per meter
+        } else {
+            foodStats_.addExhaustion(dist * Exhaustion::WALK);   // 0.01 per meter
+        }
+    }
+
     server_.broadcastPlayerPosition(*this);
 }
 
@@ -1156,6 +1171,7 @@ void PlayHandler::handlePlayerPosAndLook(const uint8_t* data, size_t length, Con
     // Java reference: NetHandlerPlayServer.processPlayer()
     // C06PacketPlayerPosLook: Double x, Double y, Double stance, Double z, Float yaw, Float pitch, Bool onGround
     if (length < 41) return;
+    double oldX = playerX_, oldZ = playerZ_;
     playerX_ = readDouble(data);
     playerY_ = readDouble(data + 8);
     // stance = readDouble(data + 16)
@@ -1163,6 +1179,20 @@ void PlayHandler::handlePlayerPosAndLook(const uint8_t* data, size_t length, Con
     playerYaw_ = readFloat(data + 32);
     playerPitch_ = readFloat(data + 36);
     playerOnGround_ = data[40] != 0;
+
+    // Movement exhaustion — same as handlePlayerPosition
+    double dx = playerX_ - oldX;
+    double dz = playerZ_ - oldZ;
+    double distSq = dx * dx + dz * dz;
+    if (distSq > 0.0001) {
+        float dist = static_cast<float>(std::sqrt(distSq));
+        if (isSprinting_) {
+            foodStats_.addExhaustion(dist * Exhaustion::SPRINT);
+        } else {
+            foodStats_.addExhaustion(dist * Exhaustion::WALK);
+        }
+    }
+
     server_.broadcastPlayerPosition(*this);
 }
 
@@ -1279,7 +1309,21 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
 
     // direction = 255 means "use item" (right-click in air)
     if (direction == 255) {
-        // Use item in hand — silently consume for now
+        // Check if held item is food — Java: ItemFood.onItemRightClick
+        if (length >= 12) {
+            int16_t heldItemId = static_cast<int16_t>((data[10] << 8) | data[11]);
+            const FoodValue* foodVal = FoodValues::getByItemId(heldItemId);
+            if (foodVal && foodStats_.needFood()) {
+                // Eat the food — Java: ItemFood.onItemUseFinish
+                foodStats_.addStats(foodVal->healAmount, foodVal->saturationModifier);
+                sendUpdateHealth(conn, health_, foodStats_.getFoodLevel(), foodStats_.getSaturationLevel());
+                // Play burp sound
+                server_.broadcastSound("random.burp", playerX_, playerY_, playerZ_, 0.5f, 0.9f);
+                std::cout << "[Food] " << playerName_ << " ate item " << heldItemId
+                          << " (food=" << foodStats_.getFoodLevel()
+                          << ", sat=" << foodStats_.getSaturationLevel() << ")\n";
+            }
+        }
         return;
     }
 
@@ -1395,6 +1439,14 @@ void PlayHandler::savePlayerData() {
     // Dimension
     root.setInteger("Dimension", 0);
 
+    // Health
+    root.setFloat("Health", health_);
+
+    // Food stats — Java: FoodStats.writeNBT()
+    root.setInteger("foodLevel", foodStats_.getFoodLevel());
+    root.setFloat("foodSaturationLevel", foodStats_.getSaturationLevel());
+    root.setFloat("foodExhaustionLevel", foodStats_.getExhaustionLevel());
+
     // Serialize to binary
     auto data = nbt::serializeNBT(root);
 
@@ -1453,6 +1505,23 @@ bool PlayHandler::loadPlayerData() {
         playerOnGround_ = root->getByte("OnGround") != 0;
     }
 
+    // Read health
+    if (root->hasKey("Health")) {
+        health_ = root->getFloat("Health");
+        if (health_ <= 0.0f) health_ = 20.0f; // Don't load dead
+    }
+
+    // Read food stats — Java: FoodStats.readNBT()
+    if (root->hasKey("foodLevel")) {
+        foodStats_.foodLevel = root->getInteger("foodLevel");
+    }
+    if (root->hasKey("foodSaturationLevel")) {
+        foodStats_.foodSaturationLevel = root->getFloat("foodSaturationLevel");
+    }
+    if (root->hasKey("foodExhaustionLevel")) {
+        foodStats_.foodExhaustionLevel = root->getFloat("foodExhaustionLevel");
+    }
+
     std::cout << "[Load] Loaded player data for " << playerName_
               << " at (" << playerX_ << ", " << playerY_ << ", " << playerZ_ << ")\n";
     return true;
@@ -1490,8 +1559,7 @@ void PlayHandler::handleClientStatus(const uint8_t* data, size_t length, Connect
         // PERFORM_RESPAWN — Java: EntityPlayerMP.onDeath → respawn
         // Reset health and state
         health_ = 20.0f;
-        food_ = 20;
-        saturation_ = 5.0f;
+        foodStats_ = FoodStats();  // Reset to defaults (20 food, 5.0 sat)
         dead_ = false;
 
         // Get spawn coordinates
@@ -1545,7 +1613,7 @@ void PlayHandler::handleClientStatus(const uint8_t* data, size_t length, Connect
         }
 
         // Send full health
-        sendUpdateHealth(conn, health_, food_, saturation_);
+        sendUpdateHealth(conn, health_, foodStats_.getFoodLevel(), foodStats_.getSaturationLevel());
 
         // Re-broadcast spawn to other players
         server_.onPlayerJoined(conn, *this);
@@ -1630,6 +1698,8 @@ void PlayHandler::sendSpawnMob(Connection& conn, int32_t entityId, uint8_t mobTy
 void PlayHandler::applyDamage(float amount) {
     // Java reference: EntityLivingBase.damageEntity()
     health_ = std::max(0.0f, health_ - amount);
+    // Java: EntityPlayer takes 0.3 exhaustion on any damage
+    foodStats_.addExhaustion(Exhaustion::DAMAGE);
     if (health_ <= 0.0f) {
         dead_ = true;
     }
@@ -1809,6 +1879,57 @@ void PlayHandler::handleTabComplete(const uint8_t* data, size_t length, Connecti
     // Send S3A TabComplete response
     auto tabPkt = PacketBuilder::tabComplete(completions);
     conn.sendPacket(tabPkt);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// tickFood — Per-tick food/hunger processing.
+// Java reference: EntityPlayer.onUpdate() → FoodStats.onUpdate()
+//
+// Called once per server tick for each Play-state connection.
+// Uses the FoodStats struct (from FoodStats.h) with TickResult return value.
+// ═══════════════════════════════════════════════════════════════════════════
+void PlayHandler::tickFood(Connection& conn) {
+    if (dead_) return;
+
+    // Get difficulty — WorldServer doesn't expose difficulty yet, default to Normal
+    // Java: entityPlayer.worldObj.difficultySetting
+    int32_t difficulty = 2; // Normal (TODO: expose difficulty on WorldServer)
+
+    // Check naturalRegeneration game rule
+    // GameRules not fully wired to WorldServer yet, default to true
+    bool naturalRegen = true;
+
+    float prevHealth = health_;
+    int32_t prevFood = foodStats_.getFoodLevel();
+
+    // Java: EntityPlayer.shouldHeal() → health > 0 && health < maxHealth
+    bool canHeal = (health_ > 0.0f && health_ < 20.0f);
+
+    // Tick the food system
+    auto result = foodStats_.onUpdate(difficulty, naturalRegen, health_, canHeal);
+
+    // Apply heal
+    if (result.shouldHeal) {
+        health_ = std::min(health_ + 1.0f, 20.0f);
+    }
+
+    // Apply starvation damage
+    if (result.shouldStarve) {
+        health_ = std::max(0.0f, health_ - result.starveDamage);
+        if (health_ <= 0.0f) {
+            dead_ = true;
+        }
+    }
+
+    // Send S06 UpdateHealth if anything changed
+    if (health_ != prevHealth || foodStats_.getFoodLevel() != prevFood) {
+        sendUpdateHealth(conn, health_, foodStats_.getFoodLevel(), foodStats_.getSaturationLevel());
+    }
+
+    // Tick hurt resistant time
+    if (hurtResistantTime_ > 0) {
+        --hurtResistantTime_;
+    }
 }
 
 } // namespace mccpp

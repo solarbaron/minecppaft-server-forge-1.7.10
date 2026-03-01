@@ -138,7 +138,7 @@
 - **Explosions** — S27 Explosion
 - **Weather** — S2B ChangeGameState (rain start/stop) — packet implemented for gamemode changes
 - **Time** — ✅ S03 TimeUpdate — auto-sent every 20 ticks (day/night cycle working)
-- **Health** — ✅ S06 UpdateHealth — sent on login (20hp, 20food, 5.0 saturation)
+- **Health** — ✅ S06 UpdateHealth — sent on login, respawn, and whenever health/food changes
 - **Block changes** — ✅ S23 BlockChange — working, broadcast on break/place
 
 ### Gameplay
@@ -146,7 +146,7 @@
 - ~~**Item drops**~~ — ✅ EntityItem spawn on block break with pickup
 - ~~**Player-to-player visibility**~~ — ✅ S0C SpawnPlayer + S38 PlayerListItem + S13 DestroyEntities working
 - ~~**Combat**~~ — ✅ damage (fist), knockback (S12), hurt animation (S1A), death + respawn
-- ~~**Health/hunger**~~ — ✅ initial S06 UpdateHealth sent on join (full health/food)
+- ~~**Health/hunger**~~ — ✅ Full FoodStats system: exhaustion→saturation→hunger drain, natural health regen (food≥18), starvation damage (food=0), movement exhaustion, food eating, NBT save/load
 - **Movement validation** — server accepts all positions without anti-cheat; ✅ S18 EntityTeleport + S19 HeadLook broadcast to other players
 - **Lighting** — no light propagation engine
 - **Gravity/physics** — no server-side player physics (client handles its own)

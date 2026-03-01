@@ -20,6 +20,7 @@
 
 #include "command/CommandSystem.h"
 #include "inventory/Inventory.h"
+#include "mechanics/FoodStats.h"
 
 namespace mccpp {
 
@@ -330,12 +331,22 @@ public:
     float getPlayerYaw() const { return playerYaw_; }
     float getPlayerPitch() const { return playerPitch_; }
     float getHealth() const { return health_; }
-    int32_t getFood() const { return food_; }
-    float getSaturation() const { return saturation_; }
+    int32_t getFood() const { return foodStats_.getFoodLevel(); }
+    float getSaturation() const { return foodStats_.getSaturationLevel(); }
+    FoodStats& getFoodStats() { return foodStats_; }
+    const FoodStats& getFoodStats() const { return foodStats_; }
     bool isDead() const { return dead_; }
     int16_t getCurrentSlot() const { return currentSlot_; }
     bool isSneaking() const { return isSneaking_; }
     bool isSprinting() const { return isSprinting_; }
+
+    /**
+     * Tick the food/hunger system once per server tick.
+     * Java reference: EntityPlayer.onUpdate() → FoodStats.onUpdate()
+     * Handles exhaustion→saturation→hunger drain, natural health regen,
+     * starvation damage, and sends S06 UpdateHealth when values change.
+     */
+    void tickFood(Connection& conn);
 
     // ─── Setters for player state (used by commands) ────────────────────
     void setPlayerPosition(double x, double y, double z) {
@@ -411,8 +422,7 @@ private:
 
     // Combat state — Java: EntityPlayer fields
     float health_ = 20.0f;        // EntityLivingBase.health
-    int32_t food_ = 20;           // FoodStats.foodLevel
-    float saturation_ = 5.0f;     // FoodStats.foodSaturationLevel
+    FoodStats foodStats_;         // Java: EntityPlayer.foodStats
     int hurtResistantTime_ = 0;   // EntityLivingBase.hurtResistantTime (20 tick cooldown)
     bool dead_ = false;           // EntityLivingBase.dead
 

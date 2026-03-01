@@ -18,6 +18,7 @@
 #include "networking/PacketBuilder.h"
 #include "networking/PacketHandler.h"
 #include "networking/TcpListener.h"
+#include "mechanics/FoodStats.h"
 #include "world/World.h"
 
 #include <algorithm>
@@ -66,6 +67,10 @@ bool MinecraftServer::init() {
     // Java reference: CraftingManager.<init>(), FurnaceRecipes.<init>()
     CraftingManager::getInstance();
     FurnaceRecipes::instance();
+
+    // Initialize food values registry
+    // Java reference: ItemFood constructed with healAmount/saturationModifier in Items.<clinit>()
+    FoodValues::init();
 
     // Initialize worlds
     // Java reference: MinecraftServer.h() — creates WorldServer for each dimension
@@ -209,6 +214,20 @@ void MinecraftServer::tick() {
     // Java reference: WorldServer.tick() → SpawnerAnimals.findChunksForSpawning()
     if (ticks > 0 && ticks % 200 == 0) {
         spawnNaturalMobs();
+    }
+
+    // Tick food/hunger for all play-state players
+    // Java reference: EntityPlayer.onUpdate() → FoodStats.onUpdate()
+    {
+        std::lock_guard<std::mutex> lock(connectionsMutex_);
+        for (auto& conn : connections_) {
+            if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+            auto handler = conn->getHandler();
+            auto* play = dynamic_cast<PlayHandler*>(handler.get());
+            if (play) {
+                play->tickFood(*conn);
+            }
+        }
     }
 
     // Send S03 TimeUpdate to all players every 20 ticks (1 second)
