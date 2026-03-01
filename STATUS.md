@@ -160,7 +160,7 @@
 - ~~**Caves**~~ — ✅ MapGenCaves worm carving integrated
 - ~~**Ores**~~ — ✅ All 11 vanilla ores (coal, iron, gold, diamond, redstone, lapis, emerald, dirt, gravel)
 - **Structures** — no villages, temples, strongholds, dungeons
-- **Trees/vegetation** — no tree/flower generation
+- ~~**Trees/vegetation**~~ — ✅ Oak tree generation via TreeGenerator (1/10 chance per chunk in plains)
 - **Nether/End** — dimensions declared but not generated
 
 ---
@@ -199,7 +199,7 @@
 
 ### New Priorities
 11. **Caves + Ores** — ✅ Done (MapGenCaves worm carving + 11 vanilla ores via OreDistribution)
-12. **Tree generation** — WorldGenTrees / BiomeDecorator tree placement
+12. **Tree generation** — ✅ Done (TreeGenerator oak trees wired into OverworldGenerator)
 13. **Player data persistence** — save/load player position, inventory, health
 14. **Combat system** — damage, knockback, death/respawn
 15. **Mob spawning** — natural mob spawning in dark areas

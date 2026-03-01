@@ -25,6 +25,7 @@
 #include "worldgen/NoiseGeneratorOctaves.h"
 #include "worldgen/MapGenCaves.h"
 #include "worldgen/WorldGenOre.h"
+#include "worldgen/WorldGenTrees.h"
 
 #include <array>
 #include <cstring>
@@ -141,7 +142,64 @@ public:
             OreDistribution::generateChunkOres(chunkX, chunkZ, oreRng, getBlock, setBlock);
         }
 
-        // ── Step 9: Fill chunk sections ──
+        // ── Step 9: Tree generation ──
+        // Java reference: BiomeDecorator — plains has treesPerChunk = -1
+        // meaning 0 trees + 1/10 chance of an extra tree
+        {
+            TreeGenerator::RNG treeRng;
+            treeRng.setSeed(seed_ ^ (static_cast<int64_t>(chunkX) * 341873128712LL +
+                                      static_cast<int64_t>(chunkZ) * 132897987541LL));
+
+            int32_t treesPerChunk = 0;
+            if (treeRng.nextInt(10) == 0) treesPerChunk = 1;
+
+            auto getBlockForTree = [&blocks](int32_t x, int32_t y, int32_t z) -> int32_t {
+                if (x < 0 || x > 15 || z < 0 || z > 15 || y < 0 || y > 255) return 0;
+                return blocks[(x * 16 + z) * 256 + y];
+            };
+            auto isReplaceable = [](int32_t blockId) -> bool {
+                return blockId == 0 || blockId == 18 || blockId == 161;  // air, leaves, leaves2
+            };
+
+            for (int32_t t = 0; t < treesPerChunk; ++t) {
+                int32_t tx = treeRng.nextInt(16);
+                int32_t tz = treeRng.nextInt(16);
+
+                // Find surface Y
+                int32_t ty = 0;
+                for (int32_t y = 255; y >= 0; --y) {
+                    int32_t bid = blocks[(tx * 16 + tz) * 256 + y];
+                    if (bid != 0 && bid != 18 && bid != 161) {
+                        ty = y + 1;
+                        break;
+                    }
+                }
+
+                auto placements = TreeGenerator::generateTree(
+                    tx, ty, tz,
+                    4,     // minTreeHeight (oak)
+                    0,     // metaWood (oak)
+                    0,     // metaLeaves (oak)
+                    false, // no vines (standard oak)
+                    treeRng,
+                    getBlockForTree,
+                    isReplaceable
+                );
+
+                // Apply placements within chunk bounds
+                for (const auto& bp : placements) {
+                    if (bp.x >= 0 && bp.x < 16 && bp.z >= 0 && bp.z < 16 &&
+                        bp.y >= 0 && bp.y < 256) {
+                        blocks[(bp.x * 16 + bp.z) * 256 + bp.y] = bp.blockId;
+                        if (bp.meta != 0) {
+                            meta[(bp.x * 16 + bp.z) * 256 + bp.y] = static_cast<uint8_t>(bp.meta);
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── Step 10: Fill chunk sections ──
         for (int x = 0; x < 16; ++x) {
             for (int z = 0; z < 16; ++z) {
                 for (int y = 0; y < 256; ++y) {
