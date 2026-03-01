@@ -1781,7 +1781,171 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
     Block* newBlock = Block::getBlockById(placeBlockId);
     if (!newBlock) return;
 
+    // ─── Compute placement metadata ──────────────────────────────────────
+    // Java reference: Block.onBlockPlaced / onBlockPlacedBy
+    int32_t meta = 0;
+
+    // Read cursor position for sub-block precision
+    // Cursor bytes are at the end of the packet after the slot data
+    float cursorY = 0.5f; // default center
+    // We'll approximate from direction for now since cursor parsing is complex
+
+    // Player facing direction from yaw — Java: MathHelper.floor_double(yaw * 4 / 360 + 0.5) & 3
+    int32_t facingDir = (static_cast<int32_t>(std::floor(playerYaw_ * 4.0f / 360.0f + 0.5f)) & 3);
+    // facingDir: 0=south, 1=west, 2=north, 3=east
+
+    switch (placeBlockId) {
+        // ─── Stairs — Java: BlockStairs.onBlockPlaced ─────────────────
+        // Meta 0-3 = facing (0=east,1=west,2=south,3=north), bit 2 = upside-down
+        case 53: case 67: case 108: case 109: case 114: case 128:
+        case 134: case 135: case 136: case 156: case 163: case 164: {
+            // Convert player facing to stair facing (player faces towards stair)
+            // Java: 0=east,1=west,2=south,3=north — opposite of player facing
+            int32_t stairFacing;
+            switch (facingDir) {
+                case 0: stairFacing = 3; break; // Player south → stairs face north
+                case 1: stairFacing = 0; break; // Player west → stairs face east
+                case 2: stairFacing = 2; break; // Player north → stairs face south
+                case 3: stairFacing = 1; break; // Player east → stairs face west
+                default: stairFacing = 0;
+            }
+            meta = stairFacing;
+            // Upside-down if placing on bottom face of a block
+            if (direction == 0) {
+                meta |= 4; // upside-down bit
+            }
+            break;
+        }
+
+        // ─── Slabs — Java: BlockSlab.onBlockPlaced ───────────────────
+        // Meta 8 = upper half slab
+        case 44: case 126: {
+            if (direction == 0) {
+                meta = 8; // Clicking bottom face → upper slab
+            }
+            // Otherwise meta 0 = lower slab
+            break;
+        }
+
+        // ─── Logs — Java: BlockLog.onBlockPlaced ─────────────────────
+        // Meta bits 2-3: 0=Y axis, 1=X axis(east/west), 2=Z axis(north/south), 3=bark
+        case 17: case 162: {
+            switch (direction) {
+                case 0: case 1: meta = 0; break; // Up/Down → Y axis
+                case 2: case 3: meta = 8; break; // North/South → Z axis
+                case 4: case 5: meta = 4; break; // East/West → X axis
+            }
+            break;
+        }
+
+        // ─── Torches — Java: BlockTorch.onBlockPlaced ────────────────
+        // Meta: 1=east, 2=west, 3=south, 4=north, 5=floor
+        case 50: case 75: case 76: {
+            switch (direction) {
+                case 1: meta = 5; break; // Top face → standing
+                case 2: meta = 4; break; // North face → attach north
+                case 3: meta = 3; break; // South face → attach south
+                case 4: meta = 2; break; // West face → attach west
+                case 5: meta = 1; break; // East face → attach east
+                default: meta = 5;
+            }
+            break;
+        }
+
+        // ─── Ladders — Java: BlockLadder.onBlockPlaced ───────────────
+        // Meta: 2=north, 3=south, 4=west, 5=east
+        case 65: {
+            switch (direction) {
+                case 2: meta = 2; break; // North face
+                case 3: meta = 3; break; // South face
+                case 4: meta = 4; break; // West face
+                case 5: meta = 5; break; // East face
+                default: meta = 2;
+            }
+            break;
+        }
+
+        // ─── Furnace/Chest/Pumpkin/Dispenser — facing from player yaw ─
+        // Meta: 2=north, 3=south, 4=west, 5=east
+        case 23: case 54: case 61: case 62: case 130: case 146: case 154: case 158: {
+            switch (facingDir) {
+                case 0: meta = 3; break; // South
+                case 1: meta = 4; break; // West
+                case 2: meta = 2; break; // North
+                case 3: meta = 5; break; // East
+            }
+            break;
+        }
+
+        // ─── Pumpkin/Jack-o-lantern — Java: BlockPumpkin.onBlockPlaced ─
+        // Meta: 0=south, 1=west, 2=north, 3=east
+        case 86: case 91: {
+            meta = facingDir;
+            break;
+        }
+
+        // ─── Pistons — direction-based ───────────────────────────────
+        // Meta: 0=down, 1=up, 2=north, 3=south, 4=west, 5=east
+        case 29: case 33: {
+            // Use player look to determine piston facing
+            if (playerPitch_ > 45.0f) {
+                meta = 0; // Looking down → piston faces down
+            } else if (playerPitch_ < -45.0f) {
+                meta = 1; // Looking up → piston faces up
+            } else {
+                switch (facingDir) {
+                    case 0: meta = 3; break; // South
+                    case 1: meta = 4; break; // West
+                    case 2: meta = 2; break; // North
+                    case 3: meta = 5; break; // East
+                }
+            }
+            break;
+        }
+
+        // ─── Levers — Java: BlockLever.onBlockPlaced ─────────────────
+        case 69: {
+            switch (direction) {
+                case 0: meta = 0; break; // Floor (south when off)
+                case 1: meta = 5; break; // Ceiling
+                case 2: meta = 4; break; // North wall
+                case 3: meta = 3; break; // South wall
+                case 4: meta = 2; break; // West wall
+                case 5: meta = 1; break; // East wall
+                default: meta = 5;
+            }
+            break;
+        }
+
+        // ─── Buttons — Java: BlockButton.onBlockPlaced ───────────────
+        case 77: case 143: {
+            switch (direction) {
+                case 2: meta = 4; break; // North
+                case 3: meta = 3; break; // South
+                case 4: meta = 2; break; // West
+                case 5: meta = 1; break; // East
+                default: meta = 1;
+            }
+            break;
+        }
+
+        // ─── Repeaters/Comparators — facing from player yaw ──────────
+        case 93: case 94: case 149: case 150: {
+            meta = facingDir;
+            break;
+        }
+
+        // ─── Anvil — facing from player yaw ──────────────────────────
+        case 145: {
+            meta = facingDir;
+            break;
+        }
+    }
+
     world->setBlock(placeX, placeY, placeZ, newBlock);
+    if (meta != 0) {
+        world->setBlockMetadata(placeX, placeY, placeZ, meta);
+    }
 
     // Survival mode: consume 1 item from held slot
     // Java: ItemStack.tryPlaceItemIntoWorld → --stackSize
@@ -1807,7 +1971,7 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
               << " at " << placeX << "," << placeY << "," << placeZ << "\n";
 
     // Broadcast block change to all players
-    server_.broadcastBlockChange(placeX, placeY, placeZ, placeBlockId, 0);
+    server_.broadcastBlockChange(placeX, placeY, placeZ, placeBlockId, meta);
 
     // Play place sound — Java: block.stepSound.getPlaceSound()
     // Reuse material→sound mapping based on the PLACED block

@@ -242,3 +242,4 @@
 28. **Suffocation** — ✅ Done (1 dmg/tick in opaque full-cube blocks — fixed with explicit block whitelist)
 29. **Fire/lava/void damage** — ✅ Done (lava 4/tick + 15s fire, fire block 1/tick + 8s fire, burning 1/sec, void 4/tick below Y=-64, water extinguishes)
 30. **ClickWindow (C0E)** — ✅ Done (modes 0-4: left/right click, shift-click, number key swap, creative clone, drop. Cursor item tracking, S32 confirm, window resync)
+31. **Block placement metadata** — ✅ Done (stairs orientation+upside-down, slabs upper/lower, logs axis, torches/ladders wall mount, furnace/chest/pumpkin yaw facing, pistons, buttons, repeaters, anvils)
