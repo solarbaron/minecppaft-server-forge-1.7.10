@@ -457,6 +457,7 @@ private:
     FoodStats foodStats_;         // Java: EntityPlayer.foodStats
     int hurtResistantTime_ = 0;   // EntityLivingBase.hurtResistantTime (20 tick cooldown)
     bool dead_ = false;           // EntityLivingBase.dead
+    float fallDistance_ = 0.0f;   // Entity.fallDistance — accumulated fall distance
 
     // Game mode — Java: ItemInWorldManager.theGameType
     int32_t gameMode_ = 0;        // 0=Survival, 1=Creative, 2=Adventure, 3=Spectator

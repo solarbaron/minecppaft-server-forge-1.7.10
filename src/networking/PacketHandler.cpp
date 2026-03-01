@@ -1147,12 +1147,43 @@ void PlayHandler::handlePlayerPosition(const uint8_t* data, size_t length, Conne
     // C04PacketPlayerPosition: Double x, Double y, Double stance, Double z, Bool onGround
     // Note: 1.7.10 sends BOTH y (feet) AND stance (head) — 33 bytes total
     if (length < 33) return;
-    double oldX = playerX_, oldZ = playerZ_;
+    double oldX = playerX_, oldY = playerY_, oldZ = playerZ_;
     playerX_ = readDouble(data);
     playerY_ = readDouble(data + 8);
     // stance = readDouble(data + 16) — head Y, not stored separately
     playerZ_ = readDouble(data + 24);
     playerOnGround_ = data[32] != 0;
+
+    // ─── Fall damage tracking ──────────────────────────────────────────
+    // Java: Entity.moveEntity → updateFallState → EntityLivingBase.fall()
+    double deltaY = playerY_ - oldY;
+    if (deltaY < 0.0) {
+        // Player is falling — accumulate distance
+        fallDistance_ += static_cast<float>(-deltaY);
+    }
+    if (playerOnGround_ && fallDistance_ > 0.0f) {
+        // Landed! Apply fall damage — Java: damage = ceil(fallDistance - 3.0)
+        if (gameMode_ != 1 && !dead_) { // No fall damage in creative
+            int damage = static_cast<int>(std::ceil(fallDistance_ - 3.0f));
+            if (damage > 0) {
+                health_ -= static_cast<float>(damage);
+                if (health_ < 0.0f) health_ = 0.0f;
+                sendUpdateHealth(conn, health_, foodStats_.getFoodLevel(), foodStats_.getSaturationLevel());
+                // Play fall sound — Java: EntityLivingBase.func_146067_o
+                const char* fallSound = (damage > 4) ? "game.player.hurt.fall.big" : "game.player.hurt.fall.small";
+                server_.broadcastSound(fallSound, playerX_, playerY_, playerZ_, 1.0f, 1.0f);
+                std::cout << "[Fall] " << playerName_ << " took " << damage
+                          << " fall damage (fell " << fallDistance_ << " blocks, hp=" << health_ << ")\n";
+                if (health_ <= 0.0f) {
+                    // Player died from fall damage
+                    dead_ = true;
+                    server_.broadcastEntityEvent(entityId_, 3);
+                    server_.broadcastChatMessage(playerName_ + " fell from a high place");
+                }
+            }
+        }
+        fallDistance_ = 0.0f;
+    }
 
     // Movement exhaustion — Java: EntityPlayer.addExhaustion per meter
     double dx = playerX_ - oldX;
@@ -1185,7 +1216,7 @@ void PlayHandler::handlePlayerPosAndLook(const uint8_t* data, size_t length, Con
     // Java reference: NetHandlerPlayServer.processPlayer()
     // C06PacketPlayerPosLook: Double x, Double y, Double stance, Double z, Float yaw, Float pitch, Bool onGround
     if (length < 41) return;
-    double oldX = playerX_, oldZ = playerZ_;
+    double oldX = playerX_, oldY = playerY_, oldZ = playerZ_;
     playerX_ = readDouble(data);
     playerY_ = readDouble(data + 8);
     // stance = readDouble(data + 16)
@@ -1193,6 +1224,32 @@ void PlayHandler::handlePlayerPosAndLook(const uint8_t* data, size_t length, Con
     playerYaw_ = readFloat(data + 32);
     playerPitch_ = readFloat(data + 36);
     playerOnGround_ = data[40] != 0;
+
+    // ─── Fall damage tracking (same as handlePlayerPosition) ───────────
+    double deltaY = playerY_ - oldY;
+    if (deltaY < 0.0) {
+        fallDistance_ += static_cast<float>(-deltaY);
+    }
+    if (playerOnGround_ && fallDistance_ > 0.0f) {
+        if (gameMode_ != 1 && !dead_) {
+            int damage = static_cast<int>(std::ceil(fallDistance_ - 3.0f));
+            if (damage > 0) {
+                health_ -= static_cast<float>(damage);
+                if (health_ < 0.0f) health_ = 0.0f;
+                sendUpdateHealth(conn, health_, foodStats_.getFoodLevel(), foodStats_.getSaturationLevel());
+                const char* fallSound = (damage > 4) ? "game.player.hurt.fall.big" : "game.player.hurt.fall.small";
+                server_.broadcastSound(fallSound, playerX_, playerY_, playerZ_, 1.0f, 1.0f);
+                std::cout << "[Fall] " << playerName_ << " took " << damage
+                          << " fall damage (fell " << fallDistance_ << " blocks, hp=" << health_ << ")\n";
+                if (health_ <= 0.0f) {
+                    dead_ = true;
+                    server_.broadcastEntityEvent(entityId_, 3);
+                    server_.broadcastChatMessage(playerName_ + " fell from a high place");
+                }
+            }
+        }
+        fallDistance_ = 0.0f;
+    }
 
     // Movement exhaustion — same as handlePlayerPosition
     double dx = playerX_ - oldX;
