@@ -22,8 +22,11 @@
 #include "world/World.h"
 
 #include <algorithm>
+#include <cstring>
 #include <iostream>
 #include <random>
+#include <set>
+#include <tuple>
 
 namespace mccpp {
 
@@ -516,6 +519,259 @@ void MinecraftServer::broadcastTimeUpdate() {
         if (!play) continue;
         play->sendTimeUpdate(*conn, age, time);
     }
+}
+
+float MinecraftServer::getBlockExplosionResistance(int32_t blockId) {
+    // Delegate to Block registry if block exists
+    // Java reference: Block.getExplosionResistance() = resistance / 5.0f
+    Block* block = Block::getBlockById(blockId);
+    if (block) return block->getExplosionResistance();
+    return 0.0f;
+}
+
+void MinecraftServer::createExplosion(double x, double y, double z, float power,
+                                       bool causesFire, bool breakBlocks) {
+    // Java reference: Explosion.doExplosionA() + doExplosionB()
+    // Phase 1: Raycast to determine affected blocks
+    std::set<int64_t> affectedBlocks; // packed positions
+    std::vector<std::tuple<int32_t, int32_t, int32_t>> blockPositions;
+
+    constexpr int RAYS = 16;
+    std::mt19937 rng(std::random_device{}());
+    std::uniform_real_distribution<float> dist(0.0f, 1.0f);
+
+    for (int i = 0; i < RAYS; ++i) {
+        for (int j = 0; j < RAYS; ++j) {
+            for (int k = 0; k < RAYS; ++k) {
+                // Only trace rays from the surface of the cube
+                if (i != 0 && i != RAYS - 1 && j != 0 && j != RAYS - 1 &&
+                    k != 0 && k != RAYS - 1) continue;
+
+                double dx = static_cast<float>(i) / (RAYS - 1.0f) * 2.0f - 1.0f;
+                double dy = static_cast<float>(j) / (RAYS - 1.0f) * 2.0f - 1.0f;
+                double dz = static_cast<float>(k) / (RAYS - 1.0f) * 2.0f - 1.0f;
+                double len = std::sqrt(dx * dx + dy * dy + dz * dz);
+                dx /= len; dy /= len; dz /= len;
+
+                double traceX = x, traceY = y, traceZ = z;
+                float strength = power * (0.7f + dist(rng) * 0.6f);
+                constexpr float STEP = 0.3f;
+
+                while (strength > 0.0f) {
+                    int32_t bx = static_cast<int32_t>(std::floor(traceX));
+                    int32_t by = static_cast<int32_t>(std::floor(traceY));
+                    int32_t bz = static_cast<int32_t>(std::floor(traceZ));
+
+                    int32_t blockId = 0;
+                    if (!worlds_.empty() && by >= 0 && by < 256) {
+                        Block* block = worlds_[0]->getBlock(bx, by, bz);
+                        blockId = block ? Block::getIdFromBlock(block) : 0;
+                    }
+
+                    if (blockId != 0) {
+                        float resistance = getBlockExplosionResistance(blockId);
+                        strength -= (resistance + 0.3f) * STEP;
+                    }
+
+                    if (strength > 0.0f && breakBlocks && by >= 0 && by < 256) {
+                        int64_t key = packBlockPos(bx, by, bz);
+                        if (affectedBlocks.find(key) == affectedBlocks.end()) {
+                            affectedBlocks.insert(key);
+                            blockPositions.emplace_back(bx, by, bz);
+                        }
+                    }
+
+                    traceX += dx * STEP;
+                    traceY += dy * STEP;
+                    traceZ += dz * STEP;
+                    strength -= STEP * 0.75f;
+                }
+            }
+        }
+    }
+
+    // Phase 2: Entity damage and knockback
+    double doubleRadius = power * 2.0;
+    struct PlayerKnockback { double vx, vy, vz; };
+    std::map<int32_t, PlayerKnockback> playerKnockbacks; // entityId → velocity
+
+    {
+        std::lock_guard<std::mutex> lock(connectionsMutex_);
+        for (auto& conn : connections_) {
+            if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+            auto handler = conn->getHandler();
+            auto* play = dynamic_cast<PlayHandler*>(handler.get());
+            if (!play || play->isDead()) continue;
+
+            double px = play->getPlayerX();
+            double py = play->getPlayerY();
+            double pz = play->getPlayerZ();
+            double dist2 = std::sqrt((px - x) * (px - x) + (py - y) * (py - y) + (pz - z) * (pz - z));
+            double normalizedDist = dist2 / doubleRadius;
+
+            if (normalizedDist > 1.0) continue;
+
+            double diffX = px - x;
+            double diffY = (py + 1.62) - y; // eye height
+            double diffZ = pz - z;
+            double diffLen = std::sqrt(diffX * diffX + diffY * diffY + diffZ * diffZ);
+            if (diffLen == 0.0) continue;
+
+            diffX /= diffLen; diffY /= diffLen; diffZ /= diffLen;
+
+            // Java: (1.0 - normalizedDist) * blockDensity
+            // Simplified: skip block density check, use 1.0
+            double impact = (1.0 - normalizedDist);
+
+            // Damage: ((impact² + impact) / 2) * 8 * power + 1
+            float damage = static_cast<float>(
+                (impact * impact + impact) / 2.0 * 8.0 * static_cast<double>(power) + 1.0);
+
+            if (play->getGameMode() != 1) { // Not creative
+                play->applyDamage(damage);
+                play->sendUpdateHealth(*conn, play->getHealth(),
+                    play->getFood(), play->getSaturation());
+            }
+
+            // Knockback velocity
+            double knockback = impact;
+            playerKnockbacks[play->getEntityId()] = {
+                diffX * knockback, diffY * knockback, diffZ * knockback
+            };
+
+            // Send velocity packet
+            play->sendEntityVelocity(*conn, play->getEntityId(),
+                diffX * knockback, diffY * knockback, diffZ * knockback);
+        }
+    }
+
+    // Phase 3: Destroy blocks and spawn drops
+    if (breakBlocks) {
+        for (auto& [bx, by, bz] : blockPositions) {
+            if (worlds_.empty()) break;
+            Block* block = worlds_[0]->getBlock(bx, by, bz);
+            int32_t blockId = block ? Block::getIdFromBlock(block) : 0;
+            if (blockId == 0) continue; // air
+
+            // TNT chain reaction: ignite nearby TNT
+            if (blockId == 46) {
+                // Set air first, then create sub-explosion next tick
+                worlds_[0]->setBlock(bx, by, bz, nullptr);
+                broadcastBlockChange(bx, by, bz, 0, 0);
+                // Spawn item drop for TNT (1/power chance)
+                // In vanilla, TNT doesn't drop from explosions — it ignites
+                // For simplicity, just destroy it
+                continue;
+            }
+
+            // Drop items with 1/power chance
+            if (dist(rng) < 1.0f / power) {
+                // Get drop item for this block
+                int32_t dropId = blockId; // simplified — use block ID as item
+                // Use proper drop table if available
+                switch (blockId) {
+                    case 1: dropId = 4; break;   // Stone → cobblestone
+                    case 14: dropId = 14; break;  // Gold ore
+                    case 15: dropId = 15; break;  // Iron ore
+                    case 16: dropId = 263; break;  // Coal ore → coal
+                    case 21: dropId = 351; break;  // Lapis ore → lapis (simplified)
+                    case 56: dropId = 264; break;  // Diamond ore → diamond
+                    case 73: case 74: dropId = 331; break; // Redstone ore → redstone
+                    case 129: dropId = 388; break; // Emerald ore → emerald
+                    default: break;
+                }
+                if (dropId > 0 && dropId < 256) {
+                    spawnItemDrop(
+                        static_cast<double>(bx) + 0.5,
+                        static_cast<double>(by) + 0.5,
+                        static_cast<double>(bz) + 0.5,
+                        dropId, 0, 1);
+                }
+            }
+
+            // Set to air
+            worlds_[0]->setBlock(bx, by, bz, nullptr);
+            broadcastBlockChange(bx, by, bz, 0, 0);
+        }
+    }
+
+    // Phase 4: Send S27 Explosion packet to all players
+    {
+        std::lock_guard<std::mutex> lock(connectionsMutex_);
+        for (auto& conn : connections_) {
+            if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+            auto handler = conn->getHandler();
+            auto* play = dynamic_cast<PlayHandler*>(handler.get());
+            if (!play) continue;
+
+            std::vector<uint8_t> pkt;
+            // Helper lambdas
+            auto writeVarInt = [](std::vector<uint8_t>& buf, int32_t value) {
+                uint32_t uval = static_cast<uint32_t>(value);
+                do {
+                    uint8_t b = uval & 0x7F;
+                    uval >>= 7;
+                    if (uval != 0) b |= 0x80;
+                    buf.push_back(b);
+                } while (uval != 0);
+            };
+            auto writeFloat = [](std::vector<uint8_t>& buf, float value) {
+                uint32_t bits;
+                std::memcpy(&bits, &value, sizeof(bits));
+                buf.push_back((bits >> 24) & 0xFF);
+                buf.push_back((bits >> 16) & 0xFF);
+                buf.push_back((bits >> 8) & 0xFF);
+                buf.push_back(bits & 0xFF);
+            };
+            auto writeInt = [](std::vector<uint8_t>& buf, int32_t value) {
+                buf.push_back((value >> 24) & 0xFF);
+                buf.push_back((value >> 16) & 0xFF);
+                buf.push_back((value >> 8) & 0xFF);
+                buf.push_back(value & 0xFF);
+            };
+
+            writeVarInt(pkt, 0x27); // S27 Explosion
+            writeFloat(pkt, static_cast<float>(x));
+            writeFloat(pkt, static_cast<float>(y));
+            writeFloat(pkt, static_cast<float>(z));
+            writeFloat(pkt, power);
+
+            // Record count
+            int32_t recordCount = breakBlocks ? static_cast<int32_t>(blockPositions.size()) : 0;
+            writeInt(pkt, recordCount);
+
+            // Affected block offsets (relative to explosion center)
+            int32_t centerX = static_cast<int32_t>(std::floor(x));
+            int32_t centerY = static_cast<int32_t>(std::floor(y));
+            int32_t centerZ = static_cast<int32_t>(std::floor(z));
+
+            if (breakBlocks) {
+                for (auto& [bx, by, bz] : blockPositions) {
+                    pkt.push_back(static_cast<uint8_t>(static_cast<int8_t>(bx - centerX)));
+                    pkt.push_back(static_cast<uint8_t>(static_cast<int8_t>(by - centerY)));
+                    pkt.push_back(static_cast<uint8_t>(static_cast<int8_t>(bz - centerZ)));
+                }
+            }
+
+            // Player motion (unique per player)
+            auto it = playerKnockbacks.find(play->getEntityId());
+            if (it != playerKnockbacks.end()) {
+                writeFloat(pkt, static_cast<float>(it->second.vx));
+                writeFloat(pkt, static_cast<float>(it->second.vy));
+                writeFloat(pkt, static_cast<float>(it->second.vz));
+            } else {
+                writeFloat(pkt, 0.0f);
+                writeFloat(pkt, 0.0f);
+                writeFloat(pkt, 0.0f);
+            }
+
+            conn->sendPacket(std::move(pkt));
+        }
+    }
+
+    // Phase 5: Play explosion sound
+    broadcastSound("random.explode", x, y, z, 4.0f,
+        (1.0f + (dist(rng) - dist(rng)) * 0.2f) * 0.7f);
 }
 
 void MinecraftServer::saveAllWorlds() {

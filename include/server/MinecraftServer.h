@@ -167,6 +167,23 @@ public:
     void broadcastTimeUpdate();
 
     /**
+     * Create an explosion at the given position.
+     * Java reference: World.createExplosion() + Explosion.doExplosionA/B
+     * @param x, y, z - center of explosion
+     * @param power - explosion radius (TNT=4.0, creeper=3.0, charged creeper=6.0)
+     * @param causesFire - whether the explosion sets fires
+     * @param breakBlocks - whether the explosion destroys blocks
+     */
+    void createExplosion(double x, double y, double z, float power,
+                         bool causesFire, bool breakBlocks);
+
+    /**
+     * Get block explosion resistance. Java reference: Block.getExplosionResistance()
+     * Resistance values from vanilla 1.7.10.
+     */
+    static float getBlockExplosionResistance(int32_t blockId);
+
+    /**
      * Save all world chunks to disk.\n     * Java reference: MinecraftServer.saveAllWorlds()\n     */
     void saveAllWorlds();
 

@@ -2116,6 +2116,39 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
         return;
     }
 
+    // TNT (block ID 46) — right-click with flint & steel (item 259) ignites
+    // Java: BlockTNT.onBlockActivated → ItemFlintAndSteel
+    if (clickedBlockId == 46) {
+        auto held = inventory_.getCurrentItem();
+        if (held && held->getItemId() == 259) { // Flint and steel
+            // Set TNT to air
+            if (!server_.getWorlds().empty()) {
+                server_.getWorlds()[0]->setBlock(blockX, static_cast<int32_t>(blockY), blockZ, nullptr);
+            }
+            server_.broadcastBlockChange(blockX, static_cast<int32_t>(blockY), blockZ, 0, 0);
+
+            // Play TNT fuse sound
+            server_.broadcastSound("game.tnt.primed",
+                static_cast<double>(blockX) + 0.5,
+                static_cast<double>(blockY) + 0.5,
+                static_cast<double>(blockZ) + 0.5,
+                1.0f, 1.0f);
+
+            // Damage flint & steel
+            damageHeldItem(1);
+            sendWindowItems(conn);
+
+            // Create explosion (power 4.0, no fire, break blocks)
+            // In vanilla, TNT has a 4-second fuse — we do instant for simplicity
+            server_.createExplosion(
+                static_cast<double>(blockX) + 0.5,
+                static_cast<double>(blockY) + 0.5,
+                static_cast<double>(blockZ) + 0.5,
+                4.0f, false, true);
+            return;
+        }
+    }
+
     // Bed (block ID 26) — Java: BlockBed.onBlockActivated()
     if (clickedBlockId == 26 && !isSneaking_) {
         int64_t worldTime = server_.getWorldTime() % 24000;
