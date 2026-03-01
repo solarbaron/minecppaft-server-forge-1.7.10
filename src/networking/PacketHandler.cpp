@@ -468,6 +468,10 @@ PlayHandler::PlayHandler(MinecraftServer& server, const std::string& name,
     playerZ_ = 0.5;
     playerYaw_ = 0.0f;
     playerPitch_ = 0.0f;
+
+    // Initialize player container (45 slots: crafting out + grid + armor + main + hotbar)
+    // Java reference: EntityPlayerMP constructor → ContainerPlayer
+    container_ = std::make_unique<ContainerPlayer>(inventory_);
 }
 
 void PlayHandler::sendLoginSequence(Connection& conn) {
@@ -548,6 +552,10 @@ void PlayHandler::sendLoginSequence(Connection& conn) {
     // 6. S06PacketUpdateHealth — initial health/food/saturation
     // Java reference: EntityPlayer defaults: health=20, foodLevel=20, saturation=5.0f
     sendUpdateHealth(conn, 20.0f, 20, 5.0f);
+
+    // 7. S30PacketWindowItems — send initial inventory contents
+    // Java reference: EntityPlayerMP.onNewPotionEffect / initializeConnectionToPlayer
+    sendWindowItems(conn);
 
     // ─── Player visibility broadcasts ─────────────────────────────────
     // Java reference: ServerConfigurationManager.playerLoggedIn()
@@ -929,6 +937,58 @@ void PlayHandler::sendDestroyEntities(Connection& conn, const std::vector<int32_
     for (int32_t id : entityIds) {
         writeInt(pkt, id);
     }
+    conn.sendPacket(std::move(pkt));
+}
+
+// ─── ItemStack serialization helper ──────────────────────────────────────
+// Java reference: PacketBuffer.writeItemStackToBuffer(ItemStack)
+namespace {
+void writeItemStack(std::vector<uint8_t>& pkt, const std::optional<ItemStack>& stack) {
+    if (!stack || stack->isEmpty()) {
+        writeShort(pkt, -1);  // null item
+    } else {
+        writeShort(pkt, static_cast<int16_t>(stack->getItemId()));
+        writeByte(pkt, static_cast<uint8_t>(stack->getStackSize()));
+        writeShort(pkt, static_cast<int16_t>(stack->getDamage()));
+        // NBT tag — for now, no NBT (Short -1 = no tag)
+        // Java: writeNBTTagCompoundToBuffer(null) → writeShort(-1)
+        writeShort(pkt, -1);
+    }
+}
+} // anonymous namespace
+
+void PlayHandler::sendWindowItems(Connection& conn) {
+    // Java reference: S30PacketWindowItems.writePacketData()
+    // Format: Byte windowId, Short slotCount, ItemStack[slotCount]
+    if (!container_) return;
+
+    int32_t slotCount = container_->getSlotCount();
+    std::vector<uint8_t> pkt;
+    writeVarInt(pkt, ClientboundPacket::WindowItems);
+    writeByte(pkt, static_cast<uint8_t>(container_->windowId)); // window ID (0 = player inv)
+    writeShort(pkt, static_cast<int16_t>(slotCount));
+
+    for (int32_t i = 0; i < slotCount; ++i) {
+        Slot* slot = container_->getSlot(i);
+        if (slot) {
+            writeItemStack(pkt, slot->getStack());
+        } else {
+            writeShort(pkt, -1); // empty slot
+        }
+    }
+
+    conn.sendPacket(std::move(pkt));
+}
+
+void PlayHandler::sendSetSlot(Connection& conn, int8_t windowId, int16_t slot,
+                               const std::optional<ItemStack>& stack) {
+    // Java reference: S2FPacketSetSlot.writePacketData()
+    // Format: Byte windowId, Short slot, ItemStack
+    std::vector<uint8_t> pkt;
+    writeVarInt(pkt, ClientboundPacket::SetSlot);
+    writeByte(pkt, static_cast<uint8_t>(windowId));
+    writeShort(pkt, slot);
+    writeItemStack(pkt, stack);
     conn.sendPacket(std::move(pkt));
 }
 

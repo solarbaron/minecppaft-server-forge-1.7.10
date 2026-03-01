@@ -191,7 +191,7 @@
 4. ~~**Time sync**~~ — ✅ Done (S03 every 20 ticks)
 5. ~~**Health sync**~~ — ✅ Done (S06 on login)
 6. **Item drops** — EntityItem spawning + S0E SpawnObject + pickup
-7. **Inventory sync** — S30 WindowItems on join, S2F SetSlot on change
+7. ~~**Inventory sync**~~ — ✅ Done (S30 WindowItems on join + S2F SetSlot method)
 8. **Sound effects** — S29 SoundEffect for block/entity events
 9. **World save** — save chunks on shutdown
 10. **Terrain generation** — implement overworld generator using existing noise/biome code

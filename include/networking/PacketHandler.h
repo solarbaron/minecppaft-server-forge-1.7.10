@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "command/CommandSystem.h"
+#include "inventory/Inventory.h"
 
 namespace mccpp {
 
@@ -237,6 +238,19 @@ public:
      */
     void sendDestroyEntities(Connection& conn, const std::vector<int32_t>& entityIds);
 
+    /**
+     * Send entire window contents to the client.
+     * Java reference: S30PacketWindowItems
+     */
+    void sendWindowItems(Connection& conn);
+
+    /**
+     * Send a single slot update to the client.
+     * Java reference: S2FPacketSetSlot
+     */
+    void sendSetSlot(Connection& conn, int8_t windowId, int16_t slot,
+                     const std::optional<ItemStack>& stack);
+
     // ─── Getters for player state ──────────────────────────────────────
     int32_t getEntityId() const { return entityId_; }
     const std::string& getUuid() const { return uuid_; }
@@ -275,6 +289,10 @@ private:
     // Static atomic entity ID counter
     // Java reference: Entity.nextEntityID (global counter)
     static std::atomic<int32_t> nextEntityId_;
+
+    // Player inventory
+    InventoryPlayer inventory_;
+    std::unique_ptr<ContainerPlayer> container_;
 };
 
 } // namespace mccpp
