@@ -1332,12 +1332,51 @@ void PlayHandler::sendEntityTeleport(Connection& conn, int32_t entityId,
 }
 
 void PlayHandler::sendEntityHeadLook(Connection& conn, int32_t entityId, float yaw) {
-    // Java reference: S19PacketEntityHeadLook.writePacketData()
-    // Format: Int entityId, Byte yaw
     std::vector<uint8_t> pkt;
     writeVarInt(pkt, ClientboundPacket::EntityHeadLook);
     writeInt(pkt, entityId);
     writeByte(pkt, static_cast<uint8_t>(static_cast<int8_t>(yaw * 256.0f / 360.0f)));
+    conn.sendPacket(std::move(pkt));
+}
+
+void PlayHandler::sendEntityRelMove(Connection& conn, int32_t entityId,
+                                     int8_t dx, int8_t dy, int8_t dz) {
+    // Java reference: S15PacketEntityRelMove.writePacketData()
+    // Format: Int entityId, Byte dx, Byte dy, Byte dz
+    std::vector<uint8_t> pkt;
+    writeVarInt(pkt, ClientboundPacket::EntityRelMove);
+    writeInt(pkt, entityId);
+    writeByte(pkt, static_cast<uint8_t>(dx));
+    writeByte(pkt, static_cast<uint8_t>(dy));
+    writeByte(pkt, static_cast<uint8_t>(dz));
+    conn.sendPacket(std::move(pkt));
+}
+
+void PlayHandler::sendEntityLook(Connection& conn, int32_t entityId,
+                                  float yaw, float pitch) {
+    // Java reference: S16PacketEntityLook.writePacketData()
+    // Format: Int entityId, Byte yaw, Byte pitch
+    std::vector<uint8_t> pkt;
+    writeVarInt(pkt, ClientboundPacket::EntityLook);
+    writeInt(pkt, entityId);
+    writeByte(pkt, static_cast<uint8_t>(static_cast<int8_t>(yaw * 256.0f / 360.0f)));
+    writeByte(pkt, static_cast<uint8_t>(static_cast<int8_t>(pitch * 256.0f / 360.0f)));
+    conn.sendPacket(std::move(pkt));
+}
+
+void PlayHandler::sendEntityLookRelMove(Connection& conn, int32_t entityId,
+                                         int8_t dx, int8_t dy, int8_t dz,
+                                         float yaw, float pitch) {
+    // Java reference: S17PacketEntityLookMove.writePacketData()
+    // Format: Int entityId, Byte dx, Byte dy, Byte dz, Byte yaw, Byte pitch
+    std::vector<uint8_t> pkt;
+    writeVarInt(pkt, ClientboundPacket::EntityLookAndRelMove);
+    writeInt(pkt, entityId);
+    writeByte(pkt, static_cast<uint8_t>(dx));
+    writeByte(pkt, static_cast<uint8_t>(dy));
+    writeByte(pkt, static_cast<uint8_t>(dz));
+    writeByte(pkt, static_cast<uint8_t>(static_cast<int8_t>(yaw * 256.0f / 360.0f)));
+    writeByte(pkt, static_cast<uint8_t>(static_cast<int8_t>(pitch * 256.0f / 360.0f)));
     conn.sendPacket(std::move(pkt));
 }
 

@@ -418,7 +418,25 @@ void MinecraftServer::onPlayerLeft(PlayHandler& leftHandler) {
 
 void MinecraftServer::broadcastPlayerPosition(PlayHandler& movedHandler) {
     // Java reference: EntityTrackerEntry.sendLocationToAllClients()
-    // Broadcast S18 EntityTeleport + S19 EntityHeadLook to all other players
+    // Uses S15/S16/S17 for small deltas, S18 for large deltas or forced sync
+
+    // Compute fixed-point positions (value * 32)
+    int32_t newPosX = static_cast<int32_t>(std::floor(movedHandler.getPlayerX() * 32.0));
+    int32_t newPosY = static_cast<int32_t>(std::floor(movedHandler.getPlayerY() * 32.0));
+    int32_t newPosZ = static_cast<int32_t>(std::floor(movedHandler.getPlayerZ() * 32.0));
+
+    int32_t dx = newPosX - movedHandler.lastSentPosX_;
+    int32_t dy = newPosY - movedHandler.lastSentPosY_;
+    int32_t dz = newPosZ - movedHandler.lastSentPosZ_;
+
+    bool posChanged = (dx != 0 || dy != 0 || dz != 0);
+    bool rotChanged = (movedHandler.getPlayerYaw() != movedHandler.lastSentYaw_ ||
+                       movedHandler.getPlayerPitch() != movedHandler.lastSentPitch_);
+
+    // Force teleport if delta is too large for byte or every 400 ticks
+    bool forceTeleport = (dx < -128 || dx > 127 || dy < -128 || dy > 127 || dz < -128 || dz > 127)
+                         || (movedHandler.ticksSinceLastTeleport_++ >= 400);
+
     std::lock_guard<std::mutex> lock(connectionsMutex_);
     for (auto& conn : connections_) {
         if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
@@ -426,12 +444,36 @@ void MinecraftServer::broadcastPlayerPosition(PlayHandler& movedHandler) {
         auto* otherPlay = dynamic_cast<PlayHandler*>(handler.get());
         if (!otherPlay || otherPlay->getEntityId() == movedHandler.getEntityId()) continue;
 
-        otherPlay->sendEntityTeleport(*conn, movedHandler.getEntityId(),
-            movedHandler.getPlayerX(), movedHandler.getPlayerY(), movedHandler.getPlayerZ(),
-            movedHandler.getPlayerYaw(), movedHandler.getPlayerPitch());
-        otherPlay->sendEntityHeadLook(*conn, movedHandler.getEntityId(),
-            movedHandler.getPlayerYaw());
+        if (forceTeleport) {
+            otherPlay->sendEntityTeleport(*conn, movedHandler.getEntityId(),
+                movedHandler.getPlayerX(), movedHandler.getPlayerY(), movedHandler.getPlayerZ(),
+                movedHandler.getPlayerYaw(), movedHandler.getPlayerPitch());
+        } else if (posChanged && rotChanged) {
+            otherPlay->sendEntityLookRelMove(*conn, movedHandler.getEntityId(),
+                static_cast<int8_t>(dx), static_cast<int8_t>(dy), static_cast<int8_t>(dz),
+                movedHandler.getPlayerYaw(), movedHandler.getPlayerPitch());
+        } else if (posChanged) {
+            otherPlay->sendEntityRelMove(*conn, movedHandler.getEntityId(),
+                static_cast<int8_t>(dx), static_cast<int8_t>(dy), static_cast<int8_t>(dz));
+        } else if (rotChanged) {
+            otherPlay->sendEntityLook(*conn, movedHandler.getEntityId(),
+                movedHandler.getPlayerYaw(), movedHandler.getPlayerPitch());
+        }
+
+        // Always send head look when rotation changes
+        if (rotChanged || forceTeleport) {
+            otherPlay->sendEntityHeadLook(*conn, movedHandler.getEntityId(),
+                movedHandler.getPlayerYaw());
+        }
     }
+
+    // Update tracking state
+    movedHandler.lastSentPosX_ = newPosX;
+    movedHandler.lastSentPosY_ = newPosY;
+    movedHandler.lastSentPosZ_ = newPosZ;
+    movedHandler.lastSentYaw_ = movedHandler.getPlayerYaw();
+    movedHandler.lastSentPitch_ = movedHandler.getPlayerPitch();
+    if (forceTeleport) movedHandler.ticksSinceLastTeleport_ = 0;
 }
 
 void MinecraftServer::broadcastSound(const std::string& soundName, double x, double y, double z,

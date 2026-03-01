@@ -318,6 +318,29 @@ public:
     void sendEntityHeadLook(Connection& conn, int32_t entityId, float yaw);
 
     /**
+     * Send S15 EntityRelativeMove to the client.
+     * Java reference: S15PacketEntityRelMove
+     * Delta encoded as fixedPoint = value * 32 (1/32 of a block)
+     */
+    void sendEntityRelMove(Connection& conn, int32_t entityId,
+                           int8_t dx, int8_t dy, int8_t dz);
+
+    /**
+     * Send S16 EntityLook to the client.
+     * Java reference: S16PacketEntityLook
+     */
+    void sendEntityLook(Connection& conn, int32_t entityId,
+                        float yaw, float pitch);
+
+    /**
+     * Send S17 EntityLookAndRelativeMove to the client.
+     * Java reference: S17PacketEntityLookMove
+     */
+    void sendEntityLookRelMove(Connection& conn, int32_t entityId,
+                               int8_t dx, int8_t dy, int8_t dz,
+                               float yaw, float pitch);
+
+    /**
      * Send a named sound effect to the client.
      * Java reference: S29PacketSoundEffect
      */
@@ -689,6 +712,14 @@ private:
     double playerX_ = 0.0, playerY_ = 0.0, playerZ_ = 0.0;
     float playerYaw_ = 0.0f, playerPitch_ = 0.0f;
     bool playerOnGround_ = false;
+
+public:
+    // Entity tracker: last sent position/rotation for relative movement
+    // Java reference: EntityTrackerEntry fields. Public for MinecraftServer access.
+    int32_t lastSentPosX_ = 0, lastSentPosY_ = 0, lastSentPosZ_ = 0; // fixed-point (value * 32)
+    float lastSentYaw_ = 0.0f, lastSentPitch_ = 0.0f;
+    int32_t ticksSinceLastTeleport_ = 0; // Force S18 every 400 ticks
+private:
 
     // Chunk tracking — Java: PlayerManager tracks loaded chunks per player
     std::set<std::pair<int,int>> loadedChunks_;  // set of (chunkX, chunkZ)
