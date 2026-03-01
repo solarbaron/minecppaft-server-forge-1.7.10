@@ -96,6 +96,7 @@ public:
      * Access worlds (e.g. for sending chunk data to players).
      */
     const std::vector<std::unique_ptr<WorldServer>>& getWorlds() const { return worlds_; }
+    std::vector<std::unique_ptr<WorldServer>>& getWorlds() { return worlds_; }
 
     /**
      * Get the command handler for dispatching commands.
@@ -108,6 +109,12 @@ public:
      * Java reference: MinecraftServer.addChatMessage / PlayerList.sendChatMsg
      */
     void broadcastChatMessage(const std::string& message);
+
+    /**
+     * Broadcast a block change to all connected players.
+     * Java reference: WorldServer.markBlockForUpdate()
+     */
+    void broadcastBlockChange(int32_t x, int32_t y, int32_t z, int32_t blockId, int32_t metadata);
 
     /**
      * Register a new client connection (called from TcpListener callback).

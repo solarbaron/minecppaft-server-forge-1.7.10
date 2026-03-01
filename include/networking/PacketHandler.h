@@ -229,6 +229,8 @@ private:
     void handlePlayerPosAndLook(const uint8_t* data, size_t length, Connection& conn);
     void handlePlayerGround(const uint8_t* data, size_t length, Connection& conn);
     void handleClientSettings(const uint8_t* data, size_t length, Connection& conn);
+    void handlePlayerDigging(const uint8_t* data, size_t length, Connection& conn);
+    void handlePlayerBlockPlace(const uint8_t* data, size_t length, Connection& conn);
 
     MinecraftServer& server_;
     std::string playerName_;

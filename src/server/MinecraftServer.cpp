@@ -224,5 +224,20 @@ void MinecraftServer::broadcastChatMessage(const std::string& message) {
     }
 }
 
+void MinecraftServer::broadcastBlockChange(int32_t x, int32_t y, int32_t z,
+                                            int32_t blockId, int32_t metadata) {
+    // Java reference: WorldServer.markBlockForUpdate() → S23PacketBlockChange
+    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    for (auto& conn : connections_) {
+        if (conn->isConnected() && conn->getState() == ConnectionState::Play) {
+            auto handler = conn->getHandler();
+            auto* playHandler = dynamic_cast<PlayHandler*>(handler.get());
+            if (playHandler) {
+                playHandler->sendBlockChange(*conn, x, y, z, blockId, metadata);
+            }
+        }
+    }
+}
+
 } // namespace mccpp
 

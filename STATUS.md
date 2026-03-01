@@ -15,8 +15,8 @@
 - **Status** (Server List Ping) — responds with MOTD, player count, protocol info, ping/pong
 - **Login** — offline-mode auth, MD5-based UUID generation, LoginSuccess packet
 - **Play State Transition** — Login→Play state change, handler swap
-- **Play Packets Handled:** KeepAlive (echo), ChatMessage (with `/` command dispatch), Player/PlayerPosition/PlayerLook/PlayerPosAndLook, ClientSettings, PluginMessage (silently consumed), PlayerAbilities
-- **Play Packets Silently Consumed:** HeldItemChange, Animation, EntityAction, PlayerDigging, PlayerBlockPlace, CloseWindow, ClickWindow, ConfirmTransaction, CreativeInventory, UpdateSign, UseEntity, SteerVehicle, TabComplete, EnchantItem, ClientStatus
+- **Play Packets Handled:** KeepAlive (echo), ChatMessage (with `/` command dispatch), Player/PlayerPosition/PlayerLook/PlayerPosAndLook, ClientSettings, PluginMessage (silently consumed), PlayerAbilities, PlayerDigging (instant break), PlayerBlockPlace (block placement)
+- **Play Packets Silently Consumed:** HeldItemChange, Animation, EntityAction, CloseWindow, ClickWindow, ConfirmTransaction, CreativeInventory, UpdateSign, UseEntity, SteerVehicle, TabComplete, EnchantItem, ClientStatus
 
 ### Login Sequence (sent to client on join)
 - S01 JoinGame (entity ID, gamemode, dimension, difficulty, max players, level type)
@@ -139,10 +139,10 @@
 - **Weather** — S2B ChangeGameState (rain start/stop)
 - **Time** — S03 TimeUpdate — packet implemented, not auto-sent
 - **Health** — S06 UpdateHealth — packet implemented, not auto-sent
-- **Block changes** — S23 BlockChange — packet implemented, not auto-sent
+- **Block changes** — ✅ S23 BlockChange — working, broadcast on break/place
 
 ### Gameplay
-- **Block breaking/placing** — PlayerDigging/PlayerBlockPlace not processed
+- ~~**Block breaking/placing**~~ — ✅ PlayerDigging/PlayerBlockPlace handled, instant break + face-offset placement
 - **Item drops** — no EntityItem, no pickup mechanics
 - **Player-to-player visibility** — players can't see each other
 - **Combat** — no damage, no knockback, no death/respawn
@@ -186,7 +186,7 @@
 ## 🎯 Recommended Next Priorities
 
 1. ~~**Chat→Command bridge**~~ — ✅ Done
-2. **Block breaking/placing** — handle PlayerDigging + PlayerBlockPlace, send S23 BlockChange
+2. ~~**Block breaking/placing**~~ — ✅ Done
 3. **Player visibility** — send S0C SpawnPlayer + S38 PlayerListItem so players see each other
 4. **Time sync** — send S03 TimeUpdate each tick
 5. **Health sync** — send S06 UpdateHealth when food/health changes

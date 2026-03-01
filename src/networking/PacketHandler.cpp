@@ -578,7 +578,11 @@ void PlayHandler::handlePacket(int32_t packetId,
         case ServerboundPacket::Animation:
         case ServerboundPacket::EntityAction:
         case ServerboundPacket::PlayerDigging:
+            handlePlayerDigging(data, length, conn);
+            break;
         case ServerboundPacket::PlayerBlockPlace:
+            handlePlayerBlockPlace(data, length, conn);
+            break;
         case ServerboundPacket::CloseWindow:
         case ServerboundPacket::ClickWindow:
         case ServerboundPacket::ConfirmTransaction:
@@ -904,6 +908,155 @@ void PlayHandler::handleClientSettings(const uint8_t* data, size_t length, Conne
     auto locale = readString(data, length);
     // Just log for now
     (void)locale;
+}
+
+void PlayHandler::handlePlayerDigging(const uint8_t* data, size_t length, Connection& conn) {
+    // Java reference: NetHandlerPlayServer.processPlayerDigging()
+    // C07PacketPlayerDigging format:
+    //   UByte status, Int blockX, UByte blockY, Int blockZ, UByte face
+    if (length < 11) return;
+
+    uint8_t status = data[0];
+    int32_t blockX = readInt(data + 1);
+    uint8_t blockY = data[5];
+    int32_t blockZ = readInt(data + 6);
+    uint8_t face   = data[10];
+    (void)face;
+
+    // Status values:
+    // 0 = Started digging (in creative: instant break)
+    // 1 = Cancelled digging
+    // 2 = Finished digging
+    // 3 = Drop item stack
+    // 4 = Drop item
+    // 5 = Shoot arrow / finish eating
+
+    if (status == 3 || status == 4 || status == 5) {
+        // Drop item / shoot arrow — silently consume for now
+        return;
+    }
+
+    // Range check — Java: d4 > 36.0 means distance > 6 blocks
+    if (status == 0 || status == 1 || status == 2) {
+        double dx = playerX_ - (static_cast<double>(blockX) + 0.5);
+        double dy = playerY_ - (static_cast<double>(blockY) + 0.5) + 1.5;
+        double dz = playerZ_ - (static_cast<double>(blockZ) + 0.5);
+        double distSq = dx * dx + dy * dy + dz * dz;
+        if (distSq > 36.0) return;
+
+        // Build height check
+        if (blockY >= 255) return;
+    }
+
+    auto& worlds = server_.getWorlds();
+    if (worlds.empty()) return;
+    WorldServer* world = worlds[0].get();
+
+    if (status == 0 || status == 2) {
+        // Java: status 0 = start digging. In creative mode, instant break.
+        // Status 2 = finished digging (survival). We treat both as instant break for now.
+        Block* existingBlock = world->getBlock(blockX, blockY, blockZ);
+        if (existingBlock && Block::getIdFromBlock(existingBlock) != 0) {
+            // Set to air (block ID 0)
+            world->setBlock(blockX, blockY, blockZ, Block::getBlockById(0));
+            world->setBlockMetadata(blockX, blockY, blockZ, 0);
+
+            std::cout << "[World] " << playerName_ << " broke block at "
+                      << blockX << "," << (int)blockY << "," << blockZ << "\n";
+
+            // Broadcast block change to all players
+            server_.broadcastBlockChange(blockX, blockY, blockZ, 0, 0);
+        }
+    }
+    // status 1 = cancel — nothing to do in creative mode
+}
+
+void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Connection& conn) {
+    // Java reference: NetHandlerPlayServer.processPlayerBlockPlacement()
+    // C08PacketPlayerBlockPlacement format:
+    //   Int blockX, UByte blockY, Int blockZ, UByte direction,
+    //   Short heldItemId, [if id >= 0: Byte count, Short damage, ...NBT],
+    //   UByte cursorX, UByte cursorY, UByte cursorZ
+    //
+    // Minimum size: 4+1+4+1 = 10 bytes for coords + direction
+    if (length < 10) return;
+
+    int32_t blockX = readInt(data);
+    uint8_t blockY = data[4];
+    int32_t blockZ = readInt(data + 5);
+    uint8_t direction = data[9];
+
+    // direction = 255 means "use item" (right-click in air)
+    if (direction == 255) {
+        // Use item in hand — silently consume for now
+        return;
+    }
+
+    // Range check
+    double dx = playerX_ - (static_cast<double>(blockX) + 0.5);
+    double dy = playerY_ - (static_cast<double>(blockY) + 0.5);
+    double dz = playerZ_ - (static_cast<double>(blockZ) + 0.5);
+    if (dx * dx + dy * dy + dz * dz > 64.0) return;
+
+    auto& worlds = server_.getWorlds();
+    if (worlds.empty()) return;
+    WorldServer* world = worlds[0].get();
+
+    // Calculate the position of the new block based on the face clicked
+    // Java reference: same offset logic as processPlayerBlockPlacement
+    int32_t placeX = blockX;
+    int32_t placeY = static_cast<int32_t>(blockY);
+    int32_t placeZ = blockZ;
+
+    switch (direction) {
+        case 0: --placeY; break; // Bottom face — place below
+        case 1: ++placeY; break; // Top face — place above
+        case 2: --placeZ; break; // North face
+        case 3: ++placeZ; break; // South face
+        case 4: --placeX; break; // West face
+        case 5: ++placeX; break; // East face
+        default: return;
+    }
+
+    // Build height check
+    if (placeY < 0 || placeY >= 256) return;
+
+    // Check that target is air
+    Block* targetBlock = world->getBlock(placeX, placeY, placeZ);
+    if (targetBlock && Block::getIdFromBlock(targetBlock) != 0) {
+        // Can't place into a non-air block — send correction
+        sendBlockChange(conn, placeX, placeY, placeZ,
+                       Block::getIdFromBlock(targetBlock), world->getBlockMetadata(placeX, placeY, placeZ));
+        return;
+    }
+
+    // Determine which block to place
+    // For now, skip the held item slot ItemStack (complex NBT parsing) and place stone (ID 1)
+    // TODO: Read held item from packet and use Item→Block mapping
+    // After offset 10: Short heldItemId
+    int32_t placeBlockId = 1; // stone fallback
+    if (length >= 12) {
+        int16_t heldItemId = static_cast<int16_t>((data[10] << 8) | data[11]);
+        if (heldItemId >= 0 && heldItemId < 256) {
+            // Direct block IDs (items 0-255 correspond to blocks)
+            Block* heldBlock = Block::getBlockById(heldItemId);
+            if (heldBlock && Block::getIdFromBlock(heldBlock) != 0) {
+                placeBlockId = heldItemId;
+            }
+        }
+    }
+
+    // Place the block
+    Block* newBlock = Block::getBlockById(placeBlockId);
+    if (!newBlock) return;
+
+    world->setBlock(placeX, placeY, placeZ, newBlock);
+
+    std::cout << "[World] " << playerName_ << " placed block " << placeBlockId
+              << " at " << placeX << "," << placeY << "," << placeZ << "\n";
+
+    // Broadcast block change to all players
+    server_.broadcastBlockChange(placeX, placeY, placeZ, placeBlockId, 0);
 }
 
 } // namespace mccpp
