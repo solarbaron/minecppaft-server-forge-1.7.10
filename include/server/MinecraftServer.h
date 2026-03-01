@@ -91,6 +91,11 @@ public:
     int getTickCount() const { return tickCount_.load(std::memory_order_relaxed); }
 
     /**
+     * Access worlds (e.g. for sending chunk data to players).
+     */
+    const std::vector<std::unique_ptr<WorldServer>>& getWorlds() const { return worlds_; }
+
+    /**
      * Register a new client connection (called from TcpListener callback).
      * Thread-safe.
      */

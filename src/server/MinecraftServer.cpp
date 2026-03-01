@@ -172,6 +172,22 @@ void MinecraftServer::tick() {
         );
     }
 
+    // Send Keep Alive to play-state connections every 300 ticks (15 seconds)
+    // Java reference: NetHandlerPlayServer.update() — sends S00PacketKeepAlive
+    // every 15 seconds (300 ticks). Client must respond within 30s or gets kicked.
+    if (ticks > 0 && ticks % 300 == 0) {
+        std::lock_guard<std::mutex> lock(connectionsMutex_);
+        for (auto& conn : connections_) {
+            if (conn->isConnected() && conn->getState() == ConnectionState::Play) {
+                auto handler = conn->getHandler();
+                auto* playHandler = dynamic_cast<PlayHandler*>(handler.get());
+                if (playHandler) {
+                    playHandler->sendKeepAlive(*conn);
+                }
+            }
+        }
+    }
+
     // Tick all worlds
     // Java reference: MinecraftServer.u() — tickWorlds
     for (auto& world : worlds_) {

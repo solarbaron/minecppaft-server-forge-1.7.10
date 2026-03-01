@@ -21,6 +21,7 @@ namespace mccpp {
 
 class Connection;      // forward decl
 class MinecraftServer; // forward decl
+class Chunk;           // forward decl
 
 /**
  * PacketHandler — base class for protocol state handlers.
@@ -179,6 +180,13 @@ public:
      * Java reference: S02PacketChat
      */
     void sendChatMessage(Connection& conn, const std::string& message);
+
+    /**
+     * Send a single chunk's data to the client.
+     * Java reference: S21PacketChunkData — ground-up continuous mode.
+     * Serializes block IDs, metadata, blocklight, skylight, and biomes.
+     */
+    void sendChunkData(Connection& conn, Chunk* chunk);
 
     const std::string& getPlayerName() const { return playerName_; }
     int getKeepAliveId() const { return lastKeepAliveId_; }

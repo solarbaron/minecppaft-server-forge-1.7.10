@@ -12,6 +12,7 @@
 #include "networking/PlayPackets.h"
 #include "server/MinecraftServer.h"
 #include "types/VarInt.h"
+#include "world/World.h"
 
 #include <array>
 #include <cstring>
@@ -19,6 +20,7 @@
 #include <iostream>
 #include <sstream>
 #include <iomanip>
+#include <zlib.h>
 
 namespace mccpp {
 
@@ -520,6 +522,29 @@ void PlayHandler::sendLoginSequence(Connection& conn) {
 
     std::cout << "[Play] " << playerName_ << " joined the game at ("
               << playerX_ << ", " << playerY_ << ", " << playerZ_ << ")\n";
+
+    // 5. Send chunk data around spawn
+    // Java reference: ServerConfigurationManager.initializeConnectionToPlayer()
+    // sends S26PacketMapChunkBulk or individual S21PacketChunkData
+    // We send a 7x7 grid of chunks around the player's chunk position.
+    int playerChunkX = static_cast<int>(playerX_) >> 4;
+    int playerChunkZ = static_cast<int>(playerZ_) >> 4;
+    constexpr int VIEW_RADIUS = 3; // 7x7 = 49 chunks
+
+    // Access the overworld from the server
+    auto* overworld = server_.getWorlds().empty() ? nullptr : server_.getWorlds()[0].get();
+    if (overworld) {
+        for (int cx = playerChunkX - VIEW_RADIUS; cx <= playerChunkX + VIEW_RADIUS; ++cx) {
+            for (int cz = playerChunkZ - VIEW_RADIUS; cz <= playerChunkZ + VIEW_RADIUS; ++cz) {
+                Chunk* chunk = overworld->getChunkFromChunkCoords(cx, cz);
+                if (chunk) {
+                    sendChunkData(conn, chunk);
+                }
+            }
+        }
+        std::cout << "[Play] Sent " << (2*VIEW_RADIUS+1)*(2*VIEW_RADIUS+1)
+                  << " chunks to " << playerName_ << "\n";
+    }
 }
 
 void PlayHandler::handlePacket(int32_t packetId,
@@ -601,6 +626,134 @@ void PlayHandler::sendChatMessage(Connection& conn, const std::string& message) 
     std::vector<uint8_t> pkt;
     writeVarInt(pkt, ClientboundPacket::ChatMessage);
     writeString(pkt, json);
+    conn.sendPacket(std::move(pkt));
+}
+
+void PlayHandler::sendChunkData(Connection& conn, Chunk* chunk) {
+    // Java reference: S21PacketChunkData
+    // Protocol v5 format:
+    //   Int chunkX, Int chunkZ
+    //   Bool groundUpContinuous (true = full column)
+    //   Short primaryBitMap (which sections have data)
+    //   Short addBitMap (which sections have add data - block IDs > 255)
+    //   Int compressedSize
+    //   Byte[] compressedData
+    //
+    // Per-section data order (for each bit set in primaryBitMap):
+    //   Block LSB array: 4096 bytes (16*16*16)
+    // Then per-section:
+    //   Metadata nibble: 2048 bytes
+    // Then per-section:
+    //   Block light nibble: 2048 bytes
+    // Then per-section:
+    //   Sky light nibble: 2048 bytes
+    // Then if addBitMap bit:
+    //   Add block ID nibble: 2048 bytes
+    // Finally:
+    //   Biome data: 256 bytes (only if groundUpContinuous)
+
+    if (!chunk) return;
+
+    // Calculate section bitmask
+    uint16_t primaryBitMap = 0;
+    uint16_t addBitMap = 0;
+    for (int i = 0; i < 16; ++i) {
+        if (chunk->sections[i] && !chunk->sections[i]->isEmpty()) {
+            primaryBitMap |= (1 << i);
+            if (chunk->sections[i]->getBlockMSBArray()) {
+                addBitMap |= (1 << i);
+            }
+        }
+    }
+
+    // Build uncompressed data buffer
+    // Size calculation: for each section in primaryBitMap:
+    //   4096 (LSB) + 2048 (meta) + 2048 (blocklight) + 2048 (skylight) = 10240
+    //   + 2048 (add) if in addBitMap
+    // + 256 (biomes)
+    int sectionCount = 0;
+    int addCount = 0;
+    for (int i = 0; i < 16; ++i) {
+        if (primaryBitMap & (1 << i)) ++sectionCount;
+        if (addBitMap & (1 << i)) ++addCount;
+    }
+    size_t uncompressedSize = static_cast<size_t>(sectionCount) * 10240
+                           + static_cast<size_t>(addCount) * 2048
+                           + 256; // biomes
+
+    std::vector<uint8_t> uncompressed;
+    uncompressed.reserve(uncompressedSize);
+
+    // 1. Block LSB arrays (4096 bytes each)
+    for (int i = 0; i < 16; ++i) {
+        if (!(primaryBitMap & (1 << i))) continue;
+        const auto& lsb = chunk->sections[i]->getBlockLSBArray();
+        uncompressed.insert(uncompressed.end(), lsb.begin(), lsb.end());
+    }
+
+    // 2. Metadata nibble arrays (2048 bytes each)
+    for (int i = 0; i < 16; ++i) {
+        if (!(primaryBitMap & (1 << i))) continue;
+        const auto& meta = chunk->sections[i]->getMetadataArray().data;
+        uncompressed.insert(uncompressed.end(), meta.begin(), meta.end());
+    }
+
+    // 3. Block light nibble arrays (2048 bytes each)
+    for (int i = 0; i < 16; ++i) {
+        if (!(primaryBitMap & (1 << i))) continue;
+        const auto& bl = chunk->sections[i]->getBlocklightArray().data;
+        uncompressed.insert(uncompressed.end(), bl.begin(), bl.end());
+    }
+
+    // 4. Sky light nibble arrays (2048 bytes each)
+    for (int i = 0; i < 16; ++i) {
+        if (!(primaryBitMap & (1 << i))) continue;
+        auto* sl = chunk->sections[i]->getSkylightArray();
+        if (sl) {
+            uncompressed.insert(uncompressed.end(), sl->data.begin(), sl->data.end());
+        } else {
+            // No skylight — send all 0xFF (full brightness, like overworld default)
+            uncompressed.insert(uncompressed.end(), 2048, 0xFF);
+        }
+    }
+
+    // 5. Add block ID nibble arrays (2048 bytes each)
+    for (int i = 0; i < 16; ++i) {
+        if (!(addBitMap & (1 << i))) continue;
+        auto* msb = chunk->sections[i]->getBlockMSBArray();
+        if (msb) {
+            uncompressed.insert(uncompressed.end(), msb->data.begin(), msb->data.end());
+        }
+    }
+
+    // 6. Biome data (256 bytes)
+    uncompressed.insert(uncompressed.end(), chunk->biomes.begin(), chunk->biomes.end());
+
+    // Compress with zlib (deflate)
+    // Java uses Deflater with default compression
+    std::vector<uint8_t> compressed(uncompressed.size() + 256); // extra space for zlib header
+    uLongf compressedLen = static_cast<uLongf>(compressed.size());
+    int zret = compress2(compressed.data(), &compressedLen,
+                         uncompressed.data(), static_cast<uLong>(uncompressed.size()),
+                         Z_DEFAULT_COMPRESSION);
+    if (zret != Z_OK) {
+        std::cerr << "[Play] Failed to compress chunk data for ("
+                  << chunk->xPosition << ", " << chunk->zPosition << ")\n";
+        return;
+    }
+    compressed.resize(static_cast<size_t>(compressedLen));
+
+    // Build packet: 0x21 ChunkData
+    std::vector<uint8_t> pkt;
+    writeVarInt(pkt, ClientboundPacket::ChunkData);
+    writeInt(pkt, chunk->xPosition);             // Chunk X
+    writeInt(pkt, chunk->zPosition);             // Chunk Z
+    writeBool(pkt, true);                         // Ground-up continuous
+    writeShort(pkt, static_cast<int16_t>(primaryBitMap)); // Primary bit mask
+    writeShort(pkt, static_cast<int16_t>(addBitMap));     // Add bit mask
+    writeInt(pkt, static_cast<int32_t>(compressed.size())); // Compressed data length
+    pkt.insert(pkt.end(), compressed.begin(), compressed.end()); // Compressed data
+
     conn.sendPacket(std::move(pkt));
 }
 

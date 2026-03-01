@@ -96,6 +96,15 @@ public:
     uint16_t getRemotePort() const { return remotePort_; }
 
     /**
+     * Get the current handler. Thread-safe.
+     * Used by the server tick loop to access PlayHandler for keep alive.
+     */
+    std::shared_ptr<PacketHandler> getHandler() const {
+        std::lock_guard<std::mutex> lock(handlerMutex_);
+        return handler_;
+    }
+
+    /**
      * Check if there are pending outbound packets.
      */
     bool hasOutboundData() const;
