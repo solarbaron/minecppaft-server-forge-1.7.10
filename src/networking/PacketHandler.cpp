@@ -466,11 +466,10 @@ PlayHandler::PlayHandler(MinecraftServer& server, const std::string& playerName,
 
 void PlayHandler::sendLoginSequence(Connection& conn) {
     // Java reference: ServerConfigurationManager.initializeConnectionToPlayer()
-    // + NetHandlerPlayServer constructor
+    // CRITICAL ORDER: chunks must arrive BEFORE PlayerPosAndLook
+    // so the client has terrain loaded before the player starts falling.
 
     // 1. S01PacketJoinGame (0x01)
-    // Format: Int entityID, UByte gamemode, Byte dimension, UByte difficulty,
-    //         UByte maxPlayers, String levelType
     {
         std::vector<uint8_t> pkt;
         writeVarInt(pkt, ClientboundPacket::JoinGame);
@@ -478,25 +477,22 @@ void PlayHandler::sendLoginSequence(Connection& conn) {
         writeUByte(pkt, 0);        // Gamemode: 0 = Survival
         writeByte(pkt, 0);         // Dimension: 0 = Overworld
         writeUByte(pkt, 1);        // Difficulty: 1 = Easy
-        writeUByte(pkt, static_cast<uint8_t>(server_.getMaxPlayers())); // Max players
-        writeString(pkt, "flat");  // Level type: flat (superflat)
+        writeUByte(pkt, static_cast<uint8_t>(server_.getMaxPlayers()));
+        writeString(pkt, "flat");  // Level type
         conn.sendPacket(std::move(pkt));
     }
 
     // 2. S05PacketSpawnPosition (0x05)
-    // Format: Int x, Int y, Int z
     {
         std::vector<uint8_t> pkt;
         writeVarInt(pkt, ClientboundPacket::SpawnPosition);
         writeInt(pkt, 0);   // Spawn X
-        writeInt(pkt, 4);   // Spawn Y (above surface)
+        writeInt(pkt, 4);   // Spawn Y
         writeInt(pkt, 0);   // Spawn Z
         conn.sendPacket(std::move(pkt));
     }
 
     // 3. S39PacketPlayerAbilities (0x39)
-    // Format: Byte flags, Float flySpeed, Float walkSpeed
-    // Flags: 0x01=invulnerable, 0x02=flying, 0x04=allowFlying, 0x08=creativeMode
     {
         std::vector<uint8_t> pkt;
         writeVarInt(pkt, ClientboundPacket::PlayerAbilities);
@@ -506,8 +502,27 @@ void PlayHandler::sendLoginSequence(Connection& conn) {
         conn.sendPacket(std::move(pkt));
     }
 
-    // 4. S08PacketPlayerPosLook (0x08)
-    // Format: Double x, Double y, Double z, Float yaw, Float pitch, Bool onGround
+    // 4. Send chunk data around spawn BEFORE position
+    // Java reference: ServerConfigurationManager sends MapChunkBulk before S08
+    int playerChunkX = static_cast<int>(playerX_) >> 4;
+    int playerChunkZ = static_cast<int>(playerZ_) >> 4;
+    constexpr int VIEW_RADIUS = 2; // 5x5 = 25 chunks (fast initial load)
+
+    auto* overworld = server_.getWorlds().empty() ? nullptr : server_.getWorlds()[0].get();
+    int chunksSent = 0;
+    if (overworld) {
+        for (int cx = playerChunkX - VIEW_RADIUS; cx <= playerChunkX + VIEW_RADIUS; ++cx) {
+            for (int cz = playerChunkZ - VIEW_RADIUS; cz <= playerChunkZ + VIEW_RADIUS; ++cz) {
+                Chunk* chunk = overworld->getChunkFromChunkCoords(cx, cz);
+                if (chunk) {
+                    sendChunkData(conn, chunk);
+                    ++chunksSent;
+                }
+            }
+        }
+    }
+
+    // 5. S08PacketPlayerPosLook (0x08) — AFTER chunks so client has terrain
     {
         std::vector<uint8_t> pkt;
         writeVarInt(pkt, ClientboundPacket::PlayerPosAndLook);
@@ -521,30 +536,8 @@ void PlayHandler::sendLoginSequence(Connection& conn) {
     }
 
     std::cout << "[Play] " << playerName_ << " joined the game at ("
-              << playerX_ << ", " << playerY_ << ", " << playerZ_ << ")\n";
-
-    // 5. Send chunk data around spawn
-    // Java reference: ServerConfigurationManager.initializeConnectionToPlayer()
-    // sends S26PacketMapChunkBulk or individual S21PacketChunkData
-    // We send a 7x7 grid of chunks around the player's chunk position.
-    int playerChunkX = static_cast<int>(playerX_) >> 4;
-    int playerChunkZ = static_cast<int>(playerZ_) >> 4;
-    constexpr int VIEW_RADIUS = 3; // 7x7 = 49 chunks
-
-    // Access the overworld from the server
-    auto* overworld = server_.getWorlds().empty() ? nullptr : server_.getWorlds()[0].get();
-    if (overworld) {
-        for (int cx = playerChunkX - VIEW_RADIUS; cx <= playerChunkX + VIEW_RADIUS; ++cx) {
-            for (int cz = playerChunkZ - VIEW_RADIUS; cz <= playerChunkZ + VIEW_RADIUS; ++cz) {
-                Chunk* chunk = overworld->getChunkFromChunkCoords(cx, cz);
-                if (chunk) {
-                    sendChunkData(conn, chunk);
-                }
-            }
-        }
-        std::cout << "[Play] Sent " << (2*VIEW_RADIUS+1)*(2*VIEW_RADIUS+1)
-                  << " chunks to " << playerName_ << "\n";
-    }
+              << playerX_ << ", " << playerY_ << ", " << playerZ_ << ") — "
+              << chunksSent << " chunks sent\n";
 }
 
 void PlayHandler::handlePacket(int32_t packetId,
@@ -610,12 +603,13 @@ void PlayHandler::onDisconnect(const std::string& reason) {
 }
 
 void PlayHandler::sendKeepAlive(Connection& conn) {
-    // Java reference: NetHandlerPlayServer.update() — sends S00PacketKeepAlive
-    // Format: VarInt keepAliveId
+    // Java reference: NetHandlerPlayServer.update() → S00PacketKeepAlive
+    // S00PacketKeepAlive.writePacketData: packetBuffer.writeInt(keepAliveId)
+    // Format: Int keepAliveId (NOT VarInt!)
     ++lastKeepAliveId_;
     std::vector<uint8_t> pkt;
     writeVarInt(pkt, ClientboundPacket::KeepAlive);
-    writeVarInt(pkt, lastKeepAliveId_);
+    writeInt(pkt, lastKeepAliveId_);  // Must be Int, not VarInt!
     conn.sendPacket(std::move(pkt));
 }
 
@@ -735,7 +729,7 @@ void PlayHandler::sendChunkData(Connection& conn, Chunk* chunk) {
     uLongf compressedLen = static_cast<uLongf>(compressed.size());
     int zret = compress2(compressed.data(), &compressedLen,
                          uncompressed.data(), static_cast<uLong>(uncompressed.size()),
-                         Z_DEFAULT_COMPRESSION);
+                         Z_BEST_SPEED);  // Use fast compression to avoid blocking
     if (zret != Z_OK) {
         std::cerr << "[Play] Failed to compress chunk data for ("
                   << chunk->xPosition << ", " << chunk->zPosition << ")\n";
@@ -759,10 +753,10 @@ void PlayHandler::sendChunkData(Connection& conn, Chunk* chunk) {
 
 void PlayHandler::handleKeepAlive(const uint8_t* data, size_t length, Connection& /*conn*/) {
     // Java reference: NetHandlerPlayServer.processKeepAlive()
-    // Client echoes back the keepAlive ID we sent
-    if (length < 1) return;
-    auto result = readVarInt(data, length);
-    int id = result.value;
+    // C00PacketKeepAlive.readPacketData: packetBuffer.readInt()
+    // Client echoes back the keepAlive ID we sent as Int (NOT VarInt!)
+    if (length < 4) return;
+    int32_t id = readInt(data);
     if (id == lastKeepAliveId_) {
         ticksSinceLastKeepAlive_ = 0;
     }

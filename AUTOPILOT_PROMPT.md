@@ -18,15 +18,19 @@ The project uses:
 
 ## Execution Steps
 
-Execute the following steps **in order**. Do not ask for permission to proceed; just output the work.
+Execute the following steps **in order**. Do not ask for permission to proceed; just do the work.
+
+### 0. Check STATUS.md
+
+**Before doing anything else**, read `STATUS.md` in the project root. This file contains the complete implementation status of every module — what's working (✅), what's partial (🔶), and what's missing (❌). Use the **🎯 Recommended Next Priorities** section to pick your next target. Do not duplicate work that's already marked as ✅.
 
 ### 1. Verify & Sync
 
-Briefly review the most recently added C++ files. Cross-reference them with the Java source to ensure **100% 1:1 behavioral and logical parity** (adjusting only for the multi-threaded architecture). Ensure shared state is properly synchronized. If there are discrepancies or race conditions, output the C++ code to fix them first.
+Briefly review the most recently added C++ files. Cross-reference them with the Java source to ensure **100% 1:1 behavioral and logical parity** (adjusting only for the multi-threaded architecture). Ensure shared state is properly synchronized. If there are discrepancies or race conditions, fix them first.
 
 ### 2. Identify Next Target
 
-Determine the next logical missing feature to implement. Follow this **priority order**:
+Based on `STATUS.md` priorities and the list below, determine the next logical missing feature. Follow this **priority order**:
 
 1. **Networking foundation** — Multi-threaded TCP listener, connection state machine, thread-safe packet queues, VarInt length-prefixed framing
 2. **Handshake + Status + Login** — Server List Ping, login sequence, protocol 5 encryption & compression
@@ -52,27 +56,31 @@ Write the C++ header (`.h`) and source (`.cpp`) files for this feature. Rules:
 * Keep the vanilla 1.7.10 behavior **byte-for-byte identical** where it matters (packet formats, NBT encoding, world format).
 * Add the new files to `CMakeLists.txt`.
 * Include brief comments citing the Java source file/class being ported and noting any multi-threading adaptations.
+* **Build and verify:** Run `cd build && cmake .. -DCMAKE_BUILD_TYPE=Release && make -j$(nproc)` to confirm your code compiles.
 
-### 4. Automate Git Commit
+### 4. Update STATUS.md
 
-At the end of your response, output a bash script block with the exact `git add` and `git commit` commands for the work you just completed. Use **Conventional Commits** format:
+After implementing a feature, update `STATUS.md` to reflect the new state:
+* Move items from ❌/🔶 to ✅ as appropriate
+* Add any new files/modules you created
+* Update line counts if significant
 
-```bash
-git add src/networking/TcpListener.cpp include/networking/TcpListener.h CMakeLists.txt
-git commit -m "feat(networking): implement multi-threaded TCP listener with async accept loop"
+### 5. Git Commit
+
+**Execute the git commands directly** — do NOT output them as text for the user to run. Run `git add` and `git commit` yourself using the terminal. Use **Conventional Commits** format:
 
 ```
-
-Examples:
-
-* `feat(networking): implement S08PacketPlayerPosLook parity`
-* `fix(physics): align entity fall damage math with MCP`
-* `feat(nbt): implement thread-safe NBT compound tag read/write`
-* `feat(world): implement async Anvil region file reader`
+feat(networking): implement S08PacketPlayerPosLook parity
+fix(physics): align entity fall damage math with MCP
+feat(nbt): implement thread-safe NBT compound tag read/write
+feat(world): implement async Anvil region file reader
+```
 
 ## Rules
 
-* Keep conversational text to an **absolute minimum**. Focus entirely on code output, parity checks, and the git commit commands.
+* Keep conversational text to an **absolute minimum**. Focus entirely on code output and parity checks.
 * Every file must compile. Do not leave stubs or TODOs — implement fully or skip to the next feature.
 * If a feature requires a dependency (e.g., zlib, OpenSSL, or a concurrency library like TBB), document it in `CMakeLists.txt` with `find_package()` and note it.
+* **Always check `STATUS.md` first** to avoid reimplementing existing features.
+* **Always run git commands yourself** — never output them for the user to copy-paste.
 

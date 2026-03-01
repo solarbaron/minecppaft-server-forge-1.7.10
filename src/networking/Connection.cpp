@@ -52,8 +52,11 @@ void Connection::sendPacket(std::vector<uint8_t> data) {
     writeVarInt(framed, static_cast<int32_t>(data.size()));
     framed.insert(framed.end(), data.begin(), data.end());
 
-    std::lock_guard<std::mutex> lock(outMutex_);
-    outQueue_.push_back(std::move(framed));
+    {
+        std::lock_guard<std::mutex> lock(outMutex_);
+        outQueue_.push_back(std::move(framed));
+    }
+    outCv_.notify_one();  // Wake write thread immediately
 }
 
 void Connection::disconnect(const std::string& reason) {
@@ -64,6 +67,9 @@ void Connection::disconnect(const std::string& reason) {
         std::cout << "[Connection] Disconnecting " << remoteAddress_ << ":" << remotePort_
                   << " — " << reason << "\n";
     }
+
+    // Wake write thread so it can exit
+    outCv_.notify_one();
 
     // Notify handler
     std::shared_ptr<PacketHandler> h;
@@ -175,16 +181,19 @@ void Connection::writeLoop() {
         std::vector<uint8_t> packet;
 
         {
-            std::lock_guard<std::mutex> lock(outMutex_);
+            std::unique_lock<std::mutex> lock(outMutex_);
+            // Wait for data WITHOUT holding lock during sleep
+            outCv_.wait_for(lock, std::chrono::milliseconds(50), [this] {
+                return !outQueue_.empty() || !connected_.load(std::memory_order_relaxed);
+            });
             if (outQueue_.empty()) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                continue;
+                continue;  // Timeout or spurious wakeup — check connected_ and retry
             }
             packet = std::move(outQueue_.front());
             outQueue_.pop_front();
         }
 
-        // Write the full packet to socket
+        // Write the full packet to socket (lock NOT held during I/O)
         size_t totalSent = 0;
         while (totalSent < packet.size()) {
             ssize_t sent = ::send(socketFd_, packet.data() + totalSent,

@@ -11,6 +11,7 @@
 #pragma once
 
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <deque>
 #include <memory>
@@ -131,8 +132,9 @@ private:
     mutable std::mutex handlerMutex_;
     std::shared_ptr<PacketHandler> handler_;
 
-    // Outbound queue (mutex-protected)
+    // Outbound queue (mutex-protected, cv-signaled)
     mutable std::mutex          outMutex_;
+    std::condition_variable     outCv_;
     std::deque<std::vector<uint8_t>> outQueue_;
 
     // Read buffer
