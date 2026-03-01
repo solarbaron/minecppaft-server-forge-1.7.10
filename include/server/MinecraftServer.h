@@ -11,6 +11,7 @@
 #pragma once
 
 #include "entity/EntityItem.h"
+#include "inventory/Inventory.h"
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -20,6 +21,8 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <map>
+#include <array>
 
 #include "command/CommandSystem.h"
 
@@ -172,6 +175,14 @@ public:
      * Called from the main server tick.
      */
     void tickItemEntities();
+
+    /**
+     * Get or create a chest inventory at the given block position.
+     * Returns a reference to 27-slot array for the chest at (x,y,z).
+     * Creates empty storage on first access.
+     * Java reference: TileEntityChest — simplified to in-memory storage.
+     */
+    std::array<std::optional<ItemStack>, 27>& getOrCreateChest(int32_t x, int32_t y, int32_t z);
 
     /**
      * Register a new client connection (called from TcpListener callback).
@@ -332,6 +343,16 @@ private:
 
     void spawnNaturalMobs();
     void tickMobs();
+
+    // ─── Chest storage (in-memory tile entities) ─────────────────────
+    // Key: packed position (x << 40 | (z & 0xFFFFF) << 20 | (y & 0xFFFFF))
+    static int64_t packBlockPos(int32_t x, int32_t y, int32_t z) {
+        return (static_cast<int64_t>(x) << 40) |
+               ((static_cast<int64_t>(z) & 0xFFFFF) << 20) |
+               (static_cast<int64_t>(y) & 0xFFFFF);
+    }
+    mutable std::mutex chestMutex_;
+    std::map<int64_t, std::array<std::optional<ItemStack>, 27>> chestStorage_;
 };
 
 } // namespace mccpp

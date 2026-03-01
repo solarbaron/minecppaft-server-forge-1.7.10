@@ -1127,4 +1127,17 @@ void MinecraftServer::tickMobs() {
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Chest tile entity storage
+// Java reference: TileEntityChest — simplified to in-memory per-position storage
+// ═══════════════════════════════════════════════════════════════════════════
+
+std::array<std::optional<ItemStack>, 27>& MinecraftServer::getOrCreateChest(
+    int32_t x, int32_t y, int32_t z) {
+    std::lock_guard<std::mutex> lock(chestMutex_);
+    int64_t key = packBlockPos(x, y, z);
+    auto& chest = chestStorage_[key]; // Creates with default (empty) on first access
+    return chest;
+}
+
 } // namespace mccpp

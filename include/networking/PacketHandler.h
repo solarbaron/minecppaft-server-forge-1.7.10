@@ -277,6 +277,13 @@ public:
     void closeOpenWindow(Connection& conn);
 
     /**
+     * Open a chest container for this player.
+     * Sends S2D OpenWindow + S30 (window contents).
+     * Java reference: TileEntityChest.openInventory
+     */
+    void openChest(Connection& conn, int32_t blockX, int32_t blockY, int32_t blockZ);
+
+    /**
      * Send entity teleport (absolute position) to the client.
      * Java reference: S18PacketEntityTeleport
      */
@@ -687,6 +694,11 @@ private:
     // Java: ContainerWorkbench.craftMatrix (InventoryCrafting 3×3) + craftResult
     std::optional<ItemStack> workbenchGrid_[9]; // 3×3 crafting grid
     std::optional<ItemStack> workbenchResult_;   // Crafting output slot
+
+    // ─── Chest container ───
+    // Pointer to server-side chest storage (owned by MinecraftServer::chestStorage_)
+    std::array<std::optional<ItemStack>, 27>* chestInventory_ = nullptr;
+    int32_t openChestX_ = 0, openChestY_ = 0, openChestZ_ = 0;
 
     // Combat state — Java: EntityPlayer fields
     float health_ = 20.0f;        // EntityLivingBase.health

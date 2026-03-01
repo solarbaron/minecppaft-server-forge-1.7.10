@@ -1135,6 +1135,11 @@ void PlayHandler::closeOpenWindow(Connection& conn) {
         workbenchResult_ = std::nullopt;
     }
 
+    // Chest: just clear the pointer (items stay in chest)
+    if (openWindowType_ == 0) {
+        chestInventory_ = nullptr;
+    }
+
     // Drop cursor item
     if (cursorItem_) {
         server_.spawnItemDrop(playerX_, playerY_ + 1.5, playerZ_,
@@ -1144,6 +1149,52 @@ void PlayHandler::closeOpenWindow(Connection& conn) {
 
     openWindowId_ = 0;
     openWindowType_ = -1;
+}
+
+void PlayHandler::openChest(Connection& conn, int32_t blockX, int32_t blockY, int32_t blockZ) {
+    // Java: EntityPlayerMP.displayGUIChest → S2D OpenWindow type 0 "minecraft:container"
+    if (openWindowId_ > 0) {
+        closeOpenWindow(conn);
+    }
+
+    openWindowId_ = nextWindowId_++;
+    if (nextWindowId_ > 100) nextWindowId_ = 1;
+    openWindowType_ = 0; // generic container (chest)
+
+    // Get or create chest storage
+    chestInventory_ = &server_.getOrCreateChest(blockX, blockY, blockZ);
+    openChestX_ = blockX; openChestY_ = blockY; openChestZ_ = blockZ;
+
+    // Send S2D OpenWindow (type 0 = generic, 27 slots = 3 rows)
+    sendOpenWindow(conn, openWindowId_, 0, "Chest", 27);
+
+    // Send window contents — 63 slots (27 chest + 27 main inv + 9 hotbar)
+    std::vector<uint8_t> pkt;
+    writeVarInt(pkt, ClientboundPacket::WindowItems);
+    writeByte(pkt, static_cast<uint8_t>(openWindowId_));
+    writeShort(pkt, 63); // 63 slots total
+
+    // Slots 0-26: chest contents
+    for (int i = 0; i < 27; ++i) {
+        writeItemStack(pkt, (*chestInventory_)[i]);
+    }
+    // Slots 27-53: main inventory (player slots 9-35)
+    for (int i = 9; i < 36; ++i) {
+        writeItemStack(pkt, inventory_.getStackInSlot(i));
+    }
+    // Slots 54-62: hotbar (player slots 0-8)
+    for (int i = 0; i < 9; ++i) {
+        writeItemStack(pkt, inventory_.getStackInSlot(i));
+    }
+
+    conn.sendPacket(std::move(pkt));
+
+    // Play chest open sound
+    server_.broadcastSound("random.chestopen",
+        static_cast<double>(blockX) + 0.5,
+        static_cast<double>(blockY) + 0.5,
+        static_cast<double>(blockZ) + 0.5,
+        0.5f, 1.0f);
 }
 
 void PlayHandler::sendEntityEquipment(Connection& conn, int32_t entityId, int16_t equipSlot,
@@ -1895,6 +1946,12 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
         return;
     }
 
+    // Chest (block ID 54) — Java: BlockChest.onBlockActivated()
+    if (clickedBlockId == 54 && !isSneaking_) {
+        openChest(conn, blockX, static_cast<int32_t>(blockY), blockZ);
+        return;
+    }
+
     // Calculate the position of the new block based on the face clicked
     // Java reference: same offset logic as processPlayerBlockPlacement
     int32_t placeX = blockX;
@@ -2210,6 +2267,121 @@ void PlayHandler::handleClickWindow(const uint8_t* data, size_t length, Connecti
         // Sync cursor item — slot -1
         sendSetSlot(conn, -1, -1, cursorItem_);
     };
+
+    // ═══════════════════════════════════════════════════════════════════
+    // Chest (generic container) window handler
+    // ═══════════════════════════════════════════════════════════════════
+    if (windowId > 0 && windowId == openWindowId_ && openWindowType_ == 0 && chestInventory_) {
+        // Chest slot layout (Java: ContainerChest, 3 rows):
+        //   0-26    = chest slots
+        //   27-53   = main inventory (player slots 9-35)
+        //   54-62   = hotbar (player slots 0-8)
+
+        auto getChestSlotRef = [&](int16_t s) -> std::optional<ItemStack>* {
+            if (s >= 0 && s < 27) return &(*chestInventory_)[s];
+            return nullptr;
+        };
+        auto getInvSlotForChest = [&](int16_t s) -> int32_t {
+            if (s >= 27 && s <= 53) return s - 27 + 9;  // main inv: 9-35
+            if (s >= 54 && s <= 62) return s - 54;       // hotbar: 0-8
+            return -1;
+        };
+        auto syncChestWindow = [&]() {
+            for (int i = 0; i < 27; ++i)
+                sendSetSlot(conn, openWindowId_, static_cast<int16_t>(i), (*chestInventory_)[i]);
+            for (int i = 9; i < 36; ++i)
+                sendSetSlot(conn, openWindowId_, static_cast<int16_t>(i + 18), inventory_.getStackInSlot(i));
+            for (int i = 0; i < 9; ++i)
+                sendSetSlot(conn, openWindowId_, static_cast<int16_t>(54 + i), inventory_.getStackInSlot(i));
+            sendSetSlot(conn, -1, -1, cursorItem_);
+        };
+
+        if (mode == 0 && (button == 0 || button == 1)) {
+            if (slotId == -999) {
+                if (cursorItem_) {
+                    if (button == 0) {
+                        server_.spawnItemDrop(playerX_, playerY_ + 1.5, playerZ_,
+                            cursorItem_->getItemId(), cursorItem_->getDamage(), cursorItem_->getStackSize());
+                        cursorItem_ = std::nullopt;
+                    } else {
+                        server_.spawnItemDrop(playerX_, playerY_ + 1.5, playerZ_,
+                            cursorItem_->getItemId(), cursorItem_->getDamage(), 1);
+                        int32_t rem = cursorItem_->getStackSize() - 1;
+                        if (rem <= 0) cursorItem_ = std::nullopt;
+                        else cursorItem_->setStackSize(rem);
+                    }
+                }
+                sendConfirm(true);
+                syncChestWindow();
+                return;
+            }
+
+            if (slotId < 0 || slotId > 62) { sendConfirm(false); return; }
+
+            std::optional<ItemStack>* chestRef = getChestSlotRef(slotId);
+            int32_t invIdx = (chestRef == nullptr) ? getInvSlotForChest(slotId) : -1;
+
+            std::optional<ItemStack> slotStack;
+            if (chestRef) slotStack = *chestRef;
+            else if (invIdx >= 0) slotStack = inventory_.getStackInSlot(invIdx);
+            else { sendConfirm(false); return; }
+
+            if (button == 0) {
+                // Left click: swap
+                if (chestRef) *chestRef = cursorItem_;
+                else if (invIdx >= 0) inventory_.setInventorySlotContents(invIdx, cursorItem_);
+                cursorItem_ = slotStack;
+            } else {
+                // Right click: place 1 or pick up half
+                if (cursorItem_ && !slotStack) {
+                    ItemStack placed(cursorItem_->getItemId(), 1, cursorItem_->getDamage());
+                    if (chestRef) *chestRef = placed;
+                    else if (invIdx >= 0) inventory_.setInventorySlotContents(invIdx, placed);
+                    int32_t rem = cursorItem_->getStackSize() - 1;
+                    if (rem <= 0) cursorItem_ = std::nullopt;
+                    else cursorItem_->setStackSize(rem);
+                } else if (cursorItem_ && slotStack &&
+                           cursorItem_->getItemId() == slotStack->getItemId() &&
+                           cursorItem_->getDamage() == slotStack->getDamage()) {
+                    int32_t newSize = slotStack->getStackSize() + 1;
+                    if (newSize <= 64) {
+                        slotStack->setStackSize(newSize);
+                        if (chestRef) *chestRef = slotStack;
+                        else if (invIdx >= 0) inventory_.setInventorySlotContents(invIdx, slotStack);
+                        int32_t rem = cursorItem_->getStackSize() - 1;
+                        if (rem <= 0) cursorItem_ = std::nullopt;
+                        else cursorItem_->setStackSize(rem);
+                    }
+                } else if (!cursorItem_ && slotStack) {
+                    int32_t half = (slotStack->getStackSize() + 1) / 2;
+                    int32_t remaining = slotStack->getStackSize() - half;
+                    cursorItem_ = ItemStack(slotStack->getItemId(), half, slotStack->getDamage());
+                    if (remaining <= 0) {
+                        if (chestRef) *chestRef = std::nullopt;
+                        else if (invIdx >= 0) inventory_.setInventorySlotContents(invIdx, std::nullopt);
+                    } else {
+                        slotStack->setStackSize(remaining);
+                        if (chestRef) *chestRef = slotStack;
+                        else if (invIdx >= 0) inventory_.setInventorySlotContents(invIdx, slotStack);
+                    }
+                } else if (!cursorItem_ && !slotStack) {
+                    // Nothing
+                } else {
+                    if (chestRef) *chestRef = cursorItem_;
+                    else if (invIdx >= 0) inventory_.setInventorySlotContents(invIdx, cursorItem_);
+                    cursorItem_ = slotStack;
+                }
+            }
+            sendConfirm(true);
+            syncChestWindow();
+            return;
+        }
+
+        // Other modes — confirm and sync
+        sendConfirm(true);
+        syncChestWindow();
+        return;
+    }
 
     // ═══════════════════════════════════════════════════════════════════
     // Workbench (3×3 crafting table) window handler
