@@ -24,7 +24,10 @@
 - S39 PlayerAbilities (flags, fly/walk speed)
 - S21 ChunkData × 25 (5×5 grid around spawn, zlib compressed)
 - S08 PlayerPosAndLook (sent AFTER chunks so terrain loads first)
+- S06 UpdateHealth (health, food, saturation — uses Short for food per Java spec)
+- S1F SetExperience (XP bar, level, totalXP — uses Short per Java spec)
 - S00 KeepAlive (every 15 seconds via tick loop)
+- **Dynamic Chunk Streaming** — S21 ChunkData sent/unloaded as player moves (VIEW_DISTANCE=7, 15×15 chunks)
 
 ### World
 - **ChunkProviderFlat** — superflat generator (bedrock + 2 dirt + grass)
@@ -140,7 +143,9 @@
 - **Weather** — S2B ChangeGameState (rain start/stop) — packet implemented for gamemode changes
 - **Time** — ✅ S03 TimeUpdate — auto-sent every 20 ticks (day/night cycle working)
 - **Health** — ✅ S06 UpdateHealth — sent on login, respawn, and whenever health/food changes
+- **Experience** — ✅ S1F SetExperience — sent on login (bar=0, level=0, total=0)
 - **Block changes** — ✅ S23 BlockChange — working, broadcast on break/place
+- **Chunk streaming** — ✅ Dynamic S21 send/unload as player moves across chunk boundaries
 
 ### Gameplay
 - ~~**Block breaking/placing**~~ — ✅ PlayerDigging/PlayerBlockPlace handled, instant break + face-offset placement
@@ -211,3 +216,6 @@
 16. **Functional commands** — ✅ Done (/stop, /gamemode, /time, /give, /tp, /kill, /difficulty, /seed, /list, /say, /gamerule, /help)
 17. **Tab completion + player actions** — ✅ Done (C14 tab complete, C09 held item, C0A animation, C0B sneak/sprint)
 18. **Creative inventory** — ✅ Done (C10 handler with Java parity, gameMode_ tracking, readItemStack parser)
+19. **Chunk streaming** — ✅ Done (dynamic S21 send/unload on player movement, VIEW_DISTANCE=7, sorted by distance)
+20. **Experience sync** — ✅ Done (S1F SetExperience sent on login)
+21. **Protocol audit** — ✅ Done (all 24 packet functions verified against Java references — field widths correct)

@@ -12,7 +12,11 @@
  */
 #pragma once
 
+#include <set>
+#include <utility>
+
 #include <atomic>
+#include <climits>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -363,6 +367,25 @@ public:
                                float yaw, float pitch);
 
     /**
+     * Send S1F SetExperience to the client.
+     * Java reference: S1FPacketSetExperience
+     */
+    void sendSetExperience(Connection& conn, float bar, int32_t level, int32_t totalXp);
+
+    /**
+     * Send a chunk unload (S21 with bitmask=0) to the client.
+     * Java reference: S21PacketChunkData with groundUp=true, bitmask=0
+     */
+    void sendChunkUnload(Connection& conn, int32_t chunkX, int32_t chunkZ);
+
+    /**
+     * Check and update chunks around the player based on current position.
+     * Called on player movement. Sends new chunks, unloads distant ones.
+     * Java reference: PlayerManager / ServerConfigurationManager chunk tracking
+     */
+    void updateChunks(Connection& conn);
+
+    /**
      * Send S2B ChangeGameState to the client.
      * Java reference: S2BPacketChangeGameState
      * Reason 3 = change game mode (value = gamemode int)
@@ -414,6 +437,12 @@ private:
     double playerX_ = 0.0, playerY_ = 0.0, playerZ_ = 0.0;
     float playerYaw_ = 0.0f, playerPitch_ = 0.0f;
     bool playerOnGround_ = false;
+
+    // Chunk tracking — Java: PlayerManager tracks loaded chunks per player
+    std::set<std::pair<int,int>> loadedChunks_;  // set of (chunkX, chunkZ)
+    int lastChunkX_ = INT_MIN;  // sentinel: forces initial chunk load
+    int lastChunkZ_ = INT_MIN;
+    static constexpr int VIEW_DISTANCE = 7;  // 15×15 chunks (7 radius + center)
 
     // Static atomic entity ID counter
     // Java reference: Entity.nextEntityID (global counter)

@@ -19,7 +19,9 @@
 
 #include <cmath>
 
+#include <algorithm>
 #include <array>
+#include <climits>
 #include <cstring>
 #include <functional>
 #include <iostream>
@@ -536,11 +538,14 @@ void PlayHandler::sendLoginSequence(Connection& conn) {
                 Chunk* chunk = overworld->getChunkFromChunkCoords(cx, cz);
                 if (chunk) {
                     sendChunkData(conn, chunk);
+                    loadedChunks_.insert({cx, cz});
                     ++chunksSent;
                 }
             }
         }
     }
+    lastChunkX_ = playerChunkX;
+    lastChunkZ_ = playerChunkZ;
 
     // 5. S08PacketPlayerPosLook (0x08) — AFTER chunks so client has terrain
     {
@@ -563,7 +568,11 @@ void PlayHandler::sendLoginSequence(Connection& conn) {
     // Java reference: EntityPlayer defaults: health=20, foodLevel=20, saturation=5.0f
     sendUpdateHealth(conn, health_, foodStats_.getFoodLevel(), foodStats_.getSaturationLevel());
 
-    // 7. S30PacketWindowItems — send initial inventory contents
+    // 7. S1FPacketSetExperience — initial XP (bar=0, level=0, total=0)
+    // Java reference: EntityPlayerMP.onNewPotionEffect sends this on join
+    sendSetExperience(conn, 0.0f, 0, 0);
+
+    // 8. S30PacketWindowItems — send initial inventory contents
     // Java reference: EntityPlayerMP.onNewPotionEffect / initializeConnectionToPlayer
     sendWindowItems(conn);
 
@@ -1159,6 +1168,7 @@ void PlayHandler::handlePlayerPosition(const uint8_t* data, size_t length, Conne
     }
 
     server_.broadcastPlayerPosition(*this);
+    updateChunks(conn);
 }
 
 void PlayHandler::handlePlayerLook(const uint8_t* data, size_t length, Connection& conn) {
@@ -1198,6 +1208,7 @@ void PlayHandler::handlePlayerPosAndLook(const uint8_t* data, size_t length, Con
     }
 
     server_.broadcastPlayerPosition(*this);
+    updateChunks(conn);
 }
 
 void PlayHandler::handlePlayerGround(const uint8_t* data, size_t length, Connection& /*conn*/) {
@@ -1730,6 +1741,109 @@ void PlayHandler::sendChangeGameState(Connection& conn, uint8_t reason, float va
     writeUByte(pkt, reason);
     writeFloat(pkt, value);
     conn.sendPacket(std::move(pkt));
+}
+
+void PlayHandler::sendSetExperience(Connection& conn, float bar, int32_t level, int32_t totalXp) {
+    // Java reference: S1FPacketSetExperience.writePacketData()
+    // Format: Float bar, Short level, Short totalXP
+    // NOTE: Java uses writeShort, NOT writeVarInt!
+    std::vector<uint8_t> pkt;
+    writeVarInt(pkt, ClientboundPacket::SetExperience);
+    writeFloat(pkt, bar);
+    writeShort(pkt, static_cast<int16_t>(level));
+    writeShort(pkt, static_cast<int16_t>(totalXp));
+    conn.sendPacket(std::move(pkt));
+}
+
+void PlayHandler::sendChunkUnload(Connection& conn, int32_t chunkX, int32_t chunkZ) {
+    // Java reference: S21PacketChunkData with groundUpContinuous=true, bitmask=0
+    // This tells the client to unload the chunk at (chunkX, chunkZ).
+    // Format: Int chunkX, Int chunkZ, Bool groundUp, UShort primaryBitmask,
+    //         UShort addBitmask, Int compressedSize, Byte[] compressedData
+    // For unload: groundUp=true, bitmask=0, data is empty zlib output.
+    
+    // Minimal zlib-compressed empty payload
+    // zlib compress of zero bytes → small header
+    std::vector<uint8_t> emptyData;
+    uLong compBound = compressBound(0);
+    std::vector<uint8_t> compressed(compBound);
+    uLong compSize = compBound;
+    compress2(compressed.data(), &compSize, emptyData.data(), 0, Z_DEFAULT_COMPRESSION);
+
+    std::vector<uint8_t> pkt;
+    writeVarInt(pkt, ClientboundPacket::ChunkData);
+    writeInt(pkt, chunkX);
+    writeInt(pkt, chunkZ);
+    writeBool(pkt, true);         // ground-up continuous
+    writeShort(pkt, 0);           // primary bitmask = 0 (no sections → unload)
+    writeShort(pkt, 0);           // add bitmask = 0
+    writeInt(pkt, static_cast<int32_t>(compSize));
+    pkt.insert(pkt.end(), compressed.data(), compressed.data() + compSize);
+    conn.sendPacket(std::move(pkt));
+}
+
+void PlayHandler::updateChunks(Connection& conn) {
+    // Java reference: PlayerManager.updatePlayerPertinentChunks()
+    // Called when player position changes — sends new chunks, unloads old ones.
+    
+    int currentChunkX = static_cast<int>(std::floor(playerX_)) >> 4;
+    int currentChunkZ = static_cast<int>(std::floor(playerZ_)) >> 4;
+    
+    // Only update if player crossed a chunk boundary
+    if (currentChunkX == lastChunkX_ && currentChunkZ == lastChunkZ_) {
+        return;
+    }
+    
+    lastChunkX_ = currentChunkX;
+    lastChunkZ_ = currentChunkZ;
+    
+    auto* overworld = server_.getWorlds().empty() ? nullptr : server_.getWorlds()[0].get();
+    if (!overworld) return;
+    
+    // Compute the set of chunks that SHOULD be loaded
+    std::set<std::pair<int,int>> desired;
+    for (int cx = currentChunkX - VIEW_DISTANCE; cx <= currentChunkX + VIEW_DISTANCE; ++cx) {
+        for (int cz = currentChunkZ - VIEW_DISTANCE; cz <= currentChunkZ + VIEW_DISTANCE; ++cz) {
+            desired.insert({cx, cz});
+        }
+    }
+    
+    // Unload chunks that are no longer in view
+    std::vector<std::pair<int,int>> toUnload;
+    for (const auto& coord : loadedChunks_) {
+        if (desired.find(coord) == desired.end()) {
+            toUnload.push_back(coord);
+        }
+    }
+    for (const auto& [cx, cz] : toUnload) {
+        sendChunkUnload(conn, cx, cz);
+        loadedChunks_.erase({cx, cz});
+    }
+    
+    // Send chunks that are newly in view (sorted by distance for better UX)
+    std::vector<std::pair<int,int>> toLoad;
+    for (const auto& coord : desired) {
+        if (loadedChunks_.find(coord) == loadedChunks_.end()) {
+            toLoad.push_back(coord);
+        }
+    }
+    
+    // Sort by distance from player (closest first) for better loading feel
+    std::sort(toLoad.begin(), toLoad.end(), [&](const auto& a, const auto& b) {
+        int da = (a.first - currentChunkX) * (a.first - currentChunkX)
+               + (a.second - currentChunkZ) * (a.second - currentChunkZ);
+        int db = (b.first - currentChunkX) * (b.first - currentChunkX)
+               + (b.second - currentChunkZ) * (b.second - currentChunkZ);
+        return da < db;
+    });
+    
+    for (const auto& [cx, cz] : toLoad) {
+        Chunk* chunk = overworld->getChunkFromChunkCoords(cx, cz);
+        if (chunk) {
+            sendChunkData(conn, chunk);
+            loadedChunks_.insert({cx, cz});
+        }
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
