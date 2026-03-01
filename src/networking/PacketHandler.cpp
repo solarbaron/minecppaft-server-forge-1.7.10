@@ -880,12 +880,12 @@ void PlayHandler::sendTimeUpdate(Connection& conn, int64_t worldAge, int64_t tim
 }
 
 void PlayHandler::sendUpdateHealth(Connection& conn, float health, int32_t food, float saturation) {
-    // Java reference: S06PacketUpdateHealth
-    // Format: Float health, VarInt food, Float foodSaturation
+    // Java reference: S06PacketUpdateHealth.writePacketData()
+    // Format: Float health, Short food, Float foodSaturation
     std::vector<uint8_t> pkt;
     writeVarInt(pkt, ClientboundPacket::UpdateHealth);
     writeFloat(pkt, health);
-    writeVarInt(pkt, food);
+    writeShort(pkt, static_cast<int16_t>(food));
     writeFloat(pkt, saturation);
     conn.sendPacket(std::move(pkt));
 }
