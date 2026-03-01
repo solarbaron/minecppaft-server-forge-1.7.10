@@ -153,6 +153,8 @@
 - ~~**Block breaking/placing**~~ — ✅ PlayerDigging/PlayerBlockPlace handled; **creative instant-break** (no drops), **survival timed break** (status 0→2 with drop table), hardness-0 instant-break, unbreakable rejection
 - ~~**Block drop tables**~~ — ✅ 60+ entries matching Java `getItemDropped` (stone→cobblestone, coal ore→coal, diamond ore→diamond, etc.)
 - ~~**Material break sounds**~~ — ✅ 8 sound types (dig.stone/wood/grass/gravel/sand/cloth/snow/glass) mapped by block ID
+- ~~**Material place sounds**~~ — ✅ Same 8 sound types used for block placement
+- ~~**Survival inventory consumption**~~ — ✅ Block place decrements held stack in survival (creative exempt) + S2F sync
 - ~~**Item drops**~~ — ✅ EntityItem spawn on block break with pickup
 - ~~**Player-to-player visibility**~~ — ✅ S0C SpawnPlayer + S38 PlayerListItem + S13 DestroyEntities working
 - ~~**Combat**~~ — ✅ damage (fist), knockback (S12), hurt animation (S1A), death + respawn
@@ -226,3 +228,4 @@
 22. **Survival block breaking** — ✅ Done (creative/survival split, timed break, 60+ drop table entries, material sounds, exhaustion)
 23. **Player item drop** — ✅ Done (Q=single item, Ctrl+Q=full stack, inventory decrement + S2F SetSlot sync)
 24. **Food consumption** — ✅ Done (eating food decrements held item stack count + S2F sync)
+25. **Survival block place** — ✅ Done (consumes held item in survival, material place sounds)

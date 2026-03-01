@@ -1717,15 +1717,56 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
 
     world->setBlock(placeX, placeY, placeZ, newBlock);
 
+    // Survival mode: consume 1 item from held slot
+    // Java: ItemStack.tryPlaceItemIntoWorld → --stackSize
+    // Creative mode: don't consume (Java: ItemInWorldManager.activateBlockOrUseItem restores stackSize)
+    if (gameMode_ != 1) {
+        auto heldStack = inventory_.getCurrentItem();
+        if (heldStack) {
+            int32_t remaining = heldStack->getStackSize() - 1;
+            if (remaining <= 0) {
+                inventory_.setInventorySlotContents(currentSlot_, std::nullopt);
+            } else {
+                ItemStack updated = *heldStack;
+                updated.setStackSize(remaining);
+                inventory_.setInventorySlotContents(currentSlot_, updated);
+            }
+            // Sync slot to client — ContainerPlayer hotbar = 36 + currentSlot_
+            int16_t containerSlot = static_cast<int16_t>(36 + currentSlot_);
+            sendSetSlot(conn, 0, containerSlot, inventory_.getStackInSlot(currentSlot_));
+        }
+    }
+
     std::cout << "[World] " << playerName_ << " placed block " << placeBlockId
               << " at " << placeX << "," << placeY << "," << placeZ << "\n";
 
     // Broadcast block change to all players
     server_.broadcastBlockChange(placeX, placeY, placeZ, placeBlockId, 0);
 
-    // Play place sound — Java reference: Block.onBlockPlacedBy / stepSound
-    // Using generic "dig.stone" sound; volume=1.0, pitch=0.8 (matches vanilla)
-    server_.broadcastSound("dig.stone",
+    // Play place sound — Java: block.stepSound.getPlaceSound()
+    // Reuse material→sound mapping based on the PLACED block
+    const char* placeSound = "dig.stone";
+    switch (placeBlockId) {
+        case 5: case 17: case 25: case 47: case 50: case 53: case 54: case 58:
+        case 63: case 64: case 84: case 85: case 96: case 107: case 125: case 126:
+        case 134: case 135: case 136: case 143: case 154: case 162: case 163: case 164:
+            placeSound = "dig.wood"; break;
+        case 2: case 6: case 18: case 31: case 32: case 37: case 38: case 39: case 40:
+        case 86: case 91: case 83: case 104: case 105: case 106: case 111: case 161:
+        case 170: case 175:
+            placeSound = "dig.grass"; break;
+        case 3: case 13: case 60: case 110:
+            placeSound = "dig.gravel"; break;
+        case 12: case 88:
+            placeSound = "dig.sand"; break;
+        case 35: case 81: case 92: case 171:
+            placeSound = "dig.cloth"; break;
+        case 78: case 80:
+            placeSound = "dig.snow"; break;
+        case 20: case 79: case 89: case 95: case 102: case 160: case 174:
+            placeSound = "dig.glass"; break;
+    }
+    server_.broadcastSound(placeSound,
         static_cast<double>(placeX) + 0.5,
         static_cast<double>(placeY) + 0.5,
         static_cast<double>(placeZ) + 0.5,
