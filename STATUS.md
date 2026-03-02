@@ -172,7 +172,7 @@
 
 ### Networking — Missing Packets
 - ~~**Block changes** — S23 BlockChange, S22 MultiBlockChange~~
-- **Entity packets** — ~~S0C SpawnPlayer~~, S0E SpawnObject, ~~S0F SpawnMob~~, ~~S12 EntityVelocity~~, S14 Entity, ~~S15 EntityRelMove~~, ~~S16 EntityLook~~, ~~S17 EntityLookRelMove~~, ~~S18 EntityTeleport~~, ~~S19 EntityHeadLook~~, ~~S1A EntityStatus~~, S1B AttachEntity, ~~S1C EntityMetadata~~, S1D EntityEffect, S1E RemoveEntityEffect
+- **Entity packets** — ~~S0C SpawnPlayer~~, S0E SpawnObject, ~~S0F SpawnMob~~, ~~S12 EntityVelocity~~, S14 Entity, ~~S15 EntityRelMove~~, ~~S16 EntityLook~~, ~~S17 EntityLookRelMove~~, ~~S18 EntityTeleport~~, ~~S19 EntityHeadLook~~, ~~S1A EntityStatus~~, S1B AttachEntity, ~~S1C EntityMetadata~~, ~~S1D EntityEffect~~, ~~S1E RemoveEntityEffect~~
 - **Inventory** — ~~S2D OpenWindow~~, ~~S2E CloseWindow~~, ~~S2F SetSlot~~, ~~S30 WindowItems~~, ~~S31 WindowProperty~~, ~~S32 ConfirmTransaction~~
 - **Chat** — ✅ S02 ChatMessage (outbound, for command responses and chat broadcast)
 - **Player Info** — S38 PlayerListItem (tab list) — packet implemented, not auto-sent
@@ -312,3 +312,7 @@
 63. **Crop harvest drops** — ✅ Done (wheat→wheat+seeds at meta 7, carrot/potato metadata-aware drops, melon/pumpkin stem→seeds)
 64. **Bed item placement** — ✅ Done (item 355→block 26, foot+head 2-block with yaw-facing, meta bit 8 for head part)
 65. **Sand/gravel gravity** — ✅ Done (blocks 12/13/145 instant-fall through air/water/lava to solid surface, dig.sand landing sound)
+66. **Multi-block break propagation** — ✅ Done (doors 64/71 remove both halves, beds 26 remove both halves, cactus 81/sugar cane 83 chain-break above with drops)
+67. **Potion effect system** — ✅ Done (S1D EntityEffect, S1E RemoveEntityEffect, addPotionEffect, tickPotionEffects with regen/poison/wither/saturation per-tick effects)
+68. **/effect command** — ✅ Done (/effect <player> <id> [sec] [amp], /effect <player> clear, 14th server command)
+69. **Sand/gravel gravity in random tick** — ✅ Done (existing world blocks 12/13 fall through air/liquids during random ticks)
