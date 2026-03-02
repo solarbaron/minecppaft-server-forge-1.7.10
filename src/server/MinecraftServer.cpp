@@ -1635,8 +1635,33 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
                     lootingLevel = attackerHeld->getEnchantmentLevel(21);
                 }
 
-                // Java: EntityLiving.getExperiencePoints() — base 5 + rand(0..2)
-                int32_t killXp = 5 + (rand() % 3);
+                // Java: EntityLiving.getExperiencePoints() — per mob type
+                auto getMobXp = [](uint8_t mobType) -> int32_t {
+                    switch (mobType) {
+                        case 54: return 5;   // Zombie
+                        case 51: return 5;   // Skeleton
+                        case 50: return 5;   // Creeper
+                        case 52: return 5;   // Spider
+                        case 58: return 5;   // Enderman
+                        case 66: return 5;   // Witch
+                        case 61: return 10;  // Blaze
+                        case 56: return 5;   // Ghast
+                        case 62: return 1;   // Magma Cube (size-based, simplified to 1)
+                        case 60: return 5;   // Silverfish
+                        case 59: return 5;   // Cave Spider
+                        case 57: return 5;   // Zombie Pigman
+                        case 55: return 1;   // Slime (size-based, simplified to 1)
+                        // Passive mobs
+                        case 92: return 1 + (rand() % 3); // Cow (1-3)
+                        case 90: return 1 + (rand() % 3); // Pig
+                        case 91: return 1 + (rand() % 3); // Sheep
+                        case 93: return 1 + (rand() % 3); // Chicken
+                        case 94: return 1 + (rand() % 3); // Squid
+                        case 99: return 0;   // Iron Golem (gives no XP in Java)
+                        default: return 5;   // Default
+                    }
+                };
+                int32_t killXp = getMobXp(mob.mobType);
                 attacker.grantExperience(killXp);
                 attacker.sendExperienceUpdate(attackerConn);
 
@@ -2674,6 +2699,59 @@ void MinecraftServer::tickMobs() {
             }
 
             mob.attackCooldown = 60; // 3 seconds between shots
+        }
+
+        // ─── Blaze fireball AI ─────────────────────────────────────
+        // Java: EntityBlaze.attackEntityWithRangedAttack() — shoots fireballs
+        // Simplified: instant-hit fire damage every 60 ticks within 16 blocks
+        for (auto& mob : mobEntities_) {
+            if (mob.isDead || mob.mobType != 61) continue; // Blaze only
+            if (mob.attackCooldown > 0) { --mob.attackCooldown; continue; }
+
+            PlayHandler* nearest = nullptr;
+            Connection* nearestConn = nullptr;
+            double nearestDistSq = 256.0;
+            {
+                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                for (auto& conn : connections_) {
+                    if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                    auto handler = conn->getHandler();
+                    auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                    if (!ph || ph->isDead()) continue;
+                    if (ph->getGameMode() == 1 || ph->getGameMode() == 3) continue;
+                    double dx = ph->getPlayerX() - mob.posX;
+                    double dz = ph->getPlayerZ() - mob.posZ;
+                    double distSq = dx * dx + dz * dz;
+                    if (distSq < nearestDistSq) {
+                        nearestDistSq = distSq;
+                        nearest = ph;
+                        nearestConn = conn.get();
+                    }
+                }
+            }
+
+            if (!nearest) continue;
+
+            // Fireball damage — Java: EntitySmallFireball deals 5 fire damage
+            float fireballDmg = 5.0f;
+            // Fire Protection (damageType=1) reduces fireball damage
+            int32_t fireProt = nearest->getEnchantmentProtectionModifier(1);
+            if (fireProt > 0) {
+                fireballDmg *= (1.0f - std::min(fireProt, 20) * 0.04f);
+            }
+            nearest->applyDamage(fireballDmg);
+            // Set player on fire for 5 seconds (100 ticks)
+            nearest->setOnFire(100);
+            broadcastEntityEvent(nearest->getEntityId(), 2);
+            broadcastSound("game.player.hurt", nearest->getPlayerX(), nearest->getPlayerY(), nearest->getPlayerZ(), 1.0f, 1.0f);
+            broadcastSound("mob.blaze.hit", mob.posX, mob.posY, mob.posZ, 1.0f, 1.0f);
+
+            if (nearest->getHealth() <= 0.0f) {
+                broadcastEntityEvent(nearest->getEntityId(), 3);
+                broadcastChatMessage(nearest->getPlayerName() + " was fireballed by Blaze");
+            }
+
+            mob.attackCooldown = 60;
         }
 
         // ─── Mob contact damage ─────────────────────────────────────

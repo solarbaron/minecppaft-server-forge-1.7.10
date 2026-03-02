@@ -492,3 +492,5 @@
 190. **Fire/Blast/Projectile Protection** — ✅ Done (ID 1 factor 1.25 fire, ID 3 factor 1.5 blast, ID 4 factor 1.5 projectile; applied to lava/fire/burning damage with armor reduction formula)
 191. **Creeper explosion AI** — ✅ Done (fuse 30 ticks when within 3 blocks of player, createExplosion power=3.0 breakBlocks=true, fuse resets on distance, creeper removed after explosion)
 192. **Skeleton ranged attack** — ✅ Done (instant-hit arrow dmg=3.0 every 60 ticks within 16 blocks, armor+Projectile Protection reduction, random.bow sound, death: "was shot by Skeleton")
+193. **Mob step-up navigation** — ✅ Done (mobs can climb 1-block obstacles when chasing players, collision-check revert when path blocked, proper downward gravity scan)
+194. **Explosion armor + Blast Protection** — ✅ Done (armor absorption on explosion damage, Blast Protection dmgType=3, knockback reduction level*0.15/piece, hurt/death events, "was blown up" death message)
