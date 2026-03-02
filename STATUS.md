@@ -57,7 +57,7 @@
 
 ## 🔶 Partially Implemented (Headers + Stubs)
 
-### Commands (26 commands, chat→command bridge ✅)
+### Commands (29 commands, chat→command bridge ✅)
 | Command | Status |
 |---------|---------|
 | `/stop` | ✅ Working via chat |
@@ -86,6 +86,9 @@
 | `/kick` | ✅ Working — disconnect with reason (S40) |
 | `/setblock` | ✅ Working — set block at xyz with meta |
 | `/fill` | ✅ Working — fill cuboid area (max 32768 blocks) |
+| `/clone` | ✅ Working — clone block region to destination |
+| `/testfor` | ✅ Working — test if player is online |
+| `/summon` | ✅ Working — summon mob by type ID at position |
 
 ### Entity System
 - **Entity base** — ID counter, UUID, position/rotation, bounding box
@@ -239,7 +242,7 @@
 - ~~**Caves**~~ — ✅ MapGenCaves worm carving integrated
 - ~~**Ores**~~ — ✅ All 11 vanilla ores (coal, iron, gold, diamond, redstone, lapis, emerald, dirt, gravel)
 - **Structures** — ✅ Dungeons (cobblestone/mossy rooms with mob spawner); no villages, temples, strongholds
-- ~~**Trees/vegetation**~~ — ✅ Oak/birch/spruce tree generation + flowers, tallgrass, sugar cane decoration
+- ~~**Trees/vegetation**~~ — ✅ Oak/birch/spruce tree generation + flowers, tallgrass, sugar cane, pumpkin patches, clay deposits
 - **Nether/End** — dimensions declared but not generated
 
 ---
@@ -367,3 +370,10 @@
 98. **Colored block metadata from item damage** — ✅ Done (wool, stained glass, stained clay, stained glass pane, carpet, hardened clay, sandstone, stone brick, planks — all use item damage as block metadata)
 99. **/setblock command** — ✅ Done (25th command, /setblock <x> <y> <z> <blockId> [meta] via setBlockInWorld)
 100. **/fill command** — ✅ Done (26th command, /fill <x1> <y1> <z1> <x2> <y2> <z2> <blockId> [meta], max 32768 blocks)
+101. **Lake generation** — ✅ Done (1/4 chance per chunk, ellipsoid water pool Y:10-80, 3-4 radius, 3-deep)
+102. **Pumpkin patches** — ✅ Done (1/32 chance per chunk, pumpkin on grass with random facing meta)
+103. **/clone command** — ✅ Done (27th command, copies blocks+metadata, max 32768, overlap-safe)
+104. **/testfor command** — ✅ Done (28th command, checks if player is online)
+105. **/summon command** — ✅ Done (29th command, spawns mob by type ID via summonMob+S0F)
+106. **Smelting recipe expansion** — ✅ Done (24 new: gold/iron tool+armor recycling, cracked stone brick, sponge; 46 total)
+107. **Clay underwater worldgen** — ✅ Done (1/3 chance per chunk, disc radius 1-2 below water on dirt/sand/gravel)
