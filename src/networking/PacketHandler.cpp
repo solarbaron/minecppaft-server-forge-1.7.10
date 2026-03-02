@@ -3099,12 +3099,17 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
     }
 
     // Determine which block to place
-    // For now, skip the held item slot ItemStack (complex NBT parsing) and place stone (ID 1)
-    // TODO: Read held item from packet and use Item→Block mapping
-    // After offset 10: Short heldItemId
+    // C08 slot format: Short itemId, Byte count, Short damage, [NBT...]
+    // Java reference: Packet.readItemStackFromBuffer
     int32_t placeBlockId = 1; // stone fallback
+    int16_t itemDamage = 0;
     if (length >= 12) {
         int16_t heldItemId = static_cast<int16_t>((data[10] << 8) | data[11]);
+        // Read count (byte 12) and damage (bytes 13-14) if available
+        if (heldItemId >= 0 && length >= 15) {
+            // byte 12 = count, bytes 13-14 = damage
+            itemDamage = static_cast<int16_t>((data[13] << 8) | data[14]);
+        }
         if (heldItemId >= 0 && heldItemId < 256) {
             // Direct block IDs (items 0-255 correspond to blocks)
             Block* heldBlock = Block::getBlockById(heldItemId);
@@ -3455,6 +3460,37 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
         // ─── Anvil — facing from player yaw ──────────────────────────
         case 145: {
             meta = facingDir;
+            break;
+        }
+
+        // ─── Colored blocks — metadata from item damage ──────────────
+        // Java: ItemCloth, ItemBlock subclasses use item damage as block metadata
+        case 35:  // Wool
+        case 95:  // Stained glass
+        case 159: // Stained clay
+        case 160: // Stained glass pane
+        case 171: // Carpet
+        case 172: // Hardened clay (no color, but damage=0)
+        {
+            meta = itemDamage & 0x0F;
+            break;
+        }
+
+        // ─── Sandstone variants — metadata from item damage ──────────
+        case 24: case 155: { // Sandstone, quartz block
+            meta = itemDamage & 0x03;
+            break;
+        }
+
+        // ─── Stone brick variants ────────────────────────────────────
+        case 98: { // Stone brick: 0=normal, 1=mossy, 2=cracked, 3=chiseled
+            meta = itemDamage & 0x03;
+            break;
+        }
+
+        // ─── Planks — wood type from damage ──────────────────────────
+        case 5: {
+            meta = itemDamage & 0x07; // 0=oak, 1=spruce, 2=birch, 3=jungle, 4=acacia, 5=dark_oak
             break;
         }
     }

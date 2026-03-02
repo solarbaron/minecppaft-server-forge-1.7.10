@@ -1869,6 +1869,16 @@ void MinecraftServer::kickPlayer(const std::string& playerName, const std::strin
     }
 }
 
+void MinecraftServer::setBlockInWorld(int32_t x, int32_t y, int32_t z, int32_t blockId, int32_t meta) {
+    if (worlds_.empty()) return;
+    auto& world = worlds_[0];
+    world->setBlock(x, y, z, Block::getBlockById(blockId));
+    if (meta != 0) {
+        world->setBlockMetadata(x, y, z, meta);
+    }
+    broadcastBlockChange(x, y, z, blockId, meta);
+}
+
 bool MinecraftServer::isRaining() const {
     for (auto& w : worlds_) {
         if (w->isRaining()) return true;

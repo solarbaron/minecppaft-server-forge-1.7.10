@@ -434,4 +434,24 @@ public:
     }
 };
 
+// /setblock <x> <y> <z> <blockId> [meta] — Set a block in the world
+// Java: net.minecraft.command.CommandSetBlock
+class CommandSetBlock : public ICommand {
+public:
+    std::string getCommandName() const override { return "setblock"; }
+    std::string getCommandUsage() const override { return "/setblock <x> <y> <z> <blockId> [meta]"; }
+    int32_t getRequiredPermissionLevel() const override { return 2; }
+    void processCommand(ICommandSender& sender, const std::vector<std::string>& args) override;
+};
+
+// /fill <x1> <y1> <z1> <x2> <y2> <z2> <blockId> [meta] — Fill area with blocks
+// Java: net.minecraft.command.CommandFill
+class CommandFill : public ICommand {
+public:
+    std::string getCommandName() const override { return "fill"; }
+    std::string getCommandUsage() const override { return "/fill <x1> <y1> <z1> <x2> <y2> <z2> <blockId> [meta]"; }
+    int32_t getRequiredPermissionLevel() const override { return 2; }
+    void processCommand(ICommandSender& sender, const std::vector<std::string>& args) override;
+};
+
 } // namespace mccpp

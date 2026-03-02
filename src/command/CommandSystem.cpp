@@ -54,6 +54,8 @@ CommandHandler::CommandHandler() {
     registerCommand(std::make_shared<CommandTell>());
     registerCommand(std::make_shared<CommandBan>());
     registerCommand(std::make_shared<CommandKick>());
+    registerCommand(std::make_shared<CommandSetBlock>());
+    registerCommand(std::make_shared<CommandFill>());
     std::cout << "[Commands] Registered " << getCommandCount() << " commands\n";
 }
 
@@ -810,6 +812,69 @@ void CommandKick::processCommand(ICommandSender& sender, const std::vector<std::
     server->kickPlayer(target, reason);
     sender.addChatMessage("Kicked " + target + ": " + reason);
     std::cout << "[Server] " << sender.getCommandSenderName() << " kicked " << target << "\n";
+}
+
+// /setblock — Java: net.minecraft.command.CommandSetBlock
+void CommandSetBlock::processCommand(ICommandSender& sender, const std::vector<std::string>& args) {
+    if (args.size() < 4) {
+        sender.addChatMessage("\xC2\xA7" "cUsage: /setblock <x> <y> <z> <blockId> [meta]");
+        return;
+    }
+    try {
+        int32_t x = std::stoi(args[0]);
+        int32_t y = std::stoi(args[1]);
+        int32_t z = std::stoi(args[2]);
+        int32_t blockId = std::stoi(args[3]);
+        int32_t meta = (args.size() > 4) ? std::stoi(args[4]) : 0;
+        if (y < 0 || y > 255) { sender.addChatMessage("\xC2\xA7" "cY must be 0-255"); return; }
+        if (blockId < 0 || blockId > 255) { sender.addChatMessage("\xC2\xA7" "cBlock ID must be 0-255"); return; }
+        auto* server = sender.getServer();
+        if (!server) return;
+        server->setBlockInWorld(x, y, z, blockId, meta);
+        sender.addChatMessage("Block placed at " + std::to_string(x) + ", " +
+            std::to_string(y) + ", " + std::to_string(z));
+    } catch (...) {
+        sender.addChatMessage("\xC2\xA7" "cInvalid number");
+    }
+}
+
+// /fill — Java: net.minecraft.command.CommandFill
+void CommandFill::processCommand(ICommandSender& sender, const std::vector<std::string>& args) {
+    if (args.size() < 7) {
+        sender.addChatMessage("\xC2\xA7" "cUsage: /fill <x1> <y1> <z1> <x2> <y2> <z2> <blockId> [meta]");
+        return;
+    }
+    try {
+        int32_t x1 = std::stoi(args[0]), y1 = std::stoi(args[1]), z1 = std::stoi(args[2]);
+        int32_t x2 = std::stoi(args[3]), y2 = std::stoi(args[4]), z2 = std::stoi(args[5]);
+        int32_t blockId = std::stoi(args[6]);
+        int32_t meta = (args.size() > 7) ? std::stoi(args[7]) : 0;
+        // Normalize ranges
+        if (x1 > x2) std::swap(x1, x2);
+        if (y1 > y2) std::swap(y1, y2);
+        if (z1 > z2) std::swap(z1, z2);
+        y1 = std::max(0, y1); y2 = std::min(255, y2);
+        // Size check — Java: max 32768 blocks
+        int64_t volume = static_cast<int64_t>(x2 - x1 + 1) * (y2 - y1 + 1) * (z2 - z1 + 1);
+        if (volume > 32768) {
+            sender.addChatMessage("\xC2\xA7" "cToo many blocks (" + std::to_string(volume) + "), max 32768");
+            return;
+        }
+        auto* server = sender.getServer();
+        if (!server) return;
+        int32_t count = 0;
+        for (int32_t x = x1; x <= x2; ++x) {
+            for (int32_t y = y1; y <= y2; ++y) {
+                for (int32_t z = z1; z <= z2; ++z) {
+                    server->setBlockInWorld(x, y, z, blockId, meta);
+                    ++count;
+                }
+            }
+        }
+        sender.addChatMessage("Filled " + std::to_string(count) + " blocks");
+    } catch (...) {
+        sender.addChatMessage("\xC2\xA7" "cInvalid number");
+    }
 }
 
 } // namespace mccpp

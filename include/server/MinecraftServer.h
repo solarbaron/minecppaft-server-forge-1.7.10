@@ -518,6 +518,9 @@ public:
     /** Kick a player by name with a reason message. */
     void kickPlayer(const std::string& playerName, const std::string& reason);
 
+    /** Set a block in the world and broadcast the change to all players. */
+    void setBlockInWorld(int32_t x, int32_t y, int32_t z, int32_t blockId, int32_t meta = 0);
+
     /**
      * Apply a potion effect to a player by name.
      * Java reference: EntityLivingBase.addPotionEffect()
