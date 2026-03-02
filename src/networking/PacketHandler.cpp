@@ -3075,6 +3075,40 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
         return;
     }
 
+    // ─── Slab double-slab placement (44→43, 126→125) ────────────────
+    // Java: ItemSlab.func_150936_a — placing slab on matching slab creates double
+    if (placeBlockId == 44 || placeBlockId == 126) {
+        // Get slab sub-type from held item damage
+        auto heldSlab = inventory_.getCurrentItem();
+        int slabDamage = heldSlab ? heldSlab->getDamage() : 0;
+
+        // Check if clicking on an existing matching slab
+        Block* clickedBlock = world->getBlock(blockX, blockY, blockZ);
+        int clickedId = clickedBlock ? Block::getIdFromBlock(clickedBlock) : 0;
+        int clickedMeta = world->getBlockMetadata(blockX, blockY, blockZ);
+
+        if (clickedId == placeBlockId && (clickedMeta & 0x07) == (slabDamage & 0x07)) {
+            // Merge into double slab
+            int doubleSlabId = (placeBlockId == 44) ? 43 : 125;
+            world->setBlock(blockX, blockY, blockZ, Block::getBlockById(doubleSlabId));
+            world->setBlockMetadata(blockX, blockY, blockZ, slabDamage & 0x07);
+            server_.broadcastBlockChange(blockX, blockY, blockZ, doubleSlabId, slabDamage & 0x07);
+            server_.broadcastSound("dig.stone",
+                static_cast<double>(blockX) + 0.5, static_cast<double>(blockY) + 0.5,
+                static_cast<double>(blockZ) + 0.5, 1.0f, 0.8f);
+            if (gameMode_ != 1) {
+                if (heldSlab && heldSlab->getStackSize() > 1) {
+                    ItemStack ns(heldSlab->getItemId(), heldSlab->getStackSize() - 1, heldSlab->getDamage());
+                    inventory_.setInventorySlotContents(inventory_.getCurrentSlot(), ns);
+                } else {
+                    inventory_.setInventorySlotContents(inventory_.getCurrentSlot(), std::nullopt);
+                }
+                sendWindowItems(conn);
+            }
+            return;
+        }
+    }
+
     // ─── Bed item placement (355) — 2-block wide structure ───────────
     // Java: ItemBed.onItemUse() → foot + head blocks
     if (placeBlockId == 26) {
