@@ -506,6 +506,61 @@ public:
             }
         }
 
+        // ── Step 9.10: Cactus generation ──
+        // Java reference: BiomeDecorator cactiPerChunk + WorldGenCactus
+        // 1/6 chance per chunk, 1-3 blocks tall on sand
+        {
+            NoiseGeneratorImproved::RNG cactusRng;
+            cactusRng.setSeed(seed_ ^ (static_cast<int64_t>(chunkX) * 1234509876LL +
+                                        static_cast<int64_t>(chunkZ) * 6789012345LL));
+
+            if (cactusRng.nextInt(6) == 0) {
+                int32_t cx = cactusRng.nextInt(16);
+                int32_t cz = cactusRng.nextInt(16);
+                for (int32_t cy = 80; cy >= 2; --cy) {
+                    int32_t below = blocks[(cx * 16 + cz) * 256 + cy - 1];
+                    int32_t at = blocks[(cx * 16 + cz) * 256 + cy];
+                    if (at == 0 && below == SAND) {
+                        // Check no adjacent blocks (cactus needs air on all sides)
+                        bool canPlace = true;
+                        if (cx > 0 && blocks[((cx-1) * 16 + cz) * 256 + cy] != 0) canPlace = false;
+                        if (cx < 15 && blocks[((cx+1) * 16 + cz) * 256 + cy] != 0) canPlace = false;
+                        if (cz > 0 && blocks[(cx * 16 + (cz-1)) * 256 + cy] != 0) canPlace = false;
+                        if (cz < 15 && blocks[(cx * 16 + (cz+1)) * 256 + cy] != 0) canPlace = false;
+                        if (canPlace) {
+                            int32_t height = cactusRng.nextInt(3) + 1; // 1-3
+                            for (int32_t h = 0; h < height && cy + h < 256; ++h) {
+                                blocks[(cx * 16 + cz) * 256 + cy + h] = 81; // Cactus
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+
+        // ── Step 9.11: Dead bush generation ──
+        // Java reference: BiomeDecorator deadBushPerChunk + WorldGenDeadBush
+        // 1/8 chance per chunk, place dead bush (32) on sand
+        {
+            NoiseGeneratorImproved::RNG bushRng;
+            bushRng.setSeed(seed_ ^ (static_cast<int64_t>(chunkX) * 2468013579LL +
+                                      static_cast<int64_t>(chunkZ) * 1357924680LL));
+
+            if (bushRng.nextInt(8) == 0) {
+                int32_t bx = bushRng.nextInt(16);
+                int32_t bz = bushRng.nextInt(16);
+                for (int32_t by = 80; by >= 2; --by) {
+                    int32_t below = blocks[(bx * 16 + bz) * 256 + by - 1];
+                    int32_t at = blocks[(bx * 16 + bz) * 256 + by];
+                    if (at == 0 && below == SAND) {
+                        blocks[(bx * 16 + bz) * 256 + by] = 32; // Dead bush
+                        break;
+                    }
+                }
+            }
+        }
+
         // ── Step 10: Fill chunk sections ──
         for (int x = 0; x < 16; ++x) {
             for (int z = 0; z < 16; ++z) {

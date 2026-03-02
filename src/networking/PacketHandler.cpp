@@ -2988,6 +2988,32 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
 
     // Note block (25) — play note and increment pitch
     // Java: BlockNote.onBlockActivated()
+
+    // Bed (block ID 26) — Java: BlockBed.onBlockActivated()
+    // Right-click at night: skip to dawn. Day: "You can only sleep at night"
+    if (clickedBlockId == 26 && !isSneaking_) {
+        if (!server_.getWorlds().empty()) {
+            auto& w = server_.getWorlds()[0];
+            int64_t timeOfDay = w->getWorldTime() % 24000;
+            if (timeOfDay >= 12542) {
+                // Night — skip to dawn
+                int64_t currentCycle = (w->getWorldTime() / 24000) * 24000;
+                w->setWorldTime(currentCycle + 24000); // Next dawn (0)
+                server_.broadcastTimeUpdate();
+                std::vector<uint8_t> chatPkt;
+                writeVarInt(chatPkt, ClientboundPacket::ChatMessage);
+                writeString(chatPkt, "{\"text\":\"\\u00a77Good morning!\"}");
+                conn.sendPacket(std::move(chatPkt));
+            } else {
+                std::vector<uint8_t> chatPkt;
+                writeVarInt(chatPkt, ClientboundPacket::ChatMessage);
+                writeString(chatPkt, "{\"text\":\"You can only sleep at night\"}");
+                conn.sendPacket(std::move(chatPkt));
+            }
+        }
+        return;
+    }
+
     // Repeater (block IDs 93=unpowered, 94=powered) — Java: BlockRedstoneRepeater.onBlockActivated()
     // Right-click cycles delay: bits 2-3 of metadata → 0,1,2,3 (1-4 tick delay)
     if ((clickedBlockId == 93 || clickedBlockId == 94) && !isSneaking_) {
