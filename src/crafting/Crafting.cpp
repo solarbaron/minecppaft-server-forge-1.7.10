@@ -1561,6 +1561,37 @@ CraftingManager::CraftingManager() {
     // Magma cream: blaze powder (377) + slime ball (341) → magma cream (378)
     addShapelessRecipe(I(378,1,0), {I(377,1,0), I(341,1,0)});
 
+    // ═══════════════════════════════════════════════════════════════════
+    // Missing RecipesCrafting — Java ref parity audit
+    // ═══════════════════════════════════════════════════════════════════
+
+    // Ender chest (8 obsidian + ender eye → 1) Block 130
+    shaped3({I(49,1,0), I(49,1,0), I(49,1,0),
+             I(49,1,0), I(381,1,0), I(49,1,0),
+             I(49,1,0), I(49,1,0), I(49,1,0)}, I(130,1,0));
+
+    // Trapped chest (chest + tripwire hook → 1) Block 146
+    addShapelessRecipe(I(146,1,0), {I(54,1,0), I(131,1,0)});
+
+    // Beacon (3 glass + nether star + 3 obsidian → 1) Block 138
+    shaped3({I(20,1,0),  I(20,1,0),  I(20,1,0),
+             I(20,1,0),  I(399,1,0), I(20,1,0),
+             I(49,1,0),  I(49,1,0),  I(49,1,0)}, I(138,1,0));
+
+    // Sandstone chiseled (2 sandstone slabs → 1) Block 24:1
+    shaped12({I(44,1,1), I(44,1,1)}, I(24,1,1));
+
+    // Quartz chiseled (2 quartz slabs → 1) Block 155:1
+    shaped12({I(44,1,7), I(44,1,7)}, I(155,1,1));
+
+    // Golden apple (8 gold ingots + apple → 1) Item 322:0
+    shaped3({I(266,1,0), I(266,1,0), I(266,1,0),
+             I(266,1,0), I(260,1,0), I(266,1,0),
+             I(266,1,0), I(266,1,0), I(266,1,0)}, I(322,1,0));
+
+    // Sugar (sugar cane → sugar) Item 353, sugar_cane 338
+    addShapelessRecipe(I(353,1,0), {I(338,1,0)});
+
     // ─── Sort by recipe size (larger first) ─────────────────────────
     std::sort(recipes_.begin(), recipes_.end(),
         [](const std::unique_ptr<IRecipe>& a, const std::unique_ptr<IRecipe>& b) {
