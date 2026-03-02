@@ -5151,5 +5151,142 @@ void PlayHandler::tickFood(Connection& conn) {
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// S1D EntityEffect — send a potion effect to the client
+// Java reference: S1DPacketEntityEffect
+// Protocol: VarInt entityId, Byte effectId, Byte amplifier, Short duration
+// ═══════════════════════════════════════════════════════════════════════════
+void PlayHandler::sendEntityEffect(Connection& conn, int32_t entityId, int8_t effectId,
+                                    int8_t amplifier, int16_t duration) {
+    std::vector<uint8_t> pkt;
+    writeVarInt(pkt, 0x1D); // S1D
+    writeVarInt(pkt, entityId);
+    pkt.push_back(static_cast<uint8_t>(effectId));
+    pkt.push_back(static_cast<uint8_t>(amplifier));
+    writeShort(pkt, duration);
+    conn.sendPacket(std::move(pkt));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// S1E RemoveEntityEffect — remove a potion effect from the client
+// Java reference: S1EPacketRemoveEntityEffect
+// Protocol: VarInt entityId, Byte effectId
+// ═══════════════════════════════════════════════════════════════════════════
+void PlayHandler::sendRemoveEntityEffect(Connection& conn, int32_t entityId, int8_t effectId) {
+    std::vector<uint8_t> pkt;
+    writeVarInt(pkt, 0x1E); // S1E
+    writeVarInt(pkt, entityId);
+    pkt.push_back(static_cast<uint8_t>(effectId));
+    conn.sendPacket(std::move(pkt));
+}
+
+void PlayHandler::addPotionEffect(Connection& conn, int32_t effectId, int32_t duration, int32_t amplifier) {
+    // Java reference: EntityLivingBase.addPotionEffect(PotionEffect)
+    // If effect already active, update if new is stronger or same-strength-longer
+    auto it = activePotionEffects_.find(effectId);
+    if (it != activePotionEffects_.end()) {
+        if (amplifier > it->second.amplifier ||
+            (amplifier == it->second.amplifier && duration > it->second.duration)) {
+            it->second.amplifier = amplifier;
+            it->second.duration = duration;
+        } else {
+            return; // Current effect is stronger
+        }
+    } else {
+        activePotionEffects_[effectId] = {effectId, amplifier, duration};
+    }
+
+    // Send S1D to client
+    int16_t clampedDuration = static_cast<int16_t>(std::min(duration, 32767));
+    sendEntityEffect(conn, entityId_, static_cast<int8_t>(effectId),
+                     static_cast<int8_t>(amplifier), clampedDuration);
+
+    std::cout << "[Effect] " << playerName_ << " got effect " << effectId
+              << " amplifier " << amplifier << " for " << duration << " ticks\n";
+}
+
+void PlayHandler::removePotionEffect(Connection& conn, int32_t effectId) {
+    auto it = activePotionEffects_.find(effectId);
+    if (it != activePotionEffects_.end()) {
+        activePotionEffects_.erase(it);
+        sendRemoveEntityEffect(conn, entityId_, static_cast<int8_t>(effectId));
+    }
+}
+
+void PlayHandler::clearPotionEffects(Connection& conn) {
+    for (auto& [id, effect] : activePotionEffects_) {
+        sendRemoveEntityEffect(conn, entityId_, static_cast<int8_t>(id));
+    }
+    activePotionEffects_.clear();
+}
+
+void PlayHandler::tickPotionEffects(Connection& conn) {
+    // Java reference: EntityLivingBase.onUpdate() → potionsUpdateTick
+    std::vector<int32_t> expired;
+
+    for (auto& [id, effect] : activePotionEffects_) {
+        --effect.duration;
+
+        // Apply per-tick effects
+        // Java reference: Potion.performEffect()
+        switch (id) {
+            case 10: // Regeneration — heal every (50 >> amplifier) ticks
+            {
+                int interval = std::max(1, 50 >> effect.amplifier);
+                if (effect.duration % interval == 0 && health_ < 20.0f) {
+                    health_ = std::min(20.0f, health_ + 1.0f);
+                    sendUpdateHealth(conn, health_, foodStats_.getFoodLevel(), foodStats_.getSaturationLevel());
+                }
+                break;
+            }
+            case 19: // Poison — damage every (25 >> amplifier) ticks (won't kill)
+            {
+                int interval = std::max(1, 25 >> effect.amplifier);
+                if (effect.duration % interval == 0 && health_ > 1.0f) {
+                    health_ = std::max(1.0f, health_ - 1.0f);
+                    sendUpdateHealth(conn, health_, foodStats_.getFoodLevel(), foodStats_.getSaturationLevel());
+                }
+                break;
+            }
+            case 20: // Wither — damage every (40 >> amplifier) ticks (CAN kill)
+            {
+                int interval = std::max(1, 40 >> effect.amplifier);
+                if (effect.duration % interval == 0) {
+                    health_ -= 1.0f;
+                    if (health_ <= 0.0f) {
+                        health_ = 0.0f;
+                        dead_ = true;
+                    }
+                    sendUpdateHealth(conn, health_, foodStats_.getFoodLevel(), foodStats_.getSaturationLevel());
+                }
+                break;
+            }
+            case 23: // Saturation — restore food every tick
+            {
+                if (foodStats_.getFoodLevel() < 20) {
+                    foodStats_.addStats(1 + effect.amplifier, 0.0f);
+                    sendUpdateHealth(conn, health_, foodStats_.getFoodLevel(), foodStats_.getSaturationLevel());
+                }
+                break;
+            }
+            // Speed (1), Slowness (2), Haste (3), Mining Fatigue (4), Strength (5),
+            // Instant Health (6), Instant Damage (7), Jump Boost (8), Nausea (9),
+            // Night Vision (16), Hunger (17), Weakness (18), Absorption (22), etc.
+            // These are client-side visual/movement effects — no server tick needed
+            default:
+                break;
+        }
+
+        if (effect.duration <= 0) {
+            expired.push_back(id);
+        }
+    }
+
+    for (int32_t id : expired) {
+        activePotionEffects_.erase(id);
+        sendRemoveEntityEffect(conn, entityId_, static_cast<int8_t>(id));
+    }
+}
+
 } // namespace mccpp
 

@@ -13,6 +13,7 @@
 #pragma once
 
 #include <set>
+#include <map>
 #include <utility>
 
 #include <atomic>
@@ -395,6 +396,42 @@ public:
      * Java reference: EntityLivingBase.damageEntity()
      */
     void applyDamage(float amount);
+
+    /**
+     * Send S1D EntityEffect to the client.
+     * Java reference: S1DPacketEntityEffect
+     */
+    void sendEntityEffect(Connection& conn, int32_t entityId, int8_t effectId,
+                          int8_t amplifier, int16_t duration);
+
+    /**
+     * Send S1E RemoveEntityEffect to the client.
+     * Java reference: S1EPacketRemoveEntityEffect
+     */
+    void sendRemoveEntityEffect(Connection& conn, int32_t entityId, int8_t effectId);
+
+    /**
+     * Add a potion effect to this player. Sends S1D to client.
+     * Java reference: EntityLivingBase.addPotionEffect()
+     */
+    void addPotionEffect(Connection& conn, int32_t effectId, int32_t duration, int32_t amplifier);
+
+    /**
+     * Remove a potion effect from this player. Sends S1E to client.
+     * Java reference: EntityLivingBase.removePotionEffect()
+     */
+    void removePotionEffect(Connection& conn, int32_t effectId);
+
+    /**
+     * Remove all potion effects (on death/respawn).
+     */
+    void clearPotionEffects(Connection& conn);
+
+    /**
+     * Tick active potion effects — decrement duration, apply per-tick effects.
+     * Java reference: EntityLivingBase.onUpdate() → activePotionsMap iteration
+     */
+    void tickPotionEffects(Connection& conn);
 
     // ─── Getters for player state ──────────────────────────────────────
     int32_t getEntityId() const { return entityId_; }
@@ -794,6 +831,15 @@ private:
 
     // Item drop throttle — Java: NetHandlerPlayServer.itemDropThreshold
     int32_t itemDropThreshold_ = 0;
+
+    // ─── Active potion effects ──────────────────────────────────────
+    // Java: EntityLivingBase.activePotionsMap (HashMap<Integer, PotionEffect>)
+    struct ActiveEffect {
+        int32_t effectId;    // Potion ID (1=speed, 2=slowness, etc.)
+        int32_t amplifier;   // 0-based level (0=I, 1=II, etc.)
+        int32_t duration;    // Remaining ticks
+    };
+    std::map<int32_t, ActiveEffect> activePotionEffects_;
 
     // ─── Experience (Java: EntityPlayer) ─────────────────────────────
     float experienceBar_ = 0.0f;    // Java: experience (0.0-1.0 progress within level)

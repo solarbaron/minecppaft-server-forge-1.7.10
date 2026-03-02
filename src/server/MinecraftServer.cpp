@@ -1940,6 +1940,30 @@ void MinecraftServer::tickRandomBlocks() {
                         }
                     }
                 }
+
+                // ─── Sand/gravel gravity (12/13) — Java: BlockFalling.updateTick ─
+                if (blockId == 12 || blockId == 13) {
+                    Block* below = world->getBlock(bx, by - 1, bz);
+                    int belowId = below ? Block::getIdFromBlock(below) : 0;
+                    if (by > 1 && (belowId == 0 || belowId == 8 || belowId == 9 ||
+                        belowId == 10 || belowId == 11)) {
+                        // Find landing position
+                        int fallY = by - 1;
+                        while (fallY > 0) {
+                            Block* fb = world->getBlock(bx, fallY, bz);
+                            int fid = fb ? Block::getIdFromBlock(fb) : 0;
+                            if (fid != 0 && fid != 8 && fid != 9 && fid != 10 && fid != 11) break;
+                            --fallY;
+                        }
+                        ++fallY;
+                        if (fallY < by) {
+                            world->setBlock(bx, by, bz, Block::getBlockById(0));
+                            broadcastBlockChange(bx, by, bz, 0, 0);
+                            world->setBlock(bx, fallY, bz, Block::getBlockById(blockId));
+                            broadcastBlockChange(bx, fallY, bz, blockId, 0);
+                        }
+                    }
+                }
             }
         }
     }
