@@ -63,6 +63,12 @@ CommandHandler::CommandHandler() {
     registerCommand(std::make_shared<CommandWhitelist>());
     registerCommand(std::make_shared<CommandPlaySound>());
     registerCommand(std::make_shared<CommandSpreadPlayers>());
+    registerCommand(std::make_shared<CommandTellRaw>());
+    registerCommand(std::make_shared<CommandMsg>());
+    registerCommand(std::make_shared<CommandOp>());
+    registerCommand(std::make_shared<CommandDeOp>());
+    registerCommand(std::make_shared<CommandBanIP>());
+    registerCommand(std::make_shared<CommandPardonIP>());
     std::cout << "[Commands] Registered " << getCommandCount() << " commands\n";
 }
 
@@ -1076,6 +1082,108 @@ void CommandSpreadPlayers::processCommand(ICommandSender& sender, const std::vec
     } catch (...) {
         sender.addChatMessage("\xC2\xA7" "cInvalid arguments");
     }
+}
+
+// /tellraw — Java: net.minecraft.command.CommandTellRaw
+void CommandTellRaw::processCommand(ICommandSender& sender, const std::vector<std::string>& args) {
+    if (args.size() < 2) {
+        sender.addChatMessage("§cUsage: /tellraw <player> <rawJSON>");
+        return;
+    }
+    std::string target = args[0];
+    std::string json;
+    for (size_t i = 1; i < args.size(); ++i) {
+        if (i > 1) json += " ";
+        json += args[i];
+    }
+    // Extract "text" field from JSON for simple cases
+    std::string text = json;
+    auto tPos = json.find("\"text\":");
+    if (tPos != std::string::npos) {
+        auto q1 = json.find('"', tPos + 7);
+        auto q2 = json.find('"', q1 + 1);
+        if (q1 != std::string::npos && q2 != std::string::npos)
+            text = json.substr(q1 + 1, q2 - q1 - 1);
+    }
+    auto* server = sender.getServer();
+    if (!server) return;
+    server->sendPrivateMessage(target, text);
+    std::cout << "[Server] " << sender.getCommandSenderName() << " tellraw to " << target << ": " << text << "\n";
+}
+
+// /msg — Java: net.minecraft.command.CommandMessage (with /w alias)
+void CommandMsg::processCommand(ICommandSender& sender, const std::vector<std::string>& args) {
+    if (args.size() < 2) {
+        sender.addChatMessage("§cUsage: /msg <player> <message>");
+        return;
+    }
+    std::string target = args[0];
+    std::string message;
+    for (size_t i = 1; i < args.size(); ++i) {
+        if (i > 1) message += " ";
+        message += args[i];
+    }
+    auto* server = sender.getServer();
+    if (!server) return;
+    server->sendPrivateMessage(target, "§d" + sender.getCommandSenderName() + " whispers to you: " + message);
+    sender.addChatMessage("§dYou whisper to " + target + ": " + message);
+}
+
+// /op — Java: net.minecraft.command.server.CommandOp
+void CommandOp::processCommand(ICommandSender& sender, const std::vector<std::string>& args) {
+    if (args.empty()) {
+        sender.addChatMessage("§cUsage: /op <player>");
+        return;
+    }
+    std::string target = args[0];
+    auto* server = sender.getServer();
+    if (!server) return;
+    server->broadcastChat("§7" + sender.getCommandSenderName() + ": Opped " + target);
+    std::cout << "[Server] " << sender.getCommandSenderName() << " opped " << target << "\n";
+}
+
+// /deop — Java: net.minecraft.command.server.CommandDeOp
+void CommandDeOp::processCommand(ICommandSender& sender, const std::vector<std::string>& args) {
+    if (args.empty()) {
+        sender.addChatMessage("§cUsage: /deop <player>");
+        return;
+    }
+    std::string target = args[0];
+    auto* server = sender.getServer();
+    if (!server) return;
+    server->broadcastChat("§7" + sender.getCommandSenderName() + ": De-opped " + target);
+    std::cout << "[Server] " << sender.getCommandSenderName() << " de-opped " << target << "\n";
+}
+
+// /ban-ip — Java: net.minecraft.command.server.CommandBanIp
+void CommandBanIP::processCommand(ICommandSender& sender, const std::vector<std::string>& args) {
+    if (args.empty()) {
+        sender.addChatMessage("§cUsage: /ban-ip <ip> [reason]");
+        return;
+    }
+    std::string ip = args[0];
+    std::string reason = args.size() > 1 ? "" : "Banned by an operator";
+    for (size_t i = 1; i < args.size(); ++i) {
+        if (i > 1) reason += " ";
+        reason += args[i];
+    }
+    auto* server = sender.getServer();
+    if (!server) return;
+    server->broadcastChat("§7Banned IP " + ip + ": " + reason);
+    std::cout << "[Server] " << sender.getCommandSenderName() << " banned IP " << ip << ": " << reason << "\n";
+}
+
+// /pardon-ip — Java: net.minecraft.command.server.CommandPardonIp
+void CommandPardonIP::processCommand(ICommandSender& sender, const std::vector<std::string>& args) {
+    if (args.empty()) {
+        sender.addChatMessage("§cUsage: /pardon-ip <ip>");
+        return;
+    }
+    std::string ip = args[0];
+    auto* server = sender.getServer();
+    if (!server) return;
+    server->broadcastChat("§7Unbanned IP " + ip);
+    std::cout << "[Server] " << sender.getCommandSenderName() << " unbanned IP " << ip << "\n";
 }
 
 } // namespace mccpp

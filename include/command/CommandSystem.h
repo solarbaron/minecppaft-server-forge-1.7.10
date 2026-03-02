@@ -527,4 +527,77 @@ public:
     void processCommand(ICommandSender& sender, const std::vector<std::string>& args) override;
 };
 
+// /tellraw <player> <rawJSON> — Send raw JSON chat message
+// Java: net.minecraft.command.CommandTellRaw
+class CommandTellRaw : public ICommand {
+public:
+    std::string getCommandName() const override { return "tellraw"; }
+    std::string getCommandUsage() const override { return "/tellraw <player> <rawJSON>"; }
+    int32_t getRequiredPermissionLevel() const override { return 2; }
+    void processCommand(ICommandSender& sender, const std::vector<std::string>& args) override;
+    bool isUsernameIndex(const std::vector<std::string>& args, int32_t index) const override {
+        return index == 0;
+    }
+};
+
+// /msg <player> <message> — Private message (alias for /tell)
+// Java: net.minecraft.command.CommandMessage
+class CommandMsg : public ICommand {
+public:
+    std::string getCommandName() const override { return "msg"; }
+    std::string getCommandUsage() const override { return "/msg <player> <message>"; }
+    std::vector<std::string> getCommandAliases() const override { return {"w"}; }
+    int32_t getRequiredPermissionLevel() const override { return 0; }
+    void processCommand(ICommandSender& sender, const std::vector<std::string>& args) override;
+    bool isUsernameIndex(const std::vector<std::string>& args, int32_t index) const override {
+        return index == 0;
+    }
+};
+
+// /op <player> — Give operator status
+// Java: net.minecraft.command.server.CommandOp
+class CommandOp : public ICommand {
+public:
+    std::string getCommandName() const override { return "op"; }
+    std::string getCommandUsage() const override { return "/op <player>"; }
+    int32_t getRequiredPermissionLevel() const override { return 3; }
+    void processCommand(ICommandSender& sender, const std::vector<std::string>& args) override;
+    bool isUsernameIndex(const std::vector<std::string>& args, int32_t index) const override {
+        return index == 0;
+    }
+};
+
+// /deop <player> — Remove operator status
+// Java: net.minecraft.command.server.CommandDeOp
+class CommandDeOp : public ICommand {
+public:
+    std::string getCommandName() const override { return "deop"; }
+    std::string getCommandUsage() const override { return "/deop <player>"; }
+    int32_t getRequiredPermissionLevel() const override { return 3; }
+    void processCommand(ICommandSender& sender, const std::vector<std::string>& args) override;
+    bool isUsernameIndex(const std::vector<std::string>& args, int32_t index) const override {
+        return index == 0;
+    }
+};
+
+// /ban-ip <ip> [reason] — Ban an IP address
+// Java: net.minecraft.command.server.CommandBanIp
+class CommandBanIP : public ICommand {
+public:
+    std::string getCommandName() const override { return "ban-ip"; }
+    std::string getCommandUsage() const override { return "/ban-ip <ip> [reason]"; }
+    int32_t getRequiredPermissionLevel() const override { return 3; }
+    void processCommand(ICommandSender& sender, const std::vector<std::string>& args) override;
+};
+
+// /pardon-ip <ip> — Unban an IP address
+// Java: net.minecraft.command.server.CommandPardonIp
+class CommandPardonIP : public ICommand {
+public:
+    std::string getCommandName() const override { return "pardon-ip"; }
+    std::string getCommandUsage() const override { return "/pardon-ip <ip>"; }
+    int32_t getRequiredPermissionLevel() const override { return 3; }
+    void processCommand(ICommandSender& sender, const std::vector<std::string>& args) override;
+};
+
 } // namespace mccpp
