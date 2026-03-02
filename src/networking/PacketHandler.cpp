@@ -2717,6 +2717,106 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
         return;
     }
 
+    // ─── Cake (block ID 92) — Java: BlockCake.onBlockActivated() ─────
+    // Each bite: +2 food, +0.1 saturation. Meta 0→5 = 6 bites, destroy at meta≥6
+    if (clickedBlockId == 92 && !isSneaking_) {
+        int32_t by = static_cast<int32_t>(blockY);
+        if (foodStats_.needFood()) {
+            foodStats_.addStats(2, 0.1f);
+            sendUpdateHealth(conn, health_, foodStats_.getFoodLevel(), foodStats_.getSaturationLevel());
+            int meta = world->getBlockMetadata(blockX, by, blockZ) + 1;
+            if (meta >= 6) {
+                // Destroy cake
+                world->setBlock(blockX, by, blockZ, Block::getBlockById(0));
+                server_.broadcastBlockChange(blockX, by, blockZ, 0, 0);
+            } else {
+                world->setBlockMetadata(blockX, by, blockZ, meta);
+                server_.broadcastBlockChange(blockX, by, blockZ, 92, meta);
+            }
+            server_.broadcastSound("random.eat",
+                static_cast<double>(blockX) + 0.5, static_cast<double>(by) + 0.5,
+                static_cast<double>(blockZ) + 0.5, 0.5f, 1.0f);
+        }
+        return;
+    }
+
+    // ─── Repeater (block ID 93/94) — Java: BlockRedstoneRepeater.onBlockActivated() ─
+    // Cycle delay: meta bits 2-3 = delay (0→1→2→3→0), keep facing bits 0-1
+    if ((clickedBlockId == 93 || clickedBlockId == 94) && !isSneaking_) {
+        int32_t by = static_cast<int32_t>(blockY);
+        int meta = world->getBlockMetadata(blockX, by, blockZ);
+        int facing = meta & 0x03;
+        int delay = ((meta >> 2) + 1) & 0x03; // cycle 0→1→2→3→0
+        int newMeta = facing | (delay << 2);
+        world->setBlockMetadata(blockX, by, blockZ, newMeta);
+        server_.broadcastBlockChange(blockX, by, blockZ, clickedBlockId, newMeta);
+        server_.broadcastSound("random.click",
+            static_cast<double>(blockX) + 0.5, static_cast<double>(by) + 0.5,
+            static_cast<double>(blockZ) + 0.5, 0.3f, 0.5f);
+        return;
+    }
+
+    // ─── Comparator (block ID 149/150) — Java: BlockRedstoneComparator.onBlockActivated() ─
+    // Toggle mode: bit 2 = subtract mode (0=compare, 1=subtract)
+    if ((clickedBlockId == 149 || clickedBlockId == 150) && !isSneaking_) {
+        int32_t by = static_cast<int32_t>(blockY);
+        int meta = world->getBlockMetadata(blockX, by, blockZ);
+        meta ^= 0x04; // Toggle subtract mode
+        world->setBlockMetadata(blockX, by, blockZ, meta);
+        server_.broadcastBlockChange(blockX, by, blockZ, clickedBlockId, meta);
+        server_.broadcastSound("random.click",
+            static_cast<double>(blockX) + 0.5, static_cast<double>(by) + 0.5,
+            static_cast<double>(blockZ) + 0.5, 0.3f, 0.5f);
+        return;
+    }
+
+    // ─── Cauldron (block ID 118) — Java: BlockCauldron.onBlockActivated() ─
+    // Water bottle (373) fills, bucket (325/326) interacts with water level (meta 0-3)
+    if (clickedBlockId == 118 && !isSneaking_) {
+        int32_t by = static_cast<int32_t>(blockY);
+        int meta = world->getBlockMetadata(blockX, by, blockZ);
+        auto held = inventory_.getCurrentItem();
+        if (held) {
+            if (held->getItemId() == 326 && meta < 3) {
+                // Water bucket → fill cauldron to max
+                world->setBlockMetadata(blockX, by, blockZ, 3);
+                server_.broadcastBlockChange(blockX, by, blockZ, 118, 3);
+                if (gameMode_ != 1) {
+                    ItemStack emptyBucket(325, 1, 0);
+                    inventory_.setInventorySlotContents(currentSlot_, emptyBucket);
+                    sendWindowItems(conn);
+                }
+                server_.broadcastSound("random.splash",
+                    static_cast<double>(blockX) + 0.5, static_cast<double>(by) + 0.5,
+                    static_cast<double>(blockZ) + 0.5, 0.5f, 1.0f);
+            } else if (held->getItemId() == 325 && meta == 3) {
+                // Empty bucket + full cauldron → water bucket
+                world->setBlockMetadata(blockX, by, blockZ, 0);
+                server_.broadcastBlockChange(blockX, by, blockZ, 118, 0);
+                if (gameMode_ != 1) {
+                    ItemStack waterBucket(326, 1, 0);
+                    inventory_.setInventorySlotContents(currentSlot_, waterBucket);
+                    sendWindowItems(conn);
+                }
+                server_.broadcastSound("random.splash",
+                    static_cast<double>(blockX) + 0.5, static_cast<double>(by) + 0.5,
+                    static_cast<double>(blockZ) + 0.5, 0.5f, 1.0f);
+            } else if (held->getItemId() == 373 && meta < 3) {
+                // Water bottle → add 1 level
+                int newMeta = meta + 1;
+                world->setBlockMetadata(blockX, by, blockZ, newMeta);
+                server_.broadcastBlockChange(blockX, by, blockZ, 118, newMeta);
+                if (gameMode_ != 1) {
+                    // Replace with empty bottle
+                    ItemStack emptyBottle(374, 1, 0);
+                    inventory_.setInventorySlotContents(currentSlot_, emptyBottle);
+                    sendWindowItems(conn);
+                }
+            }
+        }
+        return;
+    }
+
     // TNT (block ID 46) — right-click with flint & steel (item 259) ignites
     // Java: BlockTNT.onBlockActivated → ItemFlintAndSteel
     if (clickedBlockId == 46) {
