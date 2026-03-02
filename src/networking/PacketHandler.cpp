@@ -2614,6 +2614,108 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
         sendWindowItems(conn);
         return;
     }
+    // ─── Lever (block ID 69) — Java: BlockLever.onBlockActivated() ─────
+    // Toggle bit 3 (0x08) to flip on/off
+    if (clickedBlockId == 69 && !isSneaking_) {
+        int32_t by = static_cast<int32_t>(blockY);
+        int meta = world->getBlockMetadata(blockX, by, blockZ);
+        meta ^= 0x08; // Toggle powered state
+        world->setBlockMetadata(blockX, by, blockZ, meta);
+        server_.broadcastBlockChange(blockX, by, blockZ, 69, meta);
+        server_.broadcastSound("random.click",
+            static_cast<double>(blockX) + 0.5, static_cast<double>(by) + 0.5,
+            static_cast<double>(blockZ) + 0.5, 0.3f, (meta & 0x08) ? 0.6f : 0.5f);
+        return;
+    }
+
+    // ─── Buttons (block ID 77/143) — Java: BlockButton.onBlockActivated() ───
+    // Set bit 3 (0x08) on — auto-resets after 20 ticks (simplified: instant toggle)
+    if ((clickedBlockId == 77 || clickedBlockId == 143) && !isSneaking_) {
+        int32_t by = static_cast<int32_t>(blockY);
+        int meta = world->getBlockMetadata(blockX, by, blockZ);
+        if (!(meta & 0x08)) { // Only activate if not already pressed
+            meta |= 0x08;
+            world->setBlockMetadata(blockX, by, blockZ, meta);
+            server_.broadcastBlockChange(blockX, by, blockZ, clickedBlockId, meta);
+            server_.broadcastSound("random.click",
+                static_cast<double>(blockX) + 0.5, static_cast<double>(by) + 0.5,
+                static_cast<double>(blockZ) + 0.5, 0.3f, 0.6f);
+        }
+        return;
+    }
+
+    // ─── Doors (block ID 64/71) — Java: BlockDoor.onBlockActivated() ─────
+    // Toggle bit 2 (0x04) = open/close on lower half, upper half links
+    if ((clickedBlockId == 64 || clickedBlockId == 71) && !isSneaking_) {
+        int32_t by = static_cast<int32_t>(blockY);
+        int meta = world->getBlockMetadata(blockX, by, blockZ);
+        bool isUpperHalf = (meta & 0x08) != 0;
+
+        if (isUpperHalf) {
+            // Click on upper half — toggle lower half
+            int32_t lowerY = by - 1;
+            int lowerMeta = world->getBlockMetadata(blockX, lowerY, blockZ);
+            lowerMeta ^= 0x04;
+            world->setBlockMetadata(blockX, lowerY, blockZ, lowerMeta);
+            server_.broadcastBlockChange(blockX, lowerY, blockZ, clickedBlockId, lowerMeta);
+        } else {
+            // Click on lower half — toggle directly
+            meta ^= 0x04;
+            world->setBlockMetadata(blockX, by, blockZ, meta);
+            server_.broadcastBlockChange(blockX, by, blockZ, clickedBlockId, meta);
+        }
+        server_.broadcastSound("random.door_open",
+            static_cast<double>(blockX) + 0.5, static_cast<double>(by) + 0.5,
+            static_cast<double>(blockZ) + 0.5, 1.0f, 1.0f);
+        return;
+    }
+
+    // ─── Trapdoor (block ID 96) — Java: BlockTrapDoor.onBlockActivated() ─
+    // Toggle bit 2 (0x04) = open/close
+    if (clickedBlockId == 96 && !isSneaking_) {
+        int32_t by = static_cast<int32_t>(blockY);
+        int meta = world->getBlockMetadata(blockX, by, blockZ);
+        meta ^= 0x04;
+        world->setBlockMetadata(blockX, by, blockZ, meta);
+        server_.broadcastBlockChange(blockX, by, blockZ, 96, meta);
+        server_.broadcastSound("random.door_open",
+            static_cast<double>(blockX) + 0.5, static_cast<double>(by) + 0.5,
+            static_cast<double>(blockZ) + 0.5, 1.0f, 1.0f);
+        return;
+    }
+
+    // ─── Fence Gate (block ID 107) — Java: BlockFenceGate.onBlockActivated() ─
+    // Toggle bit 2 (0x04) = open/close, update facing from player yaw
+    if (clickedBlockId == 107 && !isSneaking_) {
+        int32_t by = static_cast<int32_t>(blockY);
+        int meta = world->getBlockMetadata(blockX, by, blockZ);
+        meta ^= 0x04;
+        world->setBlockMetadata(blockX, by, blockZ, meta);
+        server_.broadcastBlockChange(blockX, by, blockZ, 107, meta);
+        server_.broadcastSound("random.door_open",
+            static_cast<double>(blockX) + 0.5, static_cast<double>(by) + 0.5,
+            static_cast<double>(blockZ) + 0.5, 1.0f, 1.0f);
+        return;
+    }
+
+    // ─── Note Block (block ID 25) — Java: BlockNote.onBlockActivated() ─
+    // Increment meta 0-24 (wraps), play note sound
+    if (clickedBlockId == 25 && !isSneaking_) {
+        int32_t by = static_cast<int32_t>(blockY);
+        int meta = world->getBlockMetadata(blockX, by, blockZ);
+        meta = (meta + 1) % 25;
+        world->setBlockMetadata(blockX, by, blockZ, meta);
+        server_.broadcastBlockChange(blockX, by, blockZ, 25, meta);
+        // Play note — instrument depends on block below
+        // Simplified: always harp
+        float pitch = static_cast<float>(std::pow(2.0, (meta - 12.0) / 12.0));
+        server_.broadcastSound("note.harp",
+            static_cast<double>(blockX) + 0.5, static_cast<double>(by) + 0.5,
+            static_cast<double>(blockZ) + 0.5, 3.0f, pitch);
+        // Send S28 block event for note block particle
+        server_.broadcastEffect(2005, blockX, by, blockZ, meta);
+        return;
+    }
 
     // TNT (block ID 46) — right-click with flint & steel (item 259) ignites
     // Java: BlockTNT.onBlockActivated → ItemFlintAndSteel
