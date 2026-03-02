@@ -1671,6 +1671,34 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
                 // Death animation
                 broadcastEntityEvent(targetEntityId, 3);
 
+                // ─── Mob-specific death sounds ─────────────────────────
+                // Java: EntityLiving.onDeath() → getDeathSound()
+                {
+                    const char* deathSound = "game.hostile.die";
+                    switch (mob.mobType) {
+                        case 50: deathSound = "mob.creeper.death"; break;
+                        case 51: deathSound = "mob.skeleton.death"; break;
+                        case 52: deathSound = "mob.spider.death"; break;
+                        case 54: deathSound = "mob.zombie.death"; break;
+                        case 55: deathSound = "mob.slime.big"; break;
+                        case 56: deathSound = "mob.ghast.death"; break;
+                        case 57: deathSound = "mob.zombiepig.zpigdeath"; break;
+                        case 58: deathSound = "mob.endermen.death"; break;
+                        case 59: deathSound = "mob.spider.death"; break;
+                        case 60: deathSound = "mob.silverfish.kill"; break;
+                        case 61: deathSound = "mob.blaze.death"; break;
+                        case 62: deathSound = "mob.magmacube.big"; break;
+                        case 66: deathSound = "mob.witch.death"; break;
+                        case 92: deathSound = "mob.cow.hurt"; break;
+                        case 90: deathSound = "mob.pig.death"; break;
+                        case 91: deathSound = "mob.sheep.say"; break;
+                        case 93: deathSound = "mob.chicken.hurt"; break;
+                        case 99: deathSound = "mob.irongolem.death"; break;
+                        default: break;
+                    }
+                    broadcastSound(deathSound, mob.posX, mob.posY, mob.posZ, 1.0f, 1.0f);
+                }
+
                 // Destroy entity
                 {
                     std::lock_guard<std::mutex> connLock(connectionsMutex_);
@@ -2768,6 +2796,40 @@ void MinecraftServer::tickMobs() {
             }
 
             mob.attackCooldown = 20; // 1 second between leap attacks
+        }
+
+        // ─── Undead mob sunlight burning ─────────────────────────────
+        // Java: EntityZombie/EntitySkeleton.onLivingUpdate() — burns in sunlight
+        // Undead mobs (zombie=54, skeleton=51) catch fire during daytime
+        {
+            int64_t worldTime = getWorldTime() % 24000;
+            bool isDaytime = (worldTime >= 0 && worldTime < 12300);
+            if (isDaytime && !isRaining()) {
+                for (auto& mob : mobEntities_) {
+                    if (mob.isDead) continue;
+                    // Only undead: zombie(54), skeleton(51)
+                    // Note: pigmen(57) are undead but spawn in Nether, not affected here
+                    if (mob.mobType != 54 && mob.mobType != 51) continue;
+
+                    // Check if mob can see sky — simplified: Y > 62 (sea level)
+                    // Java: world.canBlockSeeTheSky()
+                    int bx = static_cast<int>(std::floor(mob.posX));
+                    int by = static_cast<int>(std::floor(mob.posY));
+                    int bz = static_cast<int>(std::floor(mob.posZ));
+                    // Check block above head — if not solid, sunlight can reach
+                    int32_t blockAbove = getBlockIdInWorld(bx, by + 1, bz);
+                    if (blockAbove != 0) continue; // Block above = sheltered
+
+                    // Java: EntityLiving.onLivingUpdate() → setFire(8)
+                    mob.isOnFire = true;
+                    mob.health -= 1.0f;
+                    broadcastEntityEvent(mob.entityId, 2);
+                    if (mob.health <= 0.0f) {
+                        mob.isDead = true;
+                        broadcastEntityEvent(mob.entityId, 3);
+                    }
+                }
+            }
         }
 
         // ─── Enderman water damage ──────────────────────────────────
