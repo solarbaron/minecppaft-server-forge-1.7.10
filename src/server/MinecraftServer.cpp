@@ -1531,8 +1531,32 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
         for (auto& mob : mobEntities_) {
             if (mob.entityId != targetEntityId || mob.isDead) continue;
 
-            // Apply weapon damage
+            // Apply weapon damage (includes Sharpness from getWeaponDamage)
             float damage = attacker.getWeaponDamage();
+
+            // ─── Smite (ID 17) — bonus vs undead ──────────────────
+            // Java: EnchantmentDamage type 1 → level * 2.5f vs UNDEAD
+            auto attackerWeapon = attacker.getHeldItem();
+            if (attackerWeapon && attackerWeapon->hasEnchantments()) {
+                int16_t smiteLevel = attackerWeapon->getEnchantmentLevel(17);
+                if (smiteLevel > 0) {
+                    // Undead: Zombie(54), Skeleton(51), Zombie Pigman(57), Wither(64)
+                    if (mob.mobType == 54 || mob.mobType == 51 ||
+                        mob.mobType == 57 || mob.mobType == 64) {
+                        damage += smiteLevel * 2.5f;
+                    }
+                }
+                // ─── Bane of Arthropods (ID 18) — bonus vs arthropods ──
+                // Java: EnchantmentDamage type 2 → level * 2.5f vs ARTHROPOD
+                int16_t baneLevel = attackerWeapon->getEnchantmentLevel(18);
+                if (baneLevel > 0) {
+                    // Arthropods: Spider(52), Cave Spider(59), Silverfish(60)
+                    if (mob.mobType == 52 || mob.mobType == 59 || mob.mobType == 60) {
+                        damage += baneLevel * 2.5f;
+                    }
+                }
+            }
+
             mob.health -= damage;
 
             // Hurt animation
@@ -2066,6 +2090,40 @@ int32_t MinecraftServer::getBlockMetaInWorld(int32_t x, int32_t y, int32_t z) co
     return worlds_[0]->getBlockMetadata(x, y, z);
 }
 
+// Java: SharedMonsterAttributes.maxHealth base values per entity type
+static float getMobMaxHealth(uint8_t mobType) {
+    switch (mobType) {
+        case 50: return 20.0f;  // Creeper
+        case 51: return 20.0f;  // Skeleton
+        case 52: return 16.0f;  // Spider
+        case 54: return 20.0f;  // Zombie
+        case 55: return 16.0f;  // Slime (small; large=16*size)
+        case 56: return 10.0f;  // Ghast
+        case 57: return 20.0f;  // Zombie Pigman
+        case 58: return 40.0f;  // Enderman
+        case 59: return 12.0f;  // Cave Spider
+        case 60: return 8.0f;   // Silverfish
+        case 61: return 20.0f;  // Blaze
+        case 62: return 16.0f;  // Magma Cube
+        case 63: return 200.0f; // Ender Dragon
+        case 64: return 300.0f; // Wither
+        case 65: return 10.0f;  // Bat
+        case 66: return 26.0f;  // Witch
+        case 90: return 10.0f;  // Pig
+        case 91: return 4.0f;   // Sheep
+        case 92: return 10.0f;  // Cow
+        case 93: return 4.0f;   // Chicken
+        case 94: return 10.0f;  // Squid
+        case 95: return 8.0f;   // Wolf
+        case 96: return 6.0f;   // Mooshroom
+        case 98: return 6.0f;   // Ocelot
+        case 99: return 100.0f; // Iron Golem
+        case 100: return 26.0f; // Horse (base, varies)
+        case 120: return 10.0f; // Villager
+        default: return 20.0f;
+    }
+}
+
 int32_t MinecraftServer::summonMob(uint8_t mobType, double x, double y, double z) {
     int32_t eid = nextMobEntityId_.fetch_add(1, std::memory_order_relaxed);
     int64_t currentTick = tickCount_.load(std::memory_order_relaxed);
@@ -2074,7 +2132,7 @@ int32_t MinecraftServer::summonMob(uint8_t mobType, double x, double y, double z
     mob.mobType = mobType;
     mob.posX = x; mob.posY = y; mob.posZ = z;
     mob.yaw = 0.0f; mob.pitch = 0.0f;
-    mob.health = 20.0f;
+    mob.health = getMobMaxHealth(mobType);
     mob.spawnTick = currentTick;
     mob.isDead = false;
     {
@@ -2261,7 +2319,7 @@ void MinecraftServer::spawnNaturalMobs() {
     mob.posZ = spawnZ;
     mob.yaw = yaw;
     mob.pitch = 0.0f;
-    mob.health = 20.0f;
+    mob.health = getMobMaxHealth(mobType);
     mob.spawnTick = currentTick;
     mob.isDead = false;
 
