@@ -490,3 +490,5 @@
 188. **Mob movement** — ✅ Done (hostile mobs pathfind toward nearest survival player within 16 blocks: zombie=0.23, skeleton=0.25, spider=0.30, creeper=0.25; simulated gravity, yaw rotation, S18 EntityTeleport broadcast)
 189. **Cooked drops on fire** — ✅ Done (cow→steak 364, pig→cooked porkchop 320, chicken→cooked chicken 366 when isOnFire; Fire Aspect sets mob.isOnFire)
 190. **Fire/Blast/Projectile Protection** — ✅ Done (ID 1 factor 1.25 fire, ID 3 factor 1.5 blast, ID 4 factor 1.5 projectile; applied to lava/fire/burning damage with armor reduction formula)
+191. **Creeper explosion AI** — ✅ Done (fuse 30 ticks when within 3 blocks of player, createExplosion power=3.0 breakBlocks=true, fuse resets on distance, creeper removed after explosion)
+192. **Skeleton ranged attack** — ✅ Done (instant-hit arrow dmg=3.0 every 60 ticks within 16 blocks, armor+Projectile Protection reduction, random.bow sound, death: "was shot by Skeleton")

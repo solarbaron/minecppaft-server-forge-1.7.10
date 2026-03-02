@@ -2484,26 +2484,43 @@ void MinecraftServer::tickMobs() {
                 // Update yaw to face target — Java: atan2(-dx, dz) * 180/PI
                 mob.yaw = static_cast<float>(std::atan2(-dx, dz) * 180.0 / M_PI);
 
-                // Gravity: find surface Y at new position
+                // Gravity + step-up: find valid surface Y at new position
+                // Java: Entity.moveEntity() with stepHeight=1.0
                 if (!worlds_.empty()) {
                     auto* wld = worlds_[0].get();
                     int bx = static_cast<int>(std::floor(mob.posX));
                     int bz = static_cast<int>(std::floor(mob.posZ));
                     int startY = static_cast<int>(mob.posY);
 
-                    // Look down for ground
-                    int groundY = startY;
-                    for (int y = startY; y > 0; --y) {
-                        Block* b = wld->getBlock(bx, y - 1, bz);
-                        if (b != nullptr) {
-                            groundY = y;
-                            break;
+                    // Check if feet position is blocked (solid block at mob.posY)
+                    Block* feetBlock = wld->getBlock(bx, startY, bz);
+                    if (feetBlock != nullptr) {
+                        // Can we step up? Check block at startY+1 and startY+2 (head)
+                        Block* stepBlock = wld->getBlock(bx, startY + 1, bz);
+                        Block* headBlock = wld->getBlock(bx, startY + 2, bz);
+                        if (stepBlock == nullptr && headBlock == nullptr) {
+                            // Step up 1 block
+                            mob.posY = static_cast<double>(startY + 1);
+                        } else {
+                            // Can't step up — revert position
+                            mob.posX -= moveX;
+                            mob.posZ -= moveZ;
                         }
-                        groundY = y - 1;
+                    } else {
+                        // Not blocked at feet — check for ground below (gravity)
+                        int groundY = startY;
+                        for (int y = startY - 1; y > 0; --y) {
+                            Block* b = wld->getBlock(bx, y, bz);
+                            if (b != nullptr) {
+                                groundY = y + 1;
+                                break;
+                            }
+                            if (y == 1) groundY = 1;
+                        }
+                        if (groundY < startY) {
+                            mob.posY = static_cast<double>(groundY);
+                        }
                     }
-                    // Look up if mob is inside a block (can step 1 block up)
-                    if (groundY > startY + 1) groundY = startY; // Don't teleport up too far
-                    mob.posY = static_cast<double>(groundY);
                 }
 
                 // Broadcast S18 EntityTeleport to all players
