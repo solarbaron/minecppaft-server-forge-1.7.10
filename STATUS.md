@@ -135,7 +135,7 @@
 - **Potions** — 200 lines, effect types registered
 - **Enchantments** — 119 lines, enchantment types registered
 - ✅ **Potion drinking** — 12 effect types (regen/speed/fire resist/poison/instant health/night vision/strength/slowness/jump/instant damage/water breathing/invisibility), splash throw, milk clears all
-- ❌ Enchantment gameplay modifiers not applied (sharpness, protection, etc.)
+- ✅ **Enchantment combat effects** — 6 gameplay modifiers: Sharpness (+level*1.25 dmg), Protection (armor reduction), Knockback (+50%/level), Fire Aspect (level*4s fire), Feather Falling (fall reduction), Unbreaking (1/(level+1) durability chance)
 
 ### AI / Pathfinding
 - **EntityAI** — 214 lines, task system skeleton
@@ -463,3 +463,10 @@
 162. **Milk bucket** — ✅ Done (item 335 clears all potion effects, returns empty bucket 325, random.drink sound)
 163. **Potion drinking** — ✅ Done (item 373: non-splash applies 12 effect types via damage value lookup with extended/amplified variants, returns glass bottle 374; splash potions consumed + throw sound)
 164. **Armor right-click equip** — ✅ Done (20 armor pieces + pumpkin helmet, equip to correct slot if empty)
+165. **Glass bottle filling** — ✅ Done (item 374 right-click water block → water bottle 373/dmg 0, random.pop sound)
+166. **Sharpness enchantment** — ✅ Done (ID 16: +level*1.25f attack damage via getWeaponDamage)
+167. **Protection enchantment** — ✅ Done (ID 0: floor((6+level²)/3*0.75) per armor piece, capped 20, applied after base armor reduction)
+168. **Knockback enchantment** — ✅ Done (ID 19: multiplies knockback velocity by 1+level*0.5)
+169. **Fire Aspect enchantment** — ✅ Done (ID 20: sets target on fire for level*80 ticks)
+170. **Feather Falling enchantment** — ✅ Done (ID 2: boots enchant reduces fall damage via protection formula *2.5)
+171. **Unbreaking enchantment** — ✅ Done (ID 34: 1/(level+1) chance to apply durability damage)
