@@ -57,7 +57,7 @@
 
 ## 🔶 Partially Implemented (Headers + Stubs)
 
-### Commands (44 commands, chat→command bridge ✅)
+### Commands (47 commands, chat→command bridge ✅)
 | Command | Status |
 |---------|---------|
 | `/stop` | ✅ Working via chat |
@@ -104,6 +104,9 @@
 | `/scoreboard` | ✅ Working — objectives/players/teams management |
 | `/debug` | ✅ Working — start/stop profiling |
 | `/blockdata` | ✅ Working — set tile entity data |
+| `/entitydata` | ✅ Working — modify entity NBT data |
+| `/replaceitem` | ✅ Working — replace inventory items |
+| `/execute` | ✅ Working — execute command as entity |
 
 ### Entity System
 - **Entity base** — ID counter, UUID, position/rotation, bounding box
@@ -423,3 +426,6 @@
 134. **/scoreboard command** — ✅ Done (42nd command, objectives/players/teams management)
 135. **/debug command** — ✅ Done (43rd command, start/stop profiling)
 136. **/blockdata command** — ✅ Done (44th command, set tile entity data)
+137. **/entitydata command** — ✅ Done (45th command, modify entity NBT data)
+138. **/replaceitem command** — ✅ Done (46th command, replace inventory items)
+139. **/execute command** — ✅ Done (47th command, execute command as entity)
