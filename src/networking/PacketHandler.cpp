@@ -1873,7 +1873,21 @@ void PlayHandler::handlePlayerDigging(const uint8_t* data, size_t length, Connec
             case 7:   return {-1, 0, 0}; // bedrock (unbreakable)
             case 8: case 9: return {-1, 0, 0};   // water
             case 10: case 11: return {-1, 0, 0};  // lava
-            case 18: case 161: return {-1, 0, 0}; // leaves (chance-based, skip for now)
+            // Leaves — Java: BlockLeaves.getItemDropped (sapling 1/20, apple 1/200 for oak)
+            case 18: {
+                int leafType = blockMeta & 0x03; // 0=oak, 1=spruce, 2=birch, 3=jungle
+                // 1/20 chance to drop sapling (matching type)
+                if (rand() % 20 == 0) return {6, 1, leafType}; // Sapling with matching meta
+                // 1/200 chance for apple from oak leaves
+                if (leafType == 0 && rand() % 200 == 0) return {260, 1, 0}; // Apple
+                return {-1, 0, 0};
+            }
+            case 161: {
+                int leafType2 = blockMeta & 0x01; // 0=acacia, 1=dark_oak
+                if (rand() % 20 == 0) return {6, 1, leafType2 + 4}; // Sapling (acacia=4, dark_oak=5)
+                if (leafType2 == 1 && rand() % 200 == 0) return {260, 1, 0}; // Apple from dark oak
+                return {-1, 0, 0};
+            }
             case 20: return {-1, 0, 0};  // glass
             case 30: return {287, 1, 0}; // web → string (item 287)
             case 34: return {-1, 0, 0};  // piston_head
@@ -1931,8 +1945,8 @@ void PlayHandler::handlePlayerDigging(const uint8_t* data, size_t length, Connec
             case 103: return {360, 4, 0};  // melon → 4 melon slices (avg)
             // Java: BlockSnow → 4 snowballs (ID 332)
             case 80:  return {332, 4, 0};  // snow block → 4 snowballs
-            // Java: BlockTallGrass → seeds sometimes; simplified to no drop
-            case 31:  return {295, 0, 0};  // tall grass → seeds (simplified, should be 1/8 chance)
+            // Java: BlockTallGrass → seeds 1/8 chance (fortuna increases)
+            case 31:  return (rand() % 8 == 0) ? BlockDrop{295, 1, 0} : BlockDrop{-1, 0, 0};
             case 32:  return {-1, 0, 0};   // dead bush → nothing (sticks with shears)
 
             // Door drops the item
@@ -1966,8 +1980,8 @@ void PlayHandler::handlePlayerDigging(const uint8_t* data, size_t length, Connec
             // ─── More special drops ───────────────────────────────
             // Bookshelf → 3 books (Java: BlockBookshelf.quantityDropped)
             case 47:  return {340, 3, 0};
-            // Gravel → flint (10% chance) or gravel (simplified: always gravel)
-            case 13:  return {13, 1, 0};
+            // Gravel → flint (10% chance, Java: BlockGravel.getItemDropped)
+            case 13:  return (rand() % 10 == 0) ? BlockDrop{318, 1, 0} : BlockDrop{13, 1, 0};
             // Nether wart (block 115) → nether wart item (372)
             case 115: return {372, (blockMeta >= 3) ? 3 : 1, 0};
             // Cocoa bean (block 127) → cocoa beans (dye:3, item 351, dmg 3)
