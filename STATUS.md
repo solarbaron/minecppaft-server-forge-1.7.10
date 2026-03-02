@@ -57,7 +57,7 @@
 
 ## 🔶 Partially Implemented (Headers + Stubs)
 
-### Commands (29 commands, chat→command bridge ✅)
+### Commands (33 commands, chat→command bridge ✅)
 | Command | Status |
 |---------|---------|
 | `/stop` | ✅ Working via chat |
@@ -89,6 +89,10 @@
 | `/clone` | ✅ Working — clone block region to destination |
 | `/testfor` | ✅ Working — test if player is online |
 | `/summon` | ✅ Working — summon mob by type ID at position |
+| `/pardon` | ✅ Working — unban player, broadcast pardon message |
+| `/whitelist` | ✅ Working — add/remove/on/off/list/reload whitelist |
+| `/playsound` | ✅ Working — play named sound at position |
+| `/spreadplayers` | ✅ Working — random teleport within range |
 
 ### Entity System
 - **Entity base** — ID counter, UUID, position/rotation, bounding box
@@ -243,7 +247,7 @@
 - ~~**Caves**~~ — ✅ MapGenCaves worm carving integrated
 - ~~**Ores**~~ — ✅ All 11 vanilla ores (coal, iron, gold, diamond, redstone, lapis, emerald, dirt, gravel)
 - **Structures** — ✅ Dungeons (cobblestone/mossy rooms with mob spawner); no villages, temples, strongholds
-- ~~**Trees/vegetation**~~ — ✅ Oak/birch/spruce tree generation + flowers, tallgrass, sugar cane, pumpkin patches, clay deposits
+- ~~**Trees/vegetation**~~ — ✅ Oak/birch/spruce tree generation + flowers, tallgrass, sugar cane, pumpkin patches, clay deposits, cactus, dead bush, mushrooms
 - **Nether/End** — dimensions declared but not generated
 
 ---
@@ -381,3 +385,11 @@
 108. **Crafting recipe expansion** — ✅ Done (30+ functional blocks: enchanting table, anvil, hopper, beacon, ender chest, comparator, daylight sensor, 6 stair types, nether brick fence, detector/activator rails, minecart variants, weighted pressure plates)
 109. **Daylight sensor toggle** — ✅ Done (right-click swaps block 151↔178, preserves meta, click sound)
 110. **Mushroom worldgen** — ✅ Done (1/4 chance per chunk, 1-2 mushrooms on grass/dirt/mycelium below Y=60)
+111. **Dye recipes** — ✅ Done (RecipesDyes.java parity: 80 loop recipes + 27 shapeless, ~250+ total crafting)
+112. **/pardon command** — ✅ Done (30th command, broadcasts unban message)
+113. **/whitelist command** — ✅ Done (31st command, add/remove/on/off/list/reload)
+114. **/playsound command** — ✅ Done (32nd command, plays named sound at xyz)
+115. **/spreadplayers command** — ✅ Done (33rd command, random teleport within range)
+116. **Cactus worldgen** — ✅ Done (1/6 chance, 1-3 tall on sand, adjacency check)
+117. **Dead bush worldgen** — ✅ Done (1/8 chance on sand)
+118. **Bed sleep interaction** — ✅ Done (right-click at night skips to dawn, daytime shows message)
