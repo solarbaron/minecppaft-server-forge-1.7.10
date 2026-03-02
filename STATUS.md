@@ -57,7 +57,7 @@
 
 ## 🔶 Partially Implemented (Headers + Stubs)
 
-### Commands (15 commands, chat→command bridge ✅)
+### Commands (21 commands, chat→command bridge ✅)
 | Command | Status |
 |---------|---------|
 | `/stop` | ✅ Working via chat |
@@ -75,6 +75,12 @@
 | `/weather` | ✅ Working — clear/rain/thunder + timer |
 | `/effect` | ✅ Working — potion effects with S1D/S1E |
 | `/xp` | ✅ Working — XP points/levels, S1F SetExperience |
+| `/enchant` | ✅ Working — enchant held item with NBT serialization |
+| `/clear` | ✅ Working — clear inventory with optional item/damage filter |
+| `/spawnpoint` | ✅ Working — set spawn point, S05 SpawnPosition |
+| `/toggledownfall` | ✅ Working — toggle rain/clear weather |
+| `/defaultgamemode` | ✅ Working — set default game mode |
+| `/me` | ✅ Working — broadcast action message |
 
 ### Entity System
 - **Entity base** — ID counter, UUID, position/rotation, bounding box
@@ -124,7 +130,7 @@
 - ✅ **Beacon** — S2D type 7, S31 properties (power/effects)
 - ✅ **Enchanting Table** — S2D type 4, bookshelf counting, S31 enchantment levels
 - ✅ **Anvil** — S2D type 8, repair/rename GUI
-- ❌ No tile entity ticking for brewing stand
+- ✅ **Brewing Stand** — per-position 4-slot storage, S2D type 5, S31 brew time, **automated brewing** (400-tick timer, 12 ingredients, 7 effect potions + extend/amplify/splash/corrupt)
 
 ### Inventory System
 - Container hierarchy (679-line header)
@@ -196,7 +202,7 @@
 
 ### Gameplay
 - ~~**Block breaking/placing**~~ — ✅ PlayerDigging/PlayerBlockPlace handled; **creative instant-break** (no drops), **survival timed break** (status 0→2 with drop table), hardness-0 instant-break, unbreakable rejection
-- ~~**Block drop tables**~~ — ✅ 60+ entries matching Java `getItemDropped` (stone→cobblestone, coal ore→coal, diamond ore→diamond, etc.)
+- ~~**Block drop tables**~~ — ✅ 90+ entries matching Java `getItemDropped` (stone→cobblestone, coal ore→coal, diamond ore→diamond, bookshelf→3 books, nether wart growth-aware, ender chest→8 obsidian, etc.)
 - ~~**Material break sounds**~~ — ✅ 8 sound types (dig.stone/wood/grass/gravel/sand/cloth/snow/glass) mapped by block ID
 - ~~**Material place sounds**~~ — ✅ Same 8 sound types used for block placement
 - ~~**Survival inventory consumption**~~ — ✅ Block place decrements held stack in survival (creative exempt) + S2F sync
@@ -215,7 +221,7 @@
 - **Gravity/physics** — no server-side player physics (client handles its own)
 - ~~**Liquid flow**~~ — ✅ Done (water/lava flow simulation, infinite water source, lava+water interaction)
 - **Mob spawning** — ✅ Done (natural hostile spawn near players, S0F SpawnMob, despawn >600 ticks)
-- ~~**Functional commands**~~ — ✅ Done (/stop, /gamemode, /time, /give, /tp, /kill, /difficulty, /seed, /list, /say, /gamerule, /weather, /help all with actual game effects)
+- ~~**Functional commands**~~ — ✅ Done (/stop, /gamemode, /time, /give, /tp, /kill, /difficulty, /seed, /list, /say, /gamerule, /weather, /help, /effect, /xp, /enchant, /clear, /spawnpoint, /toggledownfall, /defaultgamemode, /me — all with actual game effects)
 - ~~**World saving**~~ — ✅ saveAllChunks on shutdown
 - ~~**Player data persistence**~~ — ✅ save/load position and rotation via NBT to world/playerdata/<uuid>.dat
 - ~~**Tab complete**~~ — ✅ Server-side completion for commands and player names (C14→S3A)
@@ -240,7 +246,7 @@
 | networking | 1,193 | ~3,000 | Most complete module |
 | world | 1,148 | ~4,000 | Chunk I/O + flat gen working |
 | block | 815 | ~6,000 | Registry only, no block logic |
-| command | 443 | ~1,100 | 13 commands, fully functional with game effects |
+| command | 560 | ~1,600 | 21 commands, fully functional with game effects |
 | item | 426 | ~1,200 | Registry only |
 | forge | 440 | ~1,000 | JNI bridge skeleton |
 | redstone | 451 | ~800 | Framework only |
@@ -338,3 +344,11 @@
 80. **Cactus growth** — ✅ Done (block 81 meta 0-15 counter, grows up when ≥15, max height 3)
 81. **Sugar cane growth** — ✅ Done (block 83 meta 0-15 counter, grows up when ≥15, max height 3)
 82. **/xp command** — ✅ Done (15th command, /xp <amount>[L] [player], points or levels via S1F)
+83. **Brewing stand automation** — ✅ Done (tickBrewingStands: 400-tick brew timer, 12 potion ingredients, 7 awkward→effect recipes, redstone extend, glowstone amplify, gunpowder splash, fermented spider eye corruption, ingredient consumption)
+84. **/enchant command** — ✅ Done (16th command, /enchant <player> <id> [level], ItemStack enchantment storage + gzip-compressed NBT serialization in writeItemStack)
+85. **/clear command** — ✅ Done (17th command, /clear [player] [itemId] [damage], inventory clear with optional item/damage filter)
+86. **/spawnpoint command** — ✅ Done (18th command, /spawnpoint [player] [x y z], S05 SpawnPosition packet)
+87. **/toggledownfall command** — ✅ Done (19th command, toggles rain/clear weather via setWeather)
+88. **/defaultgamemode command** — ✅ Done (20th command, /defaultgamemode <mode>, survival/creative/adventure)
+89. **/me command** — ✅ Done (21st command, /me <action>, broadcasts "* Player action" to all)
+90. **Block drop expansion** — ✅ Done (30+ new drops: Nether/End blocks, bookshelf→3 books, nether wart growth-aware, cocoa bean meta-aware, double slabs→2 slabs, ender chest→8 obsidian, flower pot, skull, brewing stand, cauldron, and more)
