@@ -1136,13 +1136,46 @@ void MinecraftServer::createExplosion(double x, double y, double z, float power,
                 (impact * impact + impact) / 2.0 * 8.0 * static_cast<double>(power) + 1.0);
 
             if (play->getGameMode() != 1) { // Not creative
-                play->applyDamage(damage);
+                // Java: applyArmorCalculations + applyPotionDamageCalculations
+                // Armor absorption
+                int32_t armorValue = play->getTotalArmorValue();
+                float afterArmor = damage;
+                if (armorValue > 0) {
+                    float reduction = damage * (1.0f - std::max(armorValue / 5.0f, armorValue - damage / 2.0f) / 25.0f);
+                    afterArmor = std::max(damage - reduction, damage * 0.2f);
+                }
+                // Blast Protection (damageType=3)
+                int32_t blastProt = play->getEnchantmentProtectionModifier(3);
+                if (blastProt > 0) {
+                    afterArmor *= (1.0f - std::min(blastProt, 20) * 0.04f);
+                }
+
+                play->applyDamage(afterArmor);
                 play->sendUpdateHealth(*conn, play->getHealth(),
                     play->getFood(), play->getSaturation());
+                broadcastEntityEvent(play->getEntityId(), 2); // Hurt animation
+                broadcastSound("game.player.hurt", px, py, pz, 1.0f, 1.0f);
+
+                if (play->getHealth() <= 0.0f) {
+                    broadcastEntityEvent(play->getEntityId(), 3);
+                    broadcastChatMessage(play->getPlayerName() + " was blown up");
+                }
             }
 
-            // Knockback velocity
+            // Knockback velocity — Java: EnchantmentProtection.func_92092_a
+            // Blast Protection reduces explosion knockback by level * 0.15
             double knockback = impact;
+            int32_t bpLevel = 0;
+            for (int16_t slot = 1; slot <= 4; ++slot) {
+                auto arm = play->getArmorItem(slot);
+                if (arm && arm->hasEnchantments()) {
+                    int16_t bp = arm->getEnchantmentLevel(3);
+                    bpLevel += bp;
+                }
+            }
+            if (bpLevel > 0) {
+                knockback *= std::max(0.0, 1.0 - bpLevel * 0.15);
+            }
             playerKnockbacks[play->getEntityId()] = {
                 diffX * knockback, diffY * knockback, diffZ * knockback
             };
