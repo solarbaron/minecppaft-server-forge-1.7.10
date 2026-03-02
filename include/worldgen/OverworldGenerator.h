@@ -244,12 +244,14 @@ public:
                     }
                 }
 
-                // Tree type selection: 1/4 oak, 1/4 birch, 1/4 spruce, 1/4 jungle
+                // Tree type selection: 1/6 oak, 1/6 birch, 1/6 spruce, 1/6 jungle, 1/6 acacia, 1/6 dark oak
                 // Java ref: BiomeDecorator.getRandomWorldGenForTrees
-                int32_t treeType = treeRng.nextInt(4);
+                int32_t treeType = treeRng.nextInt(6);
                 int32_t minHeight = 4;
                 int32_t metaWood = 0;
                 int32_t metaLeaves = 0;
+                int32_t logBlockId = 17;    // default log
+                int32_t leavesBlockId = 18; // default leaves
                 if (treeType == 1) {
                     metaWood = 2;    // Birch log (meta 2)
                     metaLeaves = 2;  // Birch leaves (meta 2)
@@ -262,6 +264,18 @@ public:
                     metaWood = 3;    // Jungle log (meta 3)
                     metaLeaves = 3;  // Jungle leaves (meta 3)
                     minHeight = 5;
+                } else if (treeType == 4) {
+                    logBlockId = 162;   // Log2 (acacia/dark oak)
+                    leavesBlockId = 161; // Leaves2
+                    metaWood = 0;    // Acacia log2 (meta 0)
+                    metaLeaves = 0;  // Acacia leaves2 (meta 0)
+                    minHeight = 5;
+                } else if (treeType == 5) {
+                    logBlockId = 162;   // Log2 (acacia/dark oak)
+                    leavesBlockId = 161; // Leaves2
+                    metaWood = 1;    // Dark oak log2 (meta 1)
+                    metaLeaves = 1;  // Dark oak leaves2 (meta 1)
+                    minHeight = 6;
                 }
 
                 auto placements = TreeGenerator::generateTree(
@@ -272,7 +286,9 @@ public:
                     false, // no vines
                     treeRng,
                     getBlockForTree,
-                    isReplaceable
+                    isReplaceable,
+                    logBlockId,
+                    leavesBlockId
                 );
 
                 // Apply placements within chunk bounds

@@ -88,7 +88,9 @@ public:
             bool vinesGrow,
             RNG& rng,
             GetBlockFn getBlock,
-            IsReplaceable isReplaceable) {
+            IsReplaceable isReplaceable,
+            int32_t logBlockId = 17,
+            int32_t leavesBlockId = 18) {
 
         std::vector<BlockPlace> result;
 
@@ -141,7 +143,7 @@ public:
 
                     int32_t block = getBlock(lx, ly, lz);
                     if (block == AIR || isLeaves(block)) {
-                        result.push_back({lx, ly, lz, LEAVES, metaLeaves});
+                        result.push_back({lx, ly, lz, leavesBlockId, metaLeaves});
                     }
                 }
             }
@@ -151,7 +153,7 @@ public:
         for (int32_t ty = 0; ty < height; ++ty) {
             int32_t block = getBlock(x, y + ty, z);
             if (block == AIR || isLeaves(block)) {
-                result.push_back({x, y + ty, z, LOG, metaWood});
+                result.push_back({x, y + ty, z, logBlockId, metaWood});
             }
 
             // Jungle vines on trunk
