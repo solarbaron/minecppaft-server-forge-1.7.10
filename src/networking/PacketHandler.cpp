@@ -2952,6 +2952,43 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
         return;
     }
 
+    // ─── Jukebox (block ID 84) — Java: BlockJukebox.onBlockActivated() ─
+    // Insert music disc (2256-2267) or eject current disc
+    if (clickedBlockId == 84 && !isSneaking_) {
+        int32_t by = static_cast<int32_t>(blockY);
+        int meta = world->getBlockMetadata(blockX, by, blockZ);
+        auto held = inventory_.getCurrentItem();
+        if (meta == 0 && held.has_value() && !held->isEmpty()) {
+            int itemId = held->getItemId();
+            // Music discs are items 2256-2267
+            if (itemId >= 2256 && itemId <= 2267) {
+                // Insert disc — set metadata to 1 (has record)
+                world->setBlockMetadata(blockX, by, blockZ, 1);
+                server_.broadcastBlockChange(blockX, by, blockZ, 84, 1);
+                // Play record: S28 Effect with effectId 1005 and data = disc item ID
+                server_.broadcastEffect(1005, blockX, by, blockZ, itemId);
+                // Consume disc in survival
+                if (gameMode_ != 1) {
+                    if (held->getStackSize() > 1) {
+                        ItemStack updated(itemId, held->getStackSize() - 1, held->getDamage());
+                        inventory_.setInventorySlotContents(currentSlot_, updated);
+                    } else {
+                        inventory_.setInventorySlotContents(currentSlot_, std::nullopt);
+                    }
+                    sendWindowItems(conn);
+                }
+                std::cout << "[Jukebox] " << playerName_ << " inserted disc " << itemId << "\n";
+            }
+        } else if (meta > 0) {
+            // Eject disc — stop record + set metadata back to 0
+            server_.broadcastEffect(1005, blockX, by, blockZ, 0); // stop music
+            world->setBlockMetadata(blockX, by, blockZ, 0);
+            server_.broadcastBlockChange(blockX, by, blockZ, 84, 0);
+            std::cout << "[Jukebox] " << playerName_ << " ejected disc\n";
+        }
+        return;
+    }
+
     // TNT (block ID 46) — right-click with flint & steel (item 259) ignites
     // Java: BlockTNT.onBlockActivated → ItemFlintAndSteel
     if (clickedBlockId == 46) {
