@@ -134,7 +134,8 @@
 ### Potions & Enchantments
 - **Potions** — 200 lines, effect types registered
 - **Enchantments** — 119 lines, enchantment types registered
-- ❌ No gameplay effects applied
+- ✅ **Potion drinking** — 12 effect types (regen/speed/fire resist/poison/instant health/night vision/strength/slowness/jump/instant damage/water breathing/invisibility), splash throw, milk clears all
+- ❌ Enchantment gameplay modifiers not applied (sharpness, protection, etc.)
 
 ### AI / Pathfinding
 - **EntityAI** — 214 lines, task system skeleton
@@ -454,3 +455,11 @@
 154. **Bonemeal growth extensions** — ✅ Done (saplings set stage bit 0x08, melon/pumpkin stems advance meta, cocoa pods advance growth)
 155. **Trapped chest + daylight sensor** — ✅ Done (trapped chest opens as chest, daylight sensor 151↔178 toggle)
 156. **Cactus contact damage** — ✅ Done (1 dmg/tick in cactus block 81, death: 'was pricked to death')
+157. **Throwable item consumption** — ✅ Done (snowball 332, egg 344, ender pearl 368, exp bottle 384: consume in survival, random.bow sound, ender pearl no-op in creative)
+158. **Shears silk-touch drops** — ✅ Done (shears 359 on leaves 18/161, vines 106, tallgrass 31, dead bush 32, cobweb 30: drop block itself + 1 durability)
+159. **Eye of Ender use** — ✅ Done (item 381 consume + random.bow sound, stronghold search TODO)
+160. **Fire charge placement** — ✅ Done (item 385 places fire on adjacent block face, consumed in survival, fire.ignite sound)
+161. **Spawn egg use** — ✅ Done (item 383 right-click block face spawns mob from damage value as entity type ID, consumed in survival)
+162. **Milk bucket** — ✅ Done (item 335 clears all potion effects, returns empty bucket 325, random.drink sound)
+163. **Potion drinking** — ✅ Done (item 373: non-splash applies 12 effect types via damage value lookup with extended/amplified variants, returns glass bottle 374; splash potions consumed + throw sound)
+164. **Armor right-click equip** — ✅ Done (20 armor pieces + pumpkin helmet, equip to correct slot if empty)

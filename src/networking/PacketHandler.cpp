@@ -3451,6 +3451,41 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
         }
     }
 
+    // Glass bottle (374) — right-click water to fill → water bottle (373, damage 0)
+    // Java: ItemGlassBottle.onItemRightClick() — raytrace to water block
+    if (heldItem && heldItem->getItemId() == 374) {
+        Block* target = world->getBlock(blockX, static_cast<int32_t>(blockY), blockZ);
+        int targetId = target ? Block::getIdFromBlock(target) : 0;
+        if (targetId == 8 || targetId == 9) { // Water (flowing or still)
+            if (gameMode_ != 1) {
+                auto bottle = inventory_.getCurrentItem();
+                if (bottle.has_value() && !bottle->isEmpty()) {
+                    int32_t remaining = bottle->getStackSize() - 1;
+                    if (remaining <= 0) {
+                        // Replace with water bottle
+                        ItemStack waterBottle(373, 1, 0); // Water bottle = potion item, damage 0
+                        inventory_.setInventorySlotContents(currentSlot_, waterBottle);
+                    } else {
+                        // Decrement glass bottles + add water bottle to inventory
+                        ItemStack updated(374, remaining, 0);
+                        inventory_.setInventorySlotContents(currentSlot_, updated);
+                        // Try to add water bottle to first empty slot
+                        ItemStack waterBottle(373, 1, 0);
+                        inventory_.addItemStackToInventory(waterBottle);
+                    }
+                    sendWindowItems(conn);
+                }
+            } else {
+                // Creative: just add water bottle without consuming
+            }
+            server_.broadcastSound("random.pop",
+                static_cast<double>(blockX) + 0.5, static_cast<double>(blockY) + 0.5,
+                static_cast<double>(blockZ) + 0.5, 0.5f, 1.0f);
+            std::cout << "[GlassBottle] " << playerName_ << " filled bottle from water\n";
+            return;
+        }
+    }
+
     // Bonemeal (351 with damage 15) — Java: ItemDye.onItemUse()
     // Triggers growth particles (S28 effect 2005) and potentially grows plants
     if (heldItem && heldItem->getItemId() == 351 && heldItem->getDamage() == 15) {
