@@ -623,4 +623,34 @@ public:
     }
 };
 
+// /scoreboard <objectives|players|teams> ... — Manage scoreboards
+// Java: net.minecraft.command.CommandScoreboard
+class CommandScoreboard : public ICommand {
+public:
+    std::string getCommandName() const override { return "scoreboard"; }
+    std::string getCommandUsage() const override { return "/scoreboard <objectives|players|teams> ..."; }
+    int32_t getRequiredPermissionLevel() const override { return 2; }
+    void processCommand(ICommandSender& sender, const std::vector<std::string>& args) override;
+};
+
+// /debug <start|stop> — Start/stop profiling
+// Java: net.minecraft.command.CommandDebug
+class CommandDebug : public ICommand {
+public:
+    std::string getCommandName() const override { return "debug"; }
+    std::string getCommandUsage() const override { return "/debug <start|stop>"; }
+    int32_t getRequiredPermissionLevel() const override { return 3; }
+    void processCommand(ICommandSender& sender, const std::vector<std::string>& args) override;
+};
+
+// /blockdata <x> <y> <z> <dataTag> — Set tile entity data
+// Java: net.minecraft.command.CommandBlockData
+class CommandBlockData : public ICommand {
+public:
+    std::string getCommandName() const override { return "blockdata"; }
+    std::string getCommandUsage() const override { return "/blockdata <x> <y> <z> <dataTag>"; }
+    int32_t getRequiredPermissionLevel() const override { return 2; }
+    void processCommand(ICommandSender& sender, const std::vector<std::string>& args) override;
+};
+
 } // namespace mccpp

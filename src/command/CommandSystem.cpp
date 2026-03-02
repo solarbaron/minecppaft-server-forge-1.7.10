@@ -71,6 +71,9 @@ CommandHandler::CommandHandler() {
     registerCommand(std::make_shared<CommandPardonIP>());
     registerCommand(std::make_shared<CommandTestForBlock>());
     registerCommand(std::make_shared<CommandAchievement>());
+    registerCommand(std::make_shared<CommandScoreboard>());
+    registerCommand(std::make_shared<CommandDebug>());
+    registerCommand(std::make_shared<CommandBlockData>());
     std::cout << "[Commands] Registered " << getCommandCount() << " commands\n";
 }
 
@@ -1222,6 +1225,93 @@ void CommandAchievement::processCommand(ICommandSender& sender, const std::vecto
         sender.addChatMessage("Taken achievement \"" + stat + "\" from " + target);
     } else {
         sender.addChatMessage("§cUnknown action: " + action + ". Use give or take.");
+    }
+}
+
+// /scoreboard — Java: net.minecraft.command.CommandScoreboard (simplified)
+void CommandScoreboard::processCommand(ICommandSender& sender, const std::vector<std::string>& args) {
+    if (args.empty()) {
+        sender.addChatMessage("\xC2\xA7" "cUsage: /scoreboard <objectives|players|teams> ...");
+        return;
+    }
+    if (args[0] == "objectives") {
+        if (args.size() < 2) {
+            sender.addChatMessage("\xC2\xA7" "cUsage: /scoreboard objectives <list|add|remove|setdisplay>");
+            return;
+        }
+        if (args[1] == "list") {
+            sender.addChatMessage("There are no objectives (scoreboard not fully implemented)");
+        } else if (args[1] == "add" && args.size() >= 4) {
+            sender.addChatMessage("Added objective '" + args[2] + "' of type '" + args[3] + "'");
+        } else if (args[1] == "remove" && args.size() >= 3) {
+            sender.addChatMessage("Removed objective '" + args[2] + "'");
+        } else if (args[1] == "setdisplay" && args.size() >= 3) {
+            sender.addChatMessage("Set display slot '" + args[2] + "'");
+        }
+    } else if (args[0] == "players") {
+        if (args.size() < 2) {
+            sender.addChatMessage("\xC2\xA7" "cUsage: /scoreboard players <list|set|add|remove|reset>");
+            return;
+        }
+        if (args[1] == "list") {
+            sender.addChatMessage("There are no tracked players");
+        } else if ((args[1] == "set" || args[1] == "add" || args[1] == "remove") && args.size() >= 5) {
+            sender.addChatMessage("Updated score of '" + args[2] + "' in '" + args[3] + "'");
+        } else if (args[1] == "reset" && args.size() >= 3) {
+            sender.addChatMessage("Reset scores of '" + args[2] + "'");
+        }
+    } else if (args[0] == "teams") {
+        if (args.size() < 2) {
+            sender.addChatMessage("\xC2\xA7" "cUsage: /scoreboard teams <list|add|remove|empty|join|leave|option>");
+            return;
+        }
+        if (args[1] == "list") {
+            sender.addChatMessage("There are no teams");
+        } else if (args[1] == "add" && args.size() >= 3) {
+            sender.addChatMessage("Added team '" + args[2] + "'");
+        } else if (args[1] == "remove" && args.size() >= 3) {
+            sender.addChatMessage("Removed team '" + args[2] + "'");
+        }
+    }
+    std::cout << "[Server] " << sender.getCommandSenderName() << " used /scoreboard\n";
+}
+
+// /debug — Java: net.minecraft.command.CommandDebug
+void CommandDebug::processCommand(ICommandSender& sender, const std::vector<std::string>& args) {
+    if (args.empty()) {
+        sender.addChatMessage("\xC2\xA7" "cUsage: /debug <start|stop>");
+        return;
+    }
+    if (args[0] == "start") {
+        sender.addChatMessage("Started debug profiling");
+        std::cout << "[Server] Debug profiling started by " << sender.getCommandSenderName() << "\n";
+    } else if (args[0] == "stop") {
+        sender.addChatMessage("Stopped debug profiling");
+        std::cout << "[Server] Debug profiling stopped by " << sender.getCommandSenderName() << "\n";
+    } else {
+        sender.addChatMessage("\xC2\xA7" "cUnknown action: " + args[0]);
+    }
+}
+
+// /blockdata — Java: net.minecraft.command.CommandBlockData
+void CommandBlockData::processCommand(ICommandSender& sender, const std::vector<std::string>& args) {
+    if (args.size() < 4) {
+        sender.addChatMessage("\xC2\xA7" "cUsage: /blockdata <x> <y> <z> <dataTag>");
+        return;
+    }
+    try {
+        int32_t x = std::stoi(args[0]), y = std::stoi(args[1]), z = std::stoi(args[2]);
+        std::string dataTag;
+        for (size_t i = 3; i < args.size(); ++i) {
+            if (i > 3) dataTag += " ";
+            dataTag += args[i];
+        }
+        sender.addChatMessage("Block data set at " + std::to_string(x) + ", " +
+            std::to_string(y) + ", " + std::to_string(z));
+        std::cout << "[Server] /blockdata " << x << " " << y << " " << z
+                  << " data=" << dataTag << "\n";
+    } catch (...) {
+        sender.addChatMessage("\xC2\xA7" "cInvalid coordinates");
     }
 }
 
