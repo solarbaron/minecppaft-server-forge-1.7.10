@@ -494,3 +494,5 @@
 192. **Skeleton ranged attack** — ✅ Done (instant-hit arrow dmg=3.0 every 60 ticks within 16 blocks, armor+Projectile Protection reduction, random.bow sound, death: "was shot by Skeleton")
 193. **Mob step-up navigation** — ✅ Done (mobs can climb 1-block obstacles when chasing players, collision-check revert when path blocked, proper downward gravity scan)
 194. **Explosion armor + Blast Protection** — ✅ Done (armor absorption on explosion damage, Blast Protection dmgType=3, knockback reduction level*0.15/piece, hurt/death events, "was blown up" death message)
+195. **Per-mob-type XP** — ✅ Done (zombie/skeleton/creeper/spider/enderman=5, blaze=10, passive=1-3, iron golem=0; replaces flat 5+rand(0..2))
+196. **Blaze fireball attack** — ✅ Done (5 fire damage every 60 ticks within 16 blocks, Fire Protection reduction, sets player on fire 100 ticks, mob.blaze.hit sound, death: "was fireballed by Blaze")

@@ -2468,11 +2468,8 @@ void MinecraftServer::tickMobs() {
         for (auto& mob : mobEntities_) {
             if (mob.isDead) continue;
 
-            int64_t age = currentTick - mob.spawnTick;
-            if (age < 600) continue;
-
             // Check distance to nearest player
-            bool nearPlayer = false;
+            double nearestDistSq = 1e9;
             {
                 std::lock_guard<std::mutex> connLock(connectionsMutex_);
                 for (auto& conn : connections_) {
@@ -2482,14 +2479,22 @@ void MinecraftServer::tickMobs() {
                     if (!ph) continue;
                     double dx = ph->getPlayerX() - mob.posX;
                     double dz = ph->getPlayerZ() - mob.posZ;
-                    if (dx * dx + dz * dz < 1024.0) { // 32 blocks
-                        nearPlayer = true;
-                        break;
-                    }
+                    double distSq = dx * dx + dz * dz;
+                    if (distSq < nearestDistSq) nearestDistSq = distSq;
                 }
             }
 
-            if (!nearPlayer) {
+            // Java: EntityLiving.despawnEntity()
+            // Hard despawn: immediately if >128 blocks (16384 sq) from all players
+            if (nearestDistSq > 16384.0) {
+                mob.isDead = true;
+                deadIds.push_back(mob.entityId);
+                continue;
+            }
+
+            int64_t age = currentTick - mob.spawnTick;
+            // Soft despawn: after 600 ticks if >32 blocks (1024 sq) from all players
+            if (age >= 600 && nearestDistSq > 1024.0) {
                 mob.isDead = true;
                 deadIds.push_back(mob.entityId);
             }

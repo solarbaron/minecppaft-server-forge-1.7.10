@@ -660,7 +660,7 @@ public:
     // Fire Protection (ID 1): applies to fire damage — floor((6 + level²) / 3.0 * 1.25)
     // Blast Protection (ID 3): applies to explosion — floor((6 + level²) / 3.0 * 1.5)
     // Projectile Protection (ID 4): applies to projectile — floor((6 + level²) / 3.0 * 1.5)
-    // damageType: 0=generic/melee, 1=fire, 3=explosion, 4=projectile
+    // damageType: 0=generic/melee, 1=fire, 2=fall, 3=explosion, 4=projectile
     int32_t getEnchantmentProtectionModifier(int32_t damageType = 0) const {
         int32_t totalMod = 0;
         for (int16_t slot = 1; slot <= 4; ++slot) {
@@ -678,6 +678,15 @@ public:
                 if (fpLevel > 0) {
                     float f = static_cast<float>(6 + fpLevel * fpLevel) / 3.0f;
                     totalMod += static_cast<int32_t>(f * 1.25f);
+                }
+            }
+            // Feather Falling (2) — fall damage only (type factor 2.5)
+            // Java: EnchantmentProtection protectionType=2, only on boots
+            if (damageType == 2) {
+                int16_t ffLevel = armor->getEnchantmentLevel(2);
+                if (ffLevel > 0) {
+                    float f = static_cast<float>(6 + ffLevel * ffLevel) / 3.0f;
+                    totalMod += static_cast<int32_t>(f * 2.5f);
                 }
             }
             // Blast Protection (3) — explosion damage only (type factor 1.5)
