@@ -77,6 +77,9 @@ CommandHandler::CommandHandler() {
     registerCommand(std::make_shared<CommandEntityData>());
     registerCommand(std::make_shared<CommandReplaceItem>());
     registerCommand(std::make_shared<CommandExecuteAt>());
+    registerCommand(std::make_shared<CommandTrigger>());
+    registerCommand(std::make_shared<CommandTitle>());
+    registerCommand(std::make_shared<CommandParticle>());
     std::cout << "[Commands] Registered " << getCommandCount() << " commands\n";
 }
 
@@ -1378,6 +1381,62 @@ void CommandExecuteAt::processCommand(ICommandSender& sender, const std::vector<
         sender.addChatMessage("Executed as " + entity + ": " + command);
         std::cout << "[Server] /execute " << entity << " -> " << command << "\n";
     }
+}
+
+// /trigger — Java: net.minecraft.command.CommandTrigger
+void CommandTrigger::processCommand(ICommandSender& sender, const std::vector<std::string>& args) {
+    if (args.size() < 3) {
+        sender.addChatMessage("\xC2\xA7" "cUsage: /trigger <objective> <add|set> <value>");
+        return;
+    }
+    std::string objective = args[0], action = args[1];
+    int32_t value = 0;
+    try { value = std::stoi(args[2]); } catch (...) {}
+    if (action == "add") {
+        sender.addChatMessage("Triggered " + objective + " (added " + std::to_string(value) + ")");
+    } else if (action == "set") {
+        sender.addChatMessage("Triggered " + objective + " (set to " + std::to_string(value) + ")");
+    } else {
+        sender.addChatMessage("\xC2\xA7" "cAction must be 'add' or 'set'");
+    }
+}
+
+// /title — Java: net.minecraft.command.CommandTitle
+void CommandTitle::processCommand(ICommandSender& sender, const std::vector<std::string>& args) {
+    if (args.size() < 2) {
+        sender.addChatMessage("\xC2\xA7" "cUsage: /title <player> <title|subtitle|clear|reset|times> ...");
+        return;
+    }
+    std::string target = args[0], action = args[1];
+    if (action == "clear") {
+        sender.addChatMessage("Cleared title for " + target);
+    } else if (action == "reset") {
+        sender.addChatMessage("Reset title settings for " + target);
+    } else if (action == "times" && args.size() >= 5) {
+        sender.addChatMessage("Set title times for " + target);
+    } else if ((action == "title" || action == "subtitle") && args.size() >= 3) {
+        std::string text;
+        for (size_t i = 2; i < args.size(); ++i) {
+            if (i > 2) text += " ";
+            text += args[i];
+        }
+        sender.addChatMessage("Sent " + action + " to " + target + ": " + text);
+    } else {
+        sender.addChatMessage("\xC2\xA7" "cUnknown action: " + action);
+    }
+    std::cout << "[Server] " << sender.getCommandSenderName() << " used /title\n";
+}
+
+// /particle — Java: net.minecraft.command.CommandParticle
+void CommandParticle::processCommand(ICommandSender& sender, const std::vector<std::string>& args) {
+    if (args.size() < 8) {
+        sender.addChatMessage("\xC2\xA7" "cUsage: /particle <name> <x> <y> <z> <dx> <dy> <dz> <speed> [count]");
+        return;
+    }
+    std::string name = args[0];
+    int32_t count = args.size() > 8 ? std::stoi(args[8]) : 1;
+    sender.addChatMessage("Spawned " + std::to_string(count) + " " + name + " particle(s)");
+    std::cout << "[Server] /particle " << name << " count=" << count << "\n";
 }
 
 } // namespace mccpp

@@ -686,4 +686,37 @@ public:
     }
 };
 
+// /trigger <objective> <add|set> <value> — Trigger a scoreboard objective
+// Java: net.minecraft.command.CommandTrigger  
+class CommandTrigger : public ICommand {
+public:
+    std::string getCommandName() const override { return "trigger"; }
+    std::string getCommandUsage() const override { return "/trigger <objective> <add|set> <value>"; }
+    int32_t getRequiredPermissionLevel() const override { return 0; }
+    void processCommand(ICommandSender& sender, const std::vector<std::string>& args) override;
+};
+
+// /title <player> <title|subtitle|clear|reset|times> — Send title screen text
+// Java: net.minecraft.command.CommandTitle
+class CommandTitle : public ICommand {
+public:
+    std::string getCommandName() const override { return "title"; }
+    std::string getCommandUsage() const override { return "/title <player> <title|subtitle|clear|reset|times> ..."; }
+    int32_t getRequiredPermissionLevel() const override { return 2; }
+    void processCommand(ICommandSender& sender, const std::vector<std::string>& args) override;
+    bool isUsernameIndex(const std::vector<std::string>& args, int32_t index) const override {
+        return index == 0;
+    }
+};
+
+// /particle <name> <x> <y> <z> <dx> <dy> <dz> <speed> [count] — Spawn particles
+// Java: net.minecraft.command.CommandParticle
+class CommandParticle : public ICommand {
+public:
+    std::string getCommandName() const override { return "particle"; }
+    std::string getCommandUsage() const override { return "/particle <name> <x> <y> <z> <dx> <dy> <dz> <speed> [count]"; }
+    int32_t getRequiredPermissionLevel() const override { return 2; }
+    void processCommand(ICommandSender& sender, const std::vector<std::string>& args) override;
+};
+
 } // namespace mccpp
