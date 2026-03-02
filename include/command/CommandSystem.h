@@ -454,4 +454,37 @@ public:
     void processCommand(ICommandSender& sender, const std::vector<std::string>& args) override;
 };
 
+// /clone <x1> <y1> <z1> <x2> <y2> <z2> <dest_x> <dest_y> <dest_z> — clone area
+// Java: net.minecraft.command.CommandClone
+class CommandClone : public ICommand {
+public:
+    std::string getCommandName() const override { return "clone"; }
+    std::string getCommandUsage() const override { return "/clone <x1> <y1> <z1> <x2> <y2> <z2> <dest_x> <dest_y> <dest_z>"; }
+    int32_t getRequiredPermissionLevel() const override { return 2; }
+    void processCommand(ICommandSender& sender, const std::vector<std::string>& args) override;
+};
+
+// /testfor <player> — test if player is online
+// Java: net.minecraft.command.CommandTestFor
+class CommandTestFor : public ICommand {
+public:
+    std::string getCommandName() const override { return "testfor"; }
+    std::string getCommandUsage() const override { return "/testfor <player>"; }
+    int32_t getRequiredPermissionLevel() const override { return 2; }
+    void processCommand(ICommandSender& sender, const std::vector<std::string>& args) override;
+    bool isUsernameIndex(const std::vector<std::string>& args, int32_t index) const override {
+        return index == 0;
+    }
+};
+
+// /summon <entityType> [x y z] — summon a mob
+// Java: net.minecraft.command.CommandSummon
+class CommandSummon : public ICommand {
+public:
+    std::string getCommandName() const override { return "summon"; }
+    std::string getCommandUsage() const override { return "/summon <entityType> [x y z]"; }
+    int32_t getRequiredPermissionLevel() const override { return 2; }
+    void processCommand(ICommandSender& sender, const std::vector<std::string>& args) override;
+};
+
 } // namespace mccpp

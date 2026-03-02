@@ -521,6 +521,15 @@ public:
     /** Set a block in the world and broadcast the change to all players. */
     void setBlockInWorld(int32_t x, int32_t y, int32_t z, int32_t blockId, int32_t meta = 0);
 
+    /** Get block ID at position, returns 0 if unloaded. */
+    int32_t getBlockIdInWorld(int32_t x, int32_t y, int32_t z) const;
+
+    /** Get block metadata at position. */
+    int32_t getBlockMetaInWorld(int32_t x, int32_t y, int32_t z) const;
+
+    /** Summon a mob at position. Returns entity ID or -1 on failure. */
+    int32_t summonMob(uint8_t mobType, double x, double y, double z);
+
     /**
      * Apply a potion effect to a player by name.
      * Java reference: EntityLivingBase.addPotionEffect()

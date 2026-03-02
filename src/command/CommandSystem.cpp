@@ -56,6 +56,9 @@ CommandHandler::CommandHandler() {
     registerCommand(std::make_shared<CommandKick>());
     registerCommand(std::make_shared<CommandSetBlock>());
     registerCommand(std::make_shared<CommandFill>());
+    registerCommand(std::make_shared<CommandClone>());
+    registerCommand(std::make_shared<CommandTestFor>());
+    registerCommand(std::make_shared<CommandSummon>());
     std::cout << "[Commands] Registered " << getCommandCount() << " commands\n";
 }
 
@@ -874,6 +877,102 @@ void CommandFill::processCommand(ICommandSender& sender, const std::vector<std::
         sender.addChatMessage("Filled " + std::to_string(count) + " blocks");
     } catch (...) {
         sender.addChatMessage("\xC2\xA7" "cInvalid number");
+    }
+}
+
+// /clone — Java: net.minecraft.command.CommandClone
+void CommandClone::processCommand(ICommandSender& sender, const std::vector<std::string>& args) {
+    if (args.size() < 9) {
+        sender.addChatMessage("\xC2\xA7" "cUsage: /clone <x1> <y1> <z1> <x2> <y2> <z2> <dx> <dy> <dz>");
+        return;
+    }
+    try {
+        int32_t x1 = std::stoi(args[0]), y1 = std::stoi(args[1]), z1 = std::stoi(args[2]);
+        int32_t x2 = std::stoi(args[3]), y2 = std::stoi(args[4]), z2 = std::stoi(args[5]);
+        int32_t dx = std::stoi(args[6]), dy = std::stoi(args[7]), dz = std::stoi(args[8]);
+        if (x1 > x2) std::swap(x1, x2);
+        if (y1 > y2) std::swap(y1, y2);
+        if (z1 > z2) std::swap(z1, z2);
+        y1 = std::max(0, y1); y2 = std::min(255, y2);
+        int64_t volume = static_cast<int64_t>(x2 - x1 + 1) * (y2 - y1 + 1) * (z2 - z1 + 1);
+        if (volume > 32768) {
+            sender.addChatMessage("\xC2\xA7" "cToo many blocks (" + std::to_string(volume) + "), max 32768");
+            return;
+        }
+        auto* server = sender.getServer();
+        if (!server) return;
+        // Read source blocks first (allow overlapping copy)
+        struct BlockData { int32_t id; int32_t meta; };
+        std::vector<BlockData> src;
+        src.reserve(static_cast<size_t>(volume));
+        for (int32_t x = x1; x <= x2; ++x)
+            for (int32_t y = y1; y <= y2; ++y)
+                for (int32_t z = z1; z <= z2; ++z)
+                    src.push_back({server->getBlockIdInWorld(x, y, z), server->getBlockMetaInWorld(x, y, z)});
+        // Write to destination
+        size_t i = 0;
+        for (int32_t x = x1; x <= x2; ++x)
+            for (int32_t y = y1; y <= y2; ++y)
+                for (int32_t z = z1; z <= z2; ++z) {
+                    int32_t ox = dx + (x - x1), oy = dy + (y - y1), oz = dz + (z - z1);
+                    server->setBlockInWorld(ox, oy, oz, src[i].id, src[i].meta);
+                    ++i;
+                }
+        sender.addChatMessage("Cloned " + std::to_string(volume) + " blocks");
+    } catch (...) {
+        sender.addChatMessage("\xC2\xA7" "cInvalid number");
+    }
+}
+
+// /testfor — Java: net.minecraft.command.CommandTestFor
+void CommandTestFor::processCommand(ICommandSender& sender, const std::vector<std::string>& args) {
+    if (args.empty()) {
+        sender.addChatMessage("\xC2\xA7" "cUsage: /testfor <player>");
+        return;
+    }
+    auto* server = sender.getServer();
+    if (!server) return;
+    auto names = server->getOnlinePlayerNames();
+    for (auto& name : names) {
+        if (name == args[0]) {
+            sender.addChatMessage("Found " + args[0]);
+            return;
+        }
+    }
+    sender.addChatMessage("\xC2\xA7" "cPlayer not found: " + args[0]);
+}
+
+// /summon — Java: net.minecraft.command.CommandSummon
+// Simplified: /summon <mobTypeId> [x y z]
+void CommandSummon::processCommand(ICommandSender& sender, const std::vector<std::string>& args) {
+    if (args.empty()) {
+        sender.addChatMessage("\xC2\xA7" "cUsage: /summon <mobTypeId> [x y z]");
+        sender.addChatMessage("\xC2\xA7" "7Types: 50=Creeper 51=Skeleton 52=Spider 54=Zombie 55=Ghast");
+        sender.addChatMessage("\xC2\xA7" "7 56=PigZombie 57=Enderman 58=CaveSpider 61=Blaze");
+        sender.addChatMessage("\xC2\xA7" "7 90=Pig 91=Sheep 92=Cow 93=Chicken 95=Wolf 98=Ocelot");
+        return;
+    }
+    try {
+        uint8_t mobType = static_cast<uint8_t>(std::stoi(args[0]));
+        double x = 0, y = 64, z = 0;
+        auto* server = sender.getServer();
+        if (!server) return;
+        // Get sender position if no coords given
+        if (args.size() >= 4) {
+            x = std::stod(args[1]); y = std::stod(args[2]); z = std::stod(args[3]);
+        } else {
+            // Try to get sender position
+            auto pos = server->getPlayerPosition(sender.getCommandSenderName());
+            if (pos) { x = pos->x; y = pos->y; z = pos->z; }
+        }
+        int32_t eid = server->summonMob(mobType, x, y, z);
+        sender.addChatMessage("Summoned entity (type=" + std::to_string(mobType) +
+            ", eid=" + std::to_string(eid) + ") at " +
+            std::to_string(static_cast<int>(x)) + ", " +
+            std::to_string(static_cast<int>(y)) + ", " +
+            std::to_string(static_cast<int>(z)));
+    } catch (...) {
+        sender.addChatMessage("\xC2\xA7" "cInvalid arguments");
     }
 }
 

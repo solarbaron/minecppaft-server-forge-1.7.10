@@ -1879,6 +1879,44 @@ void MinecraftServer::setBlockInWorld(int32_t x, int32_t y, int32_t z, int32_t b
     broadcastBlockChange(x, y, z, blockId, meta);
 }
 
+int32_t MinecraftServer::getBlockIdInWorld(int32_t x, int32_t y, int32_t z) const {
+    if (worlds_.empty()) return 0;
+    Block* b = worlds_[0]->getBlock(x, y, z);
+    return b ? Block::getIdFromBlock(b) : 0;
+}
+
+int32_t MinecraftServer::getBlockMetaInWorld(int32_t x, int32_t y, int32_t z) const {
+    if (worlds_.empty()) return 0;
+    return worlds_[0]->getBlockMetadata(x, y, z);
+}
+
+int32_t MinecraftServer::summonMob(uint8_t mobType, double x, double y, double z) {
+    int32_t eid = nextMobEntityId_.fetch_add(1, std::memory_order_relaxed);
+    int64_t currentTick = tickCount_.load(std::memory_order_relaxed);
+    SpawnedMob mob;
+    mob.entityId = eid;
+    mob.mobType = mobType;
+    mob.posX = x; mob.posY = y; mob.posZ = z;
+    mob.yaw = 0.0f; mob.pitch = 0.0f;
+    mob.health = 20.0f;
+    mob.spawnTick = currentTick;
+    mob.isDead = false;
+    {
+        std::lock_guard<std::mutex> lock(connectionsMutex_);
+        for (auto& conn : connections_) {
+            if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+            auto handler = conn->getHandler();
+            auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+            if (ph) ph->sendSpawnMob(*conn, eid, mobType, x, y, z, 0.0f, 0.0f, 0.0f);
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock(mobEntitiesMutex_);
+        mobEntities_.push_back(std::move(mob));
+    }
+    return eid;
+}
+
 bool MinecraftServer::isRaining() const {
     for (auto& w : worlds_) {
         if (w->isRaining()) return true;
