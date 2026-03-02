@@ -3029,7 +3029,122 @@ void MinecraftServer::tickMobs() {
             mob.attackCooldown = 60; // Java: attackCounter = -40, fires at 20 → 60 tick cycle
         }
 
-        // ─── Witch splash potion attack ───────────────────────────────
+        // ─── Blaze fireball attack ────────────────────────────────────
+        // Java: EntityBlaze.attackEntity() — 3 small fireballs in burst at 30 blocks
+        for (auto& mob : mobEntities_) {
+            if (mob.isDead || mob.mobType != 61) continue; // Blaze only (type 61)
+            if (mob.attackCooldown > 0) { --mob.attackCooldown; continue; }
+
+            PlayHandler* nearest = nullptr;
+            Connection* nearestConn = nullptr;
+            double nearestDistSq = 900.0; // 30 blocks squared
+            {
+                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                for (auto& conn : connections_) {
+                    if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                    auto handler = conn->getHandler();
+                    auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                    if (!ph || ph->isDead()) continue;
+                    if (ph->getGameMode() == 1 || ph->getGameMode() == 3) continue;
+                    double dx = ph->getPlayerX() - mob.posX;
+                    double dz = ph->getPlayerZ() - mob.posZ;
+                    double distSq = dx * dx + dz * dz;
+                    if (distSq < nearestDistSq) {
+                        nearestDistSq = distSq;
+                        nearest = ph;
+                        nearestConn = conn.get();
+                    }
+                }
+            }
+
+            if (!nearest) continue;
+
+            // Java: EntitySmallFireball deals 5 fire damage
+            float blazeDmg = 5.0f;
+            int32_t protMod = nearest->getEnchantmentProtectionModifier();
+            if (protMod > 0) {
+                blazeDmg *= (1.0f - std::min(protMod, 20) * 0.04f);
+            }
+            if (blazeDmg < 0.5f) blazeDmg = 0.5f;
+
+            nearest->applyDamage(blazeDmg);
+            nearest->sendUpdateHealth(*nearestConn, nearest->getHealth(), nearest->getFood(), nearest->getSaturation());
+
+            broadcastSound("mob.blaze.hit", mob.posX, mob.posY, mob.posZ, 1.0f, 1.0f);
+            broadcastSound("game.player.hurt",
+                nearest->getPlayerX(), nearest->getPlayerY(), nearest->getPlayerZ(), 1.0f, 1.0f);
+
+            // Effect 1009 = fire charge sound
+            broadcastEffect(1009, static_cast<int32_t>(mob.posX), static_cast<int32_t>(mob.posY),
+                static_cast<int32_t>(mob.posZ), 0);
+
+            if (nearest->getHealth() <= 0.0f) {
+                broadcastEntityEvent(nearest->getEntityId(), 3);
+                broadcastChatMessage(nearest->getPlayerName() + " was killed by Blaze");
+            }
+
+            mob.attackCooldown = 60; // Java: burst cycle ~60 ticks total
+        }
+
+        // ─── Blaze water damage ──────────────────────────────────────
+        // Java: EntityBlaze.onLivingUpdate() — isWet() → drown 1.0 dmg
+        for (auto& mob : mobEntities_) {
+            if (mob.isDead || mob.mobType != 61) continue;
+            int bx = static_cast<int>(std::floor(mob.posX));
+            int by = static_cast<int>(std::floor(mob.posY));
+            int bz = static_cast<int>(std::floor(mob.posZ));
+            int32_t blockId = getBlockIdInWorld(bx, by, bz);
+            if (blockId != 8 && blockId != 9) continue; // water
+            mob.health -= 1.0f;
+            broadcastEntityEvent(mob.entityId, 2);
+            broadcastSound("game.hostile.hurt", mob.posX, mob.posY, mob.posZ, 1.0f, 1.0f);
+            if (mob.health <= 0.0f) {
+                mob.isDead = true;
+                broadcastEntityEvent(mob.entityId, 3);
+            }
+        }
+
+        // ─── Iron Golem defense AI ───────────────────────────────────
+        // Java: EntityIronGolem.onLivingUpdate() — attacks nearby hostile mobs
+        // Golem attacks hostiles within 16 blocks, deals 7-21 damage with knockback
+        for (auto& golem : mobEntities_) {
+            if (golem.isDead || golem.mobType != 99) continue; // Iron Golem (type 99)
+            if (golem.attackCooldown > 0) { --golem.attackCooldown; continue; }
+
+            // Find nearest hostile mob within 16 blocks
+            SpawnedMob* target = nullptr;
+            double nearestMobDist = 256.0; // 16 blocks squared
+            for (auto& mob : mobEntities_) {
+                if (mob.isDead || &mob == &golem) continue;
+                // Hostile mobs only
+                if (mob.mobType != 54 && mob.mobType != 51 && mob.mobType != 50 &&
+                    mob.mobType != 52 && mob.mobType != 59 && mob.mobType != 60 &&
+                    mob.mobType != 66) continue;
+                double dx = mob.posX - golem.posX;
+                double dz = mob.posZ - golem.posZ;
+                double distSq = dx * dx + dz * dz;
+                if (distSq < nearestMobDist) {
+                    nearestMobDist = distSq;
+                    target = &mob;
+                }
+            }
+
+            if (!target) continue;
+
+            // Java: EntityIronGolem.attackEntityAsMob() — 7-21 damage + 1 block knockback
+            float golemDmg = 7.0f + (float)(rand() % 15); // 7-21 damage
+            target->health -= golemDmg;
+            broadcastEntityEvent(target->entityId, 2);
+            broadcastSound("mob.irongolem.throw", golem.posX, golem.posY, golem.posZ, 1.0f, 1.0f);
+
+            if (target->health <= 0.0f) {
+                target->isDead = true;
+                broadcastEntityEvent(target->entityId, 3);
+            }
+
+            golem.attackCooldown = 20; // 1 second cooldown
+        }
+
         // Java: EntityWitch.attackEntityWithRangedAttack() — EntityPotion projectile
         // Simplified: instant-hit splash potion dealing magic damage at 10 blocks range
         for (auto& mob : mobEntities_) {
