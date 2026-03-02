@@ -244,8 +244,9 @@ public:
                     }
                 }
 
-                // Tree type selection: 1/3 oak, 1/3 birch, 1/3 spruce
-                int32_t treeType = treeRng.nextInt(3);
+                // Tree type selection: 1/4 oak, 1/4 birch, 1/4 spruce, 1/4 jungle
+                // Java ref: BiomeDecorator.getRandomWorldGenForTrees
+                int32_t treeType = treeRng.nextInt(4);
                 int32_t minHeight = 4;
                 int32_t metaWood = 0;
                 int32_t metaLeaves = 0;
@@ -257,6 +258,10 @@ public:
                     metaWood = 1;    // Spruce log (meta 1)
                     metaLeaves = 1;  // Spruce leaves (meta 1)
                     minHeight = 6;
+                } else if (treeType == 3) {
+                    metaWood = 3;    // Jungle log (meta 3)
+                    metaLeaves = 3;  // Jungle leaves (meta 3)
+                    minHeight = 5;
                 }
 
                 auto placements = TreeGenerator::generateTree(
