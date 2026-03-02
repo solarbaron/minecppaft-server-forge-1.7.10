@@ -485,3 +485,4 @@
 184. **Smite enchantment** — ✅ Done (ID 17: level*2.5 bonus damage vs undead — zombie, skeleton, pigman, wither)
 185. **Bane of Arthropods enchantment** — ✅ Done (ID 18: level*2.5 bonus damage vs arthropods — spider, cave spider, silverfish)
 186. **Mob contact damage** — ✅ Done (hostile mobs attack players within 2 blocks: zombie=3, enderman=7, blaze=6, pigman=5, spider/cave spider=2, silverfish=1, slime/magma=3; 20-tick cooldown, armor+Protection reduction, knockback, per-mob death messages, creative immunity)
+187. **Passive mob drops** — ✅ Done (cow→leather+beef, pig→porkchop, sheep→wool, chicken→feather+chicken, squid→ink sac, iron golem→iron ingots+rose; all affected by Looting)
