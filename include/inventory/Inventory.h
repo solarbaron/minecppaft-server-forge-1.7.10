@@ -140,10 +140,25 @@ public:
     // ─── Animation ─────────────────────────────────────────────────────
     int32_t animationsToGo = 0;
 
+    // ─── Enchantments ─────────────────────────────────────────────────
+    struct Enchantment { int16_t id; int16_t level; };
+
+    void addEnchantment(int32_t enchId, int32_t level) {
+        // Replace existing enchantment of same ID
+        for (auto& e : enchantments_) {
+            if (e.id == enchId) { e.level = static_cast<int16_t>(level); return; }
+        }
+        enchantments_.push_back({static_cast<int16_t>(enchId), static_cast<int16_t>(level)});
+    }
+    bool hasEnchantments() const { return !enchantments_.empty(); }
+    const std::vector<Enchantment>& getEnchantments() const { return enchantments_; }
+    void setEnchantments(const std::vector<Enchantment>& ench) { enchantments_ = ench; }
+
 private:
     int32_t itemId_ = 0;
     int32_t stackSize_ = 0;
     int32_t damage_ = 0;
+    std::vector<Enchantment> enchantments_;
 };
 
 // ═══════════════════════════════════════════════════════════════════════════

@@ -1732,6 +1732,66 @@ void MinecraftServer::addPlayerExperience(const std::string& playerName, int32_t
     }
 }
 
+void MinecraftServer::enchantPlayerItem(const std::string& playerName, int32_t enchId, int32_t level) {
+    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    for (auto& conn : connections_) {
+        if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+        auto handler = conn->getHandler();
+        auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+        if (!ph || ph->getPlayerName() != playerName) continue;
+        ph->enchantHeldItem(enchId, level);
+        ph->sendWindowItems(*conn); // Refresh inventory display
+        return;
+    }
+}
+
+int32_t MinecraftServer::clearPlayerInventory(const std::string& playerName, int32_t itemId, int32_t damage) {
+    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    for (auto& conn : connections_) {
+        if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+        auto handler = conn->getHandler();
+        auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+        if (!ph || ph->getPlayerName() != playerName) continue;
+        int32_t count = ph->clearInventory(itemId, damage);
+        ph->sendWindowItems(*conn);
+        return count;
+    }
+    return 0;
+}
+
+void MinecraftServer::setPlayerSpawnPoint(const std::string& playerName, int32_t x, int32_t y, int32_t z) {
+    // Send S05 SpawnPosition update to the target player
+    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    for (auto& conn : connections_) {
+        if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+        auto handler = conn->getHandler();
+        auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+        if (!ph || ph->getPlayerName() != playerName) continue;
+        // S05 SpawnPosition: Int x, Int y, Int z
+        std::vector<uint8_t> pkt;
+        pkt.reserve(16);
+        // VarInt packet ID
+        pkt.push_back(0x05);
+        // Int x
+        pkt.push_back((x >> 24) & 0xFF);
+        pkt.push_back((x >> 16) & 0xFF);
+        pkt.push_back((x >> 8) & 0xFF);
+        pkt.push_back(x & 0xFF);
+        // Int y
+        pkt.push_back((y >> 24) & 0xFF);
+        pkt.push_back((y >> 16) & 0xFF);
+        pkt.push_back((y >> 8) & 0xFF);
+        pkt.push_back(y & 0xFF);
+        // Int z
+        pkt.push_back((z >> 24) & 0xFF);
+        pkt.push_back((z >> 16) & 0xFF);
+        pkt.push_back((z >> 8) & 0xFF);
+        pkt.push_back(z & 0xFF);
+        conn->sendPacket(std::move(pkt));
+        return;
+    }
+}
+
 std::vector<std::string> MinecraftServer::getOnlinePlayerNames() const {
     std::lock_guard<std::mutex> lock(connectionsMutex_);
     std::vector<std::string> names;

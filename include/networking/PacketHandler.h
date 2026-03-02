@@ -495,6 +495,29 @@ public:
         sendSetExperience(conn, experienceBar_, experienceLevel_, experienceTotal_);
     }
 
+    // Clear player inventory: if itemId<0, clear all; otherwise only matching items.
+    // Returns count of items removed.
+    int32_t clearInventory(int32_t itemId = -1, int32_t damage = -1) {
+        int32_t count = 0;
+        for (int32_t i = 0; i < InventoryPlayer::TOTAL_SIZE; ++i) {
+            auto stack = inventory_.getStackInSlot(i);
+            if (!stack) continue;
+            if (itemId >= 0 && stack->getItemId() != itemId) continue;
+            if (damage >= 0 && stack->getDamage() != damage) continue;
+            count += stack->getStackSize();
+            inventory_.setInventorySlotContents(i, std::nullopt);
+        }
+        return count;
+    }
+
+    // Add enchantment to held item via NBT
+    void enchantHeldItem(int32_t enchId, int32_t level) {
+        auto held = inventory_.getCurrentItem();
+        if (!held) return;
+        held->addEnchantment(enchId, level);
+        inventory_.setInventorySlotContents(inventory_.getCurrentSlot(), held);
+    }
+
     /**
      * Send a chunk unload (S21 with bitmask=0) to the client.
      * Java reference: S21PacketChunkData with groundUp=true, bitmask=0

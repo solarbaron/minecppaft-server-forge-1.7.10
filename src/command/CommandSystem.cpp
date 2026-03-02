@@ -45,6 +45,9 @@ CommandHandler::CommandHandler() {
     registerCommand(std::make_shared<CommandWeather>());
     registerCommand(std::make_shared<CommandEffect>());
     registerCommand(std::make_shared<CommandXP>());
+    registerCommand(std::make_shared<CommandEnchant>());
+    registerCommand(std::make_shared<CommandClear>());
+    registerCommand(std::make_shared<CommandSpawnpoint>());
     std::cout << "[Commands] Registered " << getCommandCount() << " commands\n";
 }
 
@@ -584,6 +587,106 @@ void CommandXP::processCommand(ICommandSender& sender, const std::vector<std::st
     std::cout << "[Server] " << sender.getCommandSenderName()
               << " gave " << target << " " << amount
               << (isLevels ? " levels" : " XP") << "\n";
+}
+
+// /enchant — Java: net.minecraft.command.CommandEnchant
+// /enchant <player> <enchantmentId> [level]
+void CommandEnchant::processCommand(ICommandSender& sender, const std::vector<std::string>& args) {
+    if (args.size() < 2) {
+        sender.addChatMessage("§cUsage: /enchant <player> <enchantmentId> [level]");
+        return;
+    }
+    std::string target = args[0];
+    int32_t enchId = 0, level = 1;
+    try { enchId = std::stoi(args[1]); } catch (...) {
+        sender.addChatMessage("§cInvalid enchantment ID: " + args[1]);
+        return;
+    }
+    if (args.size() > 2) {
+        try { level = std::stoi(args[2]); } catch (...) {
+            sender.addChatMessage("§cInvalid level: " + args[2]);
+            return;
+        }
+    }
+    if (enchId < 0 || enchId > 61) {
+        sender.addChatMessage("§cEnchantment ID must be 0-61");
+        return;
+    }
+    if (level < 1 || level > 5) {
+        sender.addChatMessage("§cLevel must be 1-5");
+        return;
+    }
+    auto* server = sender.getServer();
+    if (!server) return;
+    server->enchantPlayerItem(target, enchId, level);
+    sender.addChatMessage("Enchanting " + target + "'s held item with "
+        + std::to_string(enchId) + " level " + std::to_string(level));
+    std::cout << "[Server] " << sender.getCommandSenderName()
+              << " enchanted " << target << "'s item with " << enchId << " lv" << level << "\n";
+}
+
+// /clear — Java: net.minecraft.command.CommandClearInventory
+// /clear [player] [itemId] [damage]
+void CommandClear::processCommand(ICommandSender& sender, const std::vector<std::string>& args) {
+    std::string target = args.empty() ? sender.getCommandSenderName() : args[0];
+    int32_t itemId = -1, damage = -1;
+    if (args.size() > 1) {
+        try { itemId = std::stoi(args[1]); } catch (...) {
+            sender.addChatMessage("§cInvalid item ID: " + args[1]);
+            return;
+        }
+    }
+    if (args.size() > 2) {
+        try { damage = std::stoi(args[2]); } catch (...) {
+            sender.addChatMessage("§cInvalid damage: " + args[2]);
+            return;
+        }
+    }
+    auto* server = sender.getServer();
+    if (!server) return;
+    int32_t cleared = server->clearPlayerInventory(target, itemId, damage);
+    if (itemId < 0) {
+        sender.addChatMessage("Cleared the inventory of " + target + ", removing " + std::to_string(cleared) + " items");
+    } else {
+        sender.addChatMessage("Cleared " + std::to_string(cleared) + " items from " + target);
+    }
+    std::cout << "[Server] " << sender.getCommandSenderName()
+              << " cleared " << cleared << " items from " << target << "\n";
+}
+
+// /spawnpoint — Java: net.minecraft.command.CommandSetSpawnpoint
+// /spawnpoint [player] [x y z]
+void CommandSpawnpoint::processCommand(ICommandSender& sender, const std::vector<std::string>& args) {
+    std::string target = args.empty() ? sender.getCommandSenderName() : args[0];
+    auto* server = sender.getServer();
+    if (!server) return;
+
+    int32_t x, y, z;
+    if (args.size() >= 4) {
+        try {
+            x = std::stoi(args[1]);
+            y = std::stoi(args[2]);
+            z = std::stoi(args[3]);
+        } catch (...) {
+            sender.addChatMessage("§cInvalid coordinates");
+            return;
+        }
+    } else {
+        // Use player's current position
+        auto pos = server->getPlayerPosition(target);
+        if (!pos) {
+            sender.addChatMessage("§cPlayer not found: " + target);
+            return;
+        }
+        x = static_cast<int32_t>(pos->x);
+        y = static_cast<int32_t>(pos->y);
+        z = static_cast<int32_t>(pos->z);
+    }
+    server->setPlayerSpawnPoint(target, x, y, z);
+    sender.addChatMessage("Set " + target + "'s spawn point to ("
+        + std::to_string(x) + ", " + std::to_string(y) + ", " + std::to_string(z) + ")");
+    std::cout << "[Server] " << sender.getCommandSenderName()
+              << " set " << target << " spawnpoint to " << x << " " << y << " " << z << "\n";
 }
 
 } // namespace mccpp

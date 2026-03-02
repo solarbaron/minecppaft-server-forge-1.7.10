@@ -466,6 +466,16 @@ public:
      */
     void addPlayerExperience(const std::string& playerName, int32_t amount);
 
+    /** Enchant a player's held item with the given enchantment ID and level. */
+    void enchantPlayerItem(const std::string& playerName, int32_t enchId, int32_t level);
+
+    /** Clear a player's inventory. Returns number of items cleared.
+     *  If itemId >= 0, only clear items matching that ID (and damage if >= 0). */
+    int32_t clearPlayerInventory(const std::string& playerName, int32_t itemId = -1, int32_t damage = -1);
+
+    /** Set a player's individual spawn point (bed spawn). */
+    void setPlayerSpawnPoint(const std::string& playerName, int32_t x, int32_t y, int32_t z);
+
     /**
      * Get a list of all online player names.
      * Java reference: ServerConfigurationManager.func_152600_g()

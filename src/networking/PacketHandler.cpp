@@ -1036,9 +1036,67 @@ void writeItemStack(std::vector<uint8_t>& pkt, const std::optional<ItemStack>& s
         writeShort(pkt, static_cast<int16_t>(stack->getItemId()));
         writeByte(pkt, static_cast<uint8_t>(stack->getStackSize()));
         writeShort(pkt, static_cast<int16_t>(stack->getDamage()));
-        // NBT tag — for now, no NBT (Short -1 = no tag)
-        // Java: writeNBTTagCompoundToBuffer(null) → writeShort(-1)
-        writeShort(pkt, -1);
+
+        if (stack->hasEnchantments()) {
+            // Write NBT compound with enchantment list
+            // NBT format: TAG_Compound (unnamed root) → TAG_List "ench" → TAG_Compound entries
+            std::vector<uint8_t> nbt;
+            // Root compound tag (type 10, unnamed)
+            nbt.push_back(10); // TAG_Compound
+            nbt.push_back(0); nbt.push_back(0); // empty name length
+
+            // TAG_List named "ench"
+            nbt.push_back(9); // TAG_List type
+            nbt.push_back(0); nbt.push_back(4); // name length = 4
+            nbt.push_back('e'); nbt.push_back('n'); nbt.push_back('c'); nbt.push_back('h');
+            nbt.push_back(10); // list element type = TAG_Compound
+            auto& enchants = stack->getEnchantments();
+            int32_t count = static_cast<int32_t>(enchants.size());
+            nbt.push_back((count >> 24) & 0xFF);
+            nbt.push_back((count >> 16) & 0xFF);
+            nbt.push_back((count >> 8) & 0xFF);
+            nbt.push_back(count & 0xFF);
+            for (auto& e : enchants) {
+                // TAG_Short "id"
+                nbt.push_back(2); // TAG_Short
+                nbt.push_back(0); nbt.push_back(2); // name length = 2
+                nbt.push_back('i'); nbt.push_back('d');
+                nbt.push_back((e.id >> 8) & 0xFF);
+                nbt.push_back(e.id & 0xFF);
+                // TAG_Short "lvl"
+                nbt.push_back(2); // TAG_Short
+                nbt.push_back(0); nbt.push_back(3); // name length = 3
+                nbt.push_back('l'); nbt.push_back('v'); nbt.push_back('l');
+                nbt.push_back((e.level >> 8) & 0xFF);
+                nbt.push_back(e.level & 0xFF);
+                // End compound
+                nbt.push_back(0); // TAG_End
+            }
+            // End root compound
+            nbt.push_back(0); // TAG_End
+
+            // Write NBT length as short, then compressed data
+            // Java uses gzip compressed NBT in slot data
+            // Protocol 1.7.10: Short length + gzip data, or Short -1 for no tag
+            // Actually, protocol 1.7.10 uses: Short nbtLength + gzip(nbt) or Short -1
+            std::vector<uint8_t> compressed;
+            compressed.resize(nbt.size() + 64);
+            z_stream zs{};
+            deflateInit2(&zs, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY);
+            zs.avail_in = static_cast<uInt>(nbt.size());
+            zs.next_in = nbt.data();
+            zs.avail_out = static_cast<uInt>(compressed.size());
+            zs.next_out = compressed.data();
+            deflate(&zs, Z_FINISH);
+            compressed.resize(zs.total_out);
+            deflateEnd(&zs);
+
+            writeShort(pkt, static_cast<int16_t>(compressed.size()));
+            pkt.insert(pkt.end(), compressed.begin(), compressed.end());
+        } else {
+            // No NBT tag
+            writeShort(pkt, -1);
+        }
     }
 }
 } // anonymous namespace

@@ -326,4 +326,43 @@ public:
     }
 };
 
+// /enchant <player> <enchantmentId> [level] — Enchants held item
+// Java: net.minecraft.command.CommandEnchant
+class CommandEnchant : public ICommand {
+public:
+    std::string getCommandName() const override { return "enchant"; }
+    std::string getCommandUsage() const override { return "/enchant <player> <enchantmentId> [level]"; }
+    int32_t getRequiredPermissionLevel() const override { return 2; }
+    void processCommand(ICommandSender& sender, const std::vector<std::string>& args) override;
+    bool isUsernameIndex(const std::vector<std::string>& args, int32_t index) const override {
+        return index == 0;
+    }
+};
+
+// /clear <player> [itemId] [damage] — Clears inventory
+// Java: net.minecraft.command.CommandClearInventory
+class CommandClear : public ICommand {
+public:
+    std::string getCommandName() const override { return "clear"; }
+    std::string getCommandUsage() const override { return "/clear [player] [itemId] [damage]"; }
+    int32_t getRequiredPermissionLevel() const override { return 2; }
+    void processCommand(ICommandSender& sender, const std::vector<std::string>& args) override;
+    bool isUsernameIndex(const std::vector<std::string>& args, int32_t index) const override {
+        return index == 0;
+    }
+};
+
+// /spawnpoint [player] [x y z] — Sets spawn point
+// Java: net.minecraft.command.CommandSetSpawnpoint
+class CommandSpawnpoint : public ICommand {
+public:
+    std::string getCommandName() const override { return "spawnpoint"; }
+    std::string getCommandUsage() const override { return "/spawnpoint [player] [x y z]"; }
+    int32_t getRequiredPermissionLevel() const override { return 2; }
+    void processCommand(ICommandSender& sender, const std::vector<std::string>& args) override;
+    bool isUsernameIndex(const std::vector<std::string>& args, int32_t index) const override {
+        return index == 0;
+    }
+};
+
 } // namespace mccpp
