@@ -1596,6 +1596,20 @@ void PlayHandler::handlePlayerPosition(const uint8_t* data, size_t length, Conne
                 }
             }
         }
+        // ─── Farmland trampling — Java: BlockFarmland.onFallenUpon() ───
+        // Landing on farmland (60) reverts it to dirt (3) if fall > 1.0
+        if (fallDistance_ > 1.0f && !server_.getWorlds().empty()) {
+            auto* wld = server_.getWorlds()[0].get();
+            int32_t landX = static_cast<int32_t>(std::floor(playerX_));
+            int32_t landY = static_cast<int32_t>(std::floor(playerY_)) - 1;
+            int32_t landZ = static_cast<int32_t>(std::floor(playerZ_));
+            Block* landBlock = wld->getBlock(landX, landY, landZ);
+            if (landBlock && Block::getIdFromBlock(landBlock) == 60) {
+                wld->setBlock(landX, landY, landZ, Block::getBlockById(3));
+                wld->setBlockMetadata(landX, landY, landZ, 0);
+                server_.broadcastBlockChange(landX, landY, landZ, 3, 0);
+            }
+        }
         fallDistance_ = 0.0f;
     }
 
@@ -1670,6 +1684,19 @@ void PlayHandler::handlePlayerPosAndLook(const uint8_t* data, size_t length, Con
                     server_.broadcastEntityEvent(entityId_, 3);
                     server_.broadcastChatMessage(playerName_ + " fell from a high place");
                 }
+            }
+        }
+        // Farmland trampling — same as in handlePlayerPosition
+        if (fallDistance_ > 1.0f && !server_.getWorlds().empty()) {
+            auto* wld = server_.getWorlds()[0].get();
+            int32_t landX = static_cast<int32_t>(std::floor(playerX_));
+            int32_t landY = static_cast<int32_t>(std::floor(playerY_)) - 1;
+            int32_t landZ = static_cast<int32_t>(std::floor(playerZ_));
+            Block* landBlock = wld->getBlock(landX, landY, landZ);
+            if (landBlock && Block::getIdFromBlock(landBlock) == 60) {
+                wld->setBlock(landX, landY, landZ, Block::getBlockById(3));
+                wld->setBlockMetadata(landX, landY, landZ, 0);
+                server_.broadcastBlockChange(landX, landY, landZ, 3, 0);
             }
         }
         fallDistance_ = 0.0f;

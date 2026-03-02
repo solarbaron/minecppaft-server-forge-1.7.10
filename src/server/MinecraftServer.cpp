@@ -1743,6 +1743,27 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
         }
     }
 
+    // ─── Thorns enchantment (ID 7) ──────────────────────────────────
+    // Java: EnchantmentThorns.func_92094_a → level*15% chance, 1-4 reflected damage
+    // Check all armor pieces of the TARGET for Thorns
+    for (int16_t slot = 1; slot <= 4; ++slot) {
+        auto armor = target->getArmorItem(slot);
+        if (!armor || !armor->hasEnchantments()) continue;
+        int16_t thornsLevel = armor->getEnchantmentLevel(7);
+        if (thornsLevel > 0) {
+            // Java: random.nextInt(100) < level * 15
+            if ((rand() % 100) < thornsLevel * 15) {
+                int32_t thornsDmg = 1 + (rand() % 4); // 1-4 damage
+                attacker.applyDamage(static_cast<float>(thornsDmg));
+                attacker.sendUpdateHealth(attackerConn, attacker.getHealth(),
+                    attacker.getFood(), attacker.getSaturation());
+                broadcastSound("damage.thorns",
+                    attacker.getPlayerX(), attacker.getPlayerY(), attacker.getPlayerZ(),
+                    1.0f, 1.0f);
+            }
+        }
+    }
+
     // ─── Damage sound ───────────────────────────────────────────────
     broadcastSound("game.player.hurt",
         target->getPlayerX(), target->getPlayerY(), target->getPlayerZ(),
