@@ -283,6 +283,85 @@ public:
             }
         }
 
+        // ── Step 9.5: Flower, tallgrass, sugar cane decoration ──
+        // Java reference: BiomeDecorator — flowersPerChunk, grassPerChunk, etc.
+        {
+            NoiseGeneratorImproved::RNG decoRng;
+            decoRng.setSeed(seed_ ^ (static_cast<int64_t>(chunkX) * 6364136223846793005LL +
+                                      static_cast<int64_t>(chunkZ) * 1442695040888963407LL));
+
+            // Plains: flowersPerChunk=4, grassPerChunk=10
+            // Flowers: dandelion (37) or poppy (38)
+            for (int32_t f = 0; f < 4; ++f) {
+                int32_t fx = decoRng.nextInt(16);
+                int32_t fz = decoRng.nextInt(16);
+                for (int32_t fy = 255; fy >= 1; --fy) {
+                    int32_t below = blocks[(fx * 16 + fz) * 256 + fy - 1];
+                    int32_t at = blocks[(fx * 16 + fz) * 256 + fy];
+                    if (at == 0 && (below == GRASS || below == DIRT)) {
+                        blocks[(fx * 16 + fz) * 256 + fy] = decoRng.nextInt(3) == 0 ? 38 : 37;
+                        break;
+                    }
+                }
+            }
+
+            // Tallgrass patches: block 31, meta 1 (tall grass, not fern)
+            for (int32_t g = 0; g < 10; ++g) {
+                int32_t gx = decoRng.nextInt(16);
+                int32_t gz = decoRng.nextInt(16);
+                for (int32_t gy = 255; gy >= 1; --gy) {
+                    int32_t below = blocks[(gx * 16 + gz) * 256 + gy - 1];
+                    int32_t at = blocks[(gx * 16 + gz) * 256 + gy];
+                    if (at == 0 && below == GRASS) {
+                        blocks[(gx * 16 + gz) * 256 + gy] = 31; // Tallgrass
+                        meta[(gx * 16 + gz) * 256 + gy] = 1;    // Type: tall grass
+                        break;
+                    }
+                }
+            }
+
+            // Sugar cane: 1/4 chance per chunk, near water at Y=1+
+            // Java: BiomeDecorator.reedsPerChunk=10 for swamp, 0 for plains
+            // Simplified: 1 attempt per chunk
+            if (decoRng.nextInt(4) == 0) {
+                int32_t sx = decoRng.nextInt(16);
+                int32_t sz = decoRng.nextInt(16);
+                for (int32_t sy = 255; sy >= 2; --sy) {
+                    int32_t below = blocks[(sx * 16 + sz) * 256 + sy - 1];
+                    int32_t at = blocks[(sx * 16 + sz) * 256 + sy];
+                    if (at == 0 && (below == GRASS || below == DIRT || below == SAND)) {
+                        // Check adjacent water (simplified: check ±1 X/Z at same Y-1)
+                        bool nearWater = false;
+                        for (int32_t dx = -1; dx <= 1; dx += 2) {
+                            int32_t nx = sx + dx;
+                            if (nx >= 0 && nx < 16) {
+                                int32_t adj = blocks[(nx * 16 + sz) * 256 + sy - 1];
+                                if (adj == WATER || adj == 8) nearWater = true;
+                            }
+                        }
+                        for (int32_t dz = -1; dz <= 1; dz += 2) {
+                            int32_t nz = sz + dz;
+                            if (nz >= 0 && nz < 16) {
+                                int32_t adj = blocks[(sx * 16 + nz) * 256 + sy - 1];
+                                if (adj == WATER || adj == 8) nearWater = true;
+                            }
+                        }
+                        if (nearWater) {
+                            blocks[(sx * 16 + sz) * 256 + sy] = 83; // Sugar cane
+                            // Stack 1-2 extra
+                            int32_t stackH = decoRng.nextInt(2) + 1;
+                            for (int32_t h = 1; h <= stackH && sy + h < 256; ++h) {
+                                if (blocks[(sx * 16 + sz) * 256 + sy + h] == 0) {
+                                    blocks[(sx * 16 + sz) * 256 + sy + h] = 83;
+                                }
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
         // ── Step 10: Fill chunk sections ──
         for (int x = 0; x < 16; ++x) {
             for (int z = 0; z < 16; ++z) {
