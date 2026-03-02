@@ -1655,6 +1655,25 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
                             break;
                         case 62: // Magma Cube → magma cream (378)
                             dropId = 378; baseCount = rand() % 2; break;
+                        // ─── Passive mob drops ──────────────────────────
+                        case 92: // Cow → leather (334) + raw beef (363)
+                            dropId = 334; baseCount = 1 + (rand() % 2);
+                            spawnItemDrop(mob.posX, mob.posY, mob.posZ, 363, 0, 1 + (rand() % 3));
+                            break;
+                        case 90: // Pig → raw porkchop (319)
+                            dropId = 319; baseCount = 1 + (rand() % 3); break;
+                        case 91: // Sheep → wool (35)
+                            dropId = 35; baseCount = 1; break;
+                        case 93: // Chicken → feather (288) + raw chicken (365)
+                            dropId = 288; baseCount = 1 + (rand() % 2);
+                            spawnItemDrop(mob.posX, mob.posY, mob.posZ, 365, 0, 1);
+                            break;
+                        case 94: // Squid → ink sac (351 damage 0)
+                            dropId = 351; baseCount = 1 + (rand() % 3); break;
+                        case 99: // Iron Golem → iron ingots (265) + rose (38)
+                            dropId = 265; baseCount = 3 + (rand() % 3);
+                            spawnItemDrop(mob.posX, mob.posY, mob.posZ, 38, 0, 1 + (rand() % 2));
+                            break;
                         default: break;
                     }
                     if (dropId > 0) {
