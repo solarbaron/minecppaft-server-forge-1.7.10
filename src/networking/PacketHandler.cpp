@@ -2360,6 +2360,48 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
                           << " (food=" << foodStats_.getFoodLevel()
                           << ", sat=" << foodStats_.getSaturationLevel() << ")\n";
             }
+
+            // ─── Armor right-click equip — Java: ItemArmor.onItemRightClick ─
+            // Helmet: 298,302,306,310,314 (leather/chain/iron/diamond/gold) → armor slot 3 (container 5)
+            // Chestplate: 299,303,307,311,315 → armor slot 2 (container 6)
+            // Leggings: 300,304,308,312,316 → armor slot 1 (container 7)
+            // Boots: 301,305,309,313,317 → armor slot 0 (container 8)
+            // Pumpkin (86) → helmet slot
+            int armorSlot = -1;
+            if (heldItemId == 298 || heldItemId == 302 || heldItemId == 306 ||
+                heldItemId == 310 || heldItemId == 314 || heldItemId == 86) {
+                armorSlot = 3; // helmet — Java armorType=0 → slot index 3
+            } else if (heldItemId == 299 || heldItemId == 303 || heldItemId == 307 ||
+                       heldItemId == 311 || heldItemId == 315) {
+                armorSlot = 2; // chestplate — armorType=1 → slot index 2
+            } else if (heldItemId == 300 || heldItemId == 304 || heldItemId == 308 ||
+                       heldItemId == 312 || heldItemId == 316) {
+                armorSlot = 1; // leggings — armorType=2 → slot index 1
+            } else if (heldItemId == 301 || heldItemId == 305 || heldItemId == 309 ||
+                       heldItemId == 313 || heldItemId == 317) {
+                armorSlot = 0; // boots — armorType=3 → slot index 0
+            }
+            if (armorSlot >= 0) {
+                // Check if target armor slot is empty
+                auto existingArmor = inventory_.getStackInSlot(36 + armorSlot);
+                if (!existingArmor.has_value()) {
+                    // Move held item to armor slot
+                    auto heldStack2 = inventory_.getCurrentItem();
+                    if (heldStack2.has_value() && !heldStack2->isEmpty()) {
+                        ItemStack armorStack(heldItemId, 1, heldStack2->getDamage());
+                        inventory_.setInventorySlotContents(36 + armorSlot, armorStack);
+                        // Consume held item
+                        int32_t rem = heldStack2->getStackSize() - 1;
+                        if (rem <= 0) {
+                            inventory_.setInventorySlotContents(currentSlot_, std::nullopt);
+                        } else {
+                            ItemStack updated(heldItemId, rem, heldStack2->getDamage());
+                            inventory_.setInventorySlotContents(currentSlot_, updated);
+                        }
+                        sendWindowItems(conn);
+                    }
+                }
+            }
         }
         return;
     }
@@ -2837,6 +2879,73 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
                     ItemStack emptyBottle(374, 1, 0);
                     inventory_.setInventorySlotContents(currentSlot_, emptyBottle);
                     sendWindowItems(conn);
+                }
+            }
+        }
+        return;
+    }
+
+    // ─── Dragon Egg (block ID 122) — Java: BlockDragonEgg.onBlockActivated() ─
+    // Teleports to random position within 15 blocks, 1000 attempts
+    if (clickedBlockId == 122 && !isSneaking_) {
+        int32_t by = static_cast<int32_t>(blockY);
+        std::mt19937 rng(std::random_device{}());
+        for (int attempt = 0; attempt < 1000; ++attempt) {
+            int nx = blockX + std::uniform_int_distribution<>(-15, 15)(rng);
+            int ny = by + std::uniform_int_distribution<>(-7, 7)(rng);
+            int nz = blockZ + std::uniform_int_distribution<>(-15, 15)(rng);
+            if (ny < 1) ny = 1;
+            if (ny > 255) ny = 255;
+            Block* target = world->getBlock(nx, ny, nz);
+            int targetId = target ? Block::getIdFromBlock(target) : 0;
+            if (targetId == 0) { // Air
+                // Move egg
+                world->setBlock(blockX, by, blockZ, Block::getBlockById(0));
+                server_.broadcastBlockChange(blockX, by, blockZ, 0, 0);
+                world->setBlock(nx, ny, nz, Block::getBlockById(122));
+                server_.broadcastBlockChange(nx, ny, nz, 122, 0);
+                // Teleport particles
+                server_.broadcastEffect(2003, nx, ny, nz, 0);
+                break;
+            }
+        }
+        return;
+    }
+
+    // ─── Flower Pot (block ID 140) — Java: BlockFlowerPot.onBlockActivated() ─
+    // Accepts flowers (37/38), saplings (6), ferns (31:2), cacti (81), mushrooms (39/40)
+    // Dead bush (32), sets metadata per Java TileEntityFlowerPot
+    if (clickedBlockId == 140 && !isSneaking_) {
+        int32_t by = static_cast<int32_t>(blockY);
+        int meta = world->getBlockMetadata(blockX, by, blockZ);
+        if (meta == 0) { // Empty pot
+            auto held = inventory_.getCurrentItem();
+            if (held && !held->isEmpty()) {
+                int itemId = held->getItemId();
+                int newMeta = 0;
+                // Java: BlockFlowerPot.func_149928_a — maps item to pot metadata
+                if (itemId == 38) newMeta = 1;       // Rose
+                else if (itemId == 37) newMeta = 2;  // Dandelion
+                else if (itemId == 6) newMeta = held->getDamage() + 7; // Sapling (meta → pot lookup)
+                else if (itemId == 39) newMeta = 7;  // Brown mushroom
+                else if (itemId == 40) newMeta = 8;  // Red mushroom
+                else if (itemId == 81) newMeta = 9;  // Cactus
+                else if (itemId == 32) newMeta = 10; // Dead bush
+                else if (itemId == 31 && held->getDamage() == 2) newMeta = 11; // Fern
+
+                if (newMeta > 0) {
+                    world->setBlockMetadata(blockX, by, blockZ, newMeta);
+                    server_.broadcastBlockChange(blockX, by, blockZ, 140, newMeta);
+                    // Consume in survival
+                    if (gameMode_ != 1) {
+                        if (held->getStackSize() > 1) {
+                            ItemStack updated(itemId, held->getStackSize() - 1, held->getDamage());
+                            inventory_.setInventorySlotContents(currentSlot_, updated);
+                        } else {
+                            inventory_.setInventorySlotContents(currentSlot_, std::nullopt);
+                        }
+                        sendWindowItems(conn);
+                    }
                 }
             }
         }
