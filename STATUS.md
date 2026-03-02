@@ -316,3 +316,4 @@
 67. **Potion effect system** — ✅ Done (S1D EntityEffect, S1E RemoveEntityEffect, addPotionEffect, tickPotionEffects with regen/poison/wither/saturation per-tick effects)
 68. **/effect command** — ✅ Done (/effect <player> <id> [sec] [amp], /effect <player> clear, 14th server command)
 69. **Sand/gravel gravity in random tick** — ✅ Done (existing world blocks 12/13 fall through air/liquids during random ticks)
+70. **Slab double-slab placement** — ✅ Done (stone slab 44→double 43, wood slab 126→double 125, sub-type from item damage bits 0-2)
