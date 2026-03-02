@@ -709,6 +709,33 @@ FurnaceRecipes::FurnaceRecipes() {
     // Clay
     addSmelting(337, ItemStack(336, 1, 0), 0.3f);  // clay_ball(337) → brick(336)
 
+    // Additional vanilla recipes
+    addSmelting(19, ItemStack(19, 1, 0), 0.15f);   // wet_sponge(19:1) → sponge(19:0) (simplified: 19→19)
+    addSmelting(98, ItemStack(98, 1, 2), 0.1f);    // stone_brick(98:0) → cracked_stone_brick(98:2)
+    addSmelting(1, ItemStack(1, 1, 0), 0.1f);      // stone(1) → stone(1) (smooth stone, re-smelt)
+
+    // Gold/Iron tool/armor → nuggets (Java: FurnaceRecipes — smelting gear)
+    // Simplified: any gold tool or armor ID → 1 gold nugget (371)
+    addSmelting(283, ItemStack(371, 1, 0), 0.1f);  // gold_sword → gold_nugget
+    addSmelting(285, ItemStack(371, 1, 0), 0.1f);  // gold_pickaxe → gold_nugget
+    addSmelting(286, ItemStack(371, 1, 0), 0.1f);  // gold_axe → gold_nugget
+    addSmelting(284, ItemStack(371, 1, 0), 0.1f);  // gold_shovel → gold_nugget
+    addSmelting(294, ItemStack(371, 1, 0), 0.1f);  // gold_hoe → gold_nugget
+    addSmelting(314, ItemStack(371, 1, 0), 0.1f);  // gold_helmet → gold_nugget
+    addSmelting(315, ItemStack(371, 1, 0), 0.1f);  // gold_chestplate → gold_nugget
+    addSmelting(316, ItemStack(371, 1, 0), 0.1f);  // gold_leggings → gold_nugget
+    addSmelting(317, ItemStack(371, 1, 0), 0.1f);  // gold_boots → gold_nugget
+    // Iron tool/armor → iron_ingot (265)
+    addSmelting(267, ItemStack(265, 1, 0), 0.1f);  // iron_sword → iron_ingot
+    addSmelting(257, ItemStack(265, 1, 0), 0.1f);  // iron_pickaxe → iron_ingot
+    addSmelting(258, ItemStack(265, 1, 0), 0.1f);  // iron_axe → iron_ingot
+    addSmelting(256, ItemStack(265, 1, 0), 0.1f);  // iron_shovel → iron_ingot
+    addSmelting(292, ItemStack(265, 1, 0), 0.1f);  // iron_hoe → iron_ingot
+    addSmelting(306, ItemStack(265, 1, 0), 0.1f);  // iron_helmet → iron_ingot
+    addSmelting(307, ItemStack(265, 1, 0), 0.1f);  // iron_chestplate → iron_ingot
+    addSmelting(308, ItemStack(265, 1, 0), 0.1f);  // iron_leggings → iron_ingot
+    addSmelting(309, ItemStack(265, 1, 0), 0.1f);  // iron_boots → iron_ingot
+
     std::cout << "[Smelting] Registered " << recipes_.size() << " smelting recipes\n";
 }
 

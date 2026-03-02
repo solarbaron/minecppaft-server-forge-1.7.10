@@ -445,6 +445,41 @@ public:
             }
         }
 
+        // ── Step 9.8: Clay deposit generation ──
+        // Java reference: BiomeDecorator/WorldGenClay — clay discs on river/lake bottoms
+        // Simplified: 1/3 chance per chunk, place clay below water
+        {
+            NoiseGeneratorImproved::RNG clayRng;
+            clayRng.setSeed(seed_ ^ (static_cast<int64_t>(chunkX) * 3141592653LL +
+                                      static_cast<int64_t>(chunkZ) * 2718281828LL));
+
+            if (clayRng.nextInt(3) == 0) {
+                int32_t cx = clayRng.nextInt(16);
+                int32_t cz = clayRng.nextInt(16);
+                // Find underwater surface
+                for (int32_t cy = 80; cy >= 2; --cy) {
+                    int32_t at = blocks[(cx * 16 + cz) * 256 + cy];
+                    int32_t below = blocks[(cx * 16 + cz) * 256 + cy - 1];
+                    if ((at == WATER || at == 8) && (below == DIRT || below == SAND || below == 13)) {
+                        // Place clay disc: radius 2
+                        int32_t radius = clayRng.nextInt(2) + 1; // 1-2
+                        for (int32_t dx = -radius; dx <= radius; ++dx) {
+                            for (int32_t dz = -radius; dz <= radius; ++dz) {
+                                if (dx * dx + dz * dz > radius * radius) continue;
+                                int32_t px = cx + dx, pz = cz + dz;
+                                if (px < 0 || px >= 16 || pz < 0 || pz >= 16) continue;
+                                int32_t b = blocks[(px * 16 + pz) * 256 + cy - 1];
+                                if (b == DIRT || b == SAND || b == 13) {
+                                    blocks[(px * 16 + pz) * 256 + cy - 1] = 82; // Clay block
+                                }
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+
         // ── Step 10: Fill chunk sections ──
         for (int x = 0; x < 16; ++x) {
             for (int z = 0; z < 16; ++z) {
