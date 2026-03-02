@@ -2143,6 +2143,31 @@ static float getMobMaxHealth(uint8_t mobType) {
     }
 }
 
+// Java: SharedMonsterAttributes.movementSpeed base values per entity type
+// These are blocks per tick at walking speed (Java: 0.1 ticks = 2 b/s base rate)
+static float getMobMovementSpeed(uint8_t mobType) {
+    switch (mobType) {
+        case 50: return 0.25f;  // Creeper
+        case 51: return 0.25f;  // Skeleton
+        case 52: return 0.30f;  // Spider
+        case 54: return 0.23f;  // Zombie
+        case 55: return 0.20f;  // Slime
+        case 56: return 0.00f;  // Ghast (flies, ranged only)
+        case 57: return 0.23f;  // Zombie Pigman
+        case 58: return 0.30f;  // Enderman
+        case 59: return 0.30f;  // Cave Spider
+        case 60: return 0.25f;  // Silverfish
+        case 61: return 0.23f;  // Blaze
+        case 62: return 0.20f;  // Magma Cube
+        case 66: return 0.25f;  // Witch
+        default: return 0.00f;  // Passive mobs don't chase
+    }
+}
+
+static bool isMobHostile(uint8_t mobType) {
+    return mobType >= 50 && mobType <= 66 && mobType != 56; // Ghast is ranged-only
+}
+
 int32_t MinecraftServer::summonMob(uint8_t mobType, double x, double y, double z) {
     int32_t eid = nextMobEntityId_.fetch_add(1, std::memory_order_relaxed);
     int64_t currentTick = tickCount_.load(std::memory_order_relaxed);
@@ -2154,6 +2179,9 @@ int32_t MinecraftServer::summonMob(uint8_t mobType, double x, double y, double z
     mob.health = getMobMaxHealth(mobType);
     mob.spawnTick = currentTick;
     mob.isDead = false;
+    mob.lastSentPosX = static_cast<int32_t>(std::floor(x * 32.0));
+    mob.lastSentPosY = static_cast<int32_t>(std::floor(y * 32.0));
+    mob.lastSentPosZ = static_cast<int32_t>(std::floor(z * 32.0));
     {
         std::lock_guard<std::mutex> lock(connectionsMutex_);
         for (auto& conn : connections_) {
@@ -2341,7 +2369,9 @@ void MinecraftServer::spawnNaturalMobs() {
     mob.health = getMobMaxHealth(mobType);
     mob.spawnTick = currentTick;
     mob.isDead = false;
-
+    mob.lastSentPosX = static_cast<int32_t>(std::floor(spawnX * 32.0));
+    mob.lastSentPosY = static_cast<int32_t>(std::floor(spawnY * 32.0));
+    mob.lastSentPosZ = static_cast<int32_t>(std::floor(spawnZ * 32.0));
     // Broadcast S0F SpawnMob to all players
     {
         std::lock_guard<std::mutex> lock(connectionsMutex_);
@@ -2401,6 +2431,94 @@ void MinecraftServer::tickMobs() {
             }
         }
 
+        // ─── Mob movement toward players ────────────────────────────
+        // Java: EntityCreature.updateEntityActionState() → path to target
+        // Simplified: direct movement toward nearest player within 16 blocks
+        for (auto& mob : mobEntities_) {
+            if (mob.isDead) continue;
+            float speed = getMobMovementSpeed(mob.mobType);
+            if (speed <= 0.0f) continue; // Non-moving mob
+
+            // Find nearest player within 16 blocks
+            PlayHandler* nearest = nullptr;
+            double nearestDistSq = 256.0; // 16 blocks squared
+            {
+                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                for (auto& conn : connections_) {
+                    if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                    auto handler = conn->getHandler();
+                    auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                    if (!ph || ph->isDead()) continue;
+                    if (ph->getGameMode() == 1 || ph->getGameMode() == 3) continue; // Skip creative/spectator
+
+                    double dx = ph->getPlayerX() - mob.posX;
+                    double dz = ph->getPlayerZ() - mob.posZ;
+                    double distSq = dx * dx + dz * dz;
+                    if (distSq < nearestDistSq) {
+                        nearestDistSq = distSq;
+                        nearest = ph;
+                    }
+                }
+            }
+
+            if (!nearest) continue;
+            if (nearestDistSq < 2.25) continue; // Already close enough (1.5 blocks)
+
+            // Move toward target
+            double dx = nearest->getPlayerX() - mob.posX;
+            double dz = nearest->getPlayerZ() - mob.posZ;
+            double dist = std::sqrt(dx * dx + dz * dz);
+
+            if (dist > 0.01) {
+                double moveX = (dx / dist) * speed;
+                double moveZ = (dz / dist) * speed;
+                mob.posX += moveX;
+                mob.posZ += moveZ;
+
+                // Update yaw to face target — Java: atan2(-dx, dz) * 180/PI
+                mob.yaw = static_cast<float>(std::atan2(-dx, dz) * 180.0 / M_PI);
+
+                // Gravity: find surface Y at new position
+                if (!worlds_.empty()) {
+                    auto* wld = worlds_[0].get();
+                    int bx = static_cast<int>(std::floor(mob.posX));
+                    int bz = static_cast<int>(std::floor(mob.posZ));
+                    int startY = static_cast<int>(mob.posY);
+
+                    // Look down for ground
+                    int groundY = startY;
+                    for (int y = startY; y > 0; --y) {
+                        Block* b = wld->getBlock(bx, y - 1, bz);
+                        if (b != nullptr) {
+                            groundY = y;
+                            break;
+                        }
+                        groundY = y - 1;
+                    }
+                    // Look up if mob is inside a block (can step 1 block up)
+                    if (groundY > startY + 1) groundY = startY; // Don't teleport up too far
+                    mob.posY = static_cast<double>(groundY);
+                }
+
+                // Broadcast S18 EntityTeleport to all players
+                {
+                    std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                    for (auto& conn : connections_) {
+                        if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                        auto handler = conn->getHandler();
+                        auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                        if (!ph) continue;
+                        ph->sendEntityTeleport(*conn, mob.entityId,
+                            mob.posX, mob.posY, mob.posZ, mob.yaw, mob.pitch);
+                    }
+                }
+
+                // Update tracking
+                mob.lastSentPosX = static_cast<int32_t>(std::floor(mob.posX * 32.0));
+                mob.lastSentPosY = static_cast<int32_t>(std::floor(mob.posY * 32.0));
+                mob.lastSentPosZ = static_cast<int32_t>(std::floor(mob.posZ * 32.0));
+            }
+        }
         // ─── Mob contact damage ─────────────────────────────────────
         // Java: EntityCreature.attackEntityAsMob() — deal damage to nearby players
         // Simplified: proximity-based melee attack, 20-tick cooldown

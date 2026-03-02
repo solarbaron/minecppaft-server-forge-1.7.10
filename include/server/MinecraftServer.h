@@ -612,6 +612,9 @@ private:
         int64_t spawnTick = 0;
         int64_t lastAttackTick = 0;  // Cooldown between attacks (20 ticks = 1s)
         bool isDead = false;
+        // Movement tracking — Java: EntityTrackerEntry last sent position
+        int32_t lastSentPosX = 0, lastSentPosY = 0, lastSentPosZ = 0;
+        int32_t ticksSinceLastTeleport = 0;
     };
     mutable std::mutex mobEntitiesMutex_;
     std::vector<SpawnedMob> mobEntities_;

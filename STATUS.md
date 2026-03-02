@@ -186,7 +186,8 @@
 - ✅ **Cake** (92) — eat slices meta 0-6, +2 food per slice
 - ✅ **Trapped Chest** (146) — opens like normal chest
 - ✅ **Daylight sensors** (151/178) — right-click toggles normal↔inverted mode
-- ❌ Pressure plates, trip wires
+- ✅ **Pressure plates** (70, 72, 147, 148) — meta 0x01 toggle + click sound on step/step-off
+- ❌ Trip wires
 
 ### Random Block Ticks
 - ✅ **Crop growth** — wheat (59), carrot (141), potato (142) meta 0→7
