@@ -470,3 +470,6 @@
 169. **Fire Aspect enchantment** — ✅ Done (ID 20: sets target on fire for level*80 ticks)
 170. **Feather Falling enchantment** — ✅ Done (ID 2: boots enchant reduces fall damage via protection formula *2.5)
 171. **Unbreaking enchantment** — ✅ Done (ID 34: 1/(level+1) chance to apply durability damage)
+172. **Silk Touch enchantment** — ✅ Done (ID 33: 20 block types drop themselves — ores, glass, ice, leaves, bookshelves, etc.)
+173. **Fortune enchantment** — ✅ Done (ID 35: ore drops multiplied by 1+random(0..fortune) for 7 ore types; gravel flint chance increased)
+174. **Sand/gravel gravity** — ✅ Done (blocks 12, 13 fall when support removed, cascading downward, broadcast to all clients)
