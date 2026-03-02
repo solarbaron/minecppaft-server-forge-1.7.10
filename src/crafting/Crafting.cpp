@@ -1104,6 +1104,117 @@ CraftingManager::CraftingManager() {
 
     // Armor stand — not in 1.7.10, skip
 
+    // ═══════════════════════════════════════════════════════════════════
+    // Slabs — 3 planks/stone → 6 slabs (Java: Block.registerBlocks slabs)
+    // Wood slabs: ID 126 meta 0-5, Stone slabs: ID 44 meta 0-7
+    // ═══════════════════════════════════════════════════════════════════
+
+    // Wood slabs (3 planks → 6 slabs for each wood type)
+    for (int32_t wt = 0; wt < 6; ++wt)
+        shaped13({I(5,1,wt), I(5,1,wt), I(5,1,wt)}, I(126,6,wt));
+
+    // Stone slab (3 stone → 6 stone slabs)  meta 0
+    shaped13({I(1,1,0), I(1,1,0), I(1,1,0)}, I(44,6,0));
+
+    // Sandstone slab  meta 1
+    shaped13({I(24,1,0), I(24,1,0), I(24,1,0)}, I(44,6,1));
+
+    // Cobblestone slab  meta 3
+    shaped13({I(4,1,0), I(4,1,0), I(4,1,0)}, I(44,6,3));
+
+    // Brick slab  meta 4
+    shaped13({I(45,1,0), I(45,1,0), I(45,1,0)}, I(44,6,4));
+
+    // Stone brick slab  meta 5
+    shaped13({I(98,1,0), I(98,1,0), I(98,1,0)}, I(44,6,5));
+
+    // Nether brick slab  meta 6
+    shaped13({I(112,1,0), I(112,1,0), I(112,1,0)}, I(44,6,6));
+
+    // Quartz slab  meta 7
+    shaped13({I(155,1,0), I(155,1,0), I(155,1,0)}, I(44,6,7));
+
+    // ═══════════════════════════════════════════════════════════════════
+    // Fences, Walls, Doors, and more misc items
+    // ═══════════════════════════════════════════════════════════════════
+
+    // Oak fence (4 planks + 2 sticks → 3 fences)  Block 85
+    shaped32({I(5,1,0),  I(280,1,0), I(5,1,0),
+              I(5,1,0),  I(280,1,0), I(5,1,0)}, I(85,3,0));
+
+    // Fence gate (2 planks + 4 sticks → fence gate)  Block 107
+    shaped32({I(280,1,0), I(5,1,0),  I(280,1,0),
+              I(280,1,0), I(5,1,0),  I(280,1,0)}, I(107,1,0));
+
+    // Cobblestone wall (6 cobblestone → 6 walls)  Block 139
+    shaped32({I(4,1,0), I(4,1,0), I(4,1,0),
+              I(4,1,0), I(4,1,0), I(4,1,0)}, I(139,6,0));
+
+    // Mossy cobblestone wall (6 mossy → 6 walls)  Block 139:1
+    shaped32({I(48,1,0), I(48,1,0), I(48,1,0),
+              I(48,1,0), I(48,1,0), I(48,1,0)}, I(139,6,1));
+
+    // Wooden door (6 planks → door)  Item 324
+    shaped32({I(5,1,W),  I(5,1,W),
+              I(5,1,W),  I(5,1,W),
+              I(5,1,W),  I(5,1,W)}, I(324,1,0));
+
+    // Iron door (6 iron → iron door)  Item 330
+    shaped32({I(265,1,0), I(265,1,0),
+              I(265,1,0), I(265,1,0),
+              I(265,1,0), I(265,1,0)}, I(330,1,0));
+
+    // Trapdoor (6 planks → 2 trapdoors)  Block 96
+    shaped32({I(5,1,W),  I(5,1,W),  I(5,1,W),
+              I(5,1,W),  I(5,1,W),  I(5,1,W)}, I(96,2,0));
+
+    // Sign (6 planks + stick → 3 signs)  Item 323
+    shaped3({I(5,1,W),  I(5,1,W),  I(5,1,W),
+             I(5,1,W),  I(5,1,W),  I(5,1,W),
+             N(),       I(280,1,0), N()}, I(323,3,0));
+
+    // Bucket (3 iron)  Item 325
+    shaped3({N(),       N(),       N(),
+             I(265,1,0), N(),       I(265,1,0),
+             N(),       I(265,1,0), N()}, I(325,1,0));
+
+    // Arrow (flint + stick + feather → 4 arrows)  Item 262
+    shaped3({N(),       I(318,1,0), N(),
+             N(),       I(280,1,0), N(),
+             N(),       I(288,1,0), N()}, I(262,4,0));
+
+    // Tripwire hook (iron + stick + plank → 2)  Block 131
+    shaped3({N(),       I(265,1,0), N(),
+             N(),       I(280,1,0), N(),
+             N(),       I(5,1,W),   N()}, I(131,2,0));
+
+    // String to wool (4 string → wool)  Block 35
+    shaped22({I(287,1,0), I(287,1,0),
+              I(287,1,0), I(287,1,0)}, I(35,1,0));
+
+    // Cauldron (7 iron)  Item 380
+    shaped3({I(265,1,0), N(),       I(265,1,0),
+             I(265,1,0), N(),       I(265,1,0),
+             I(265,1,0), I(265,1,0), I(265,1,0)}, I(380,1,0));
+
+    // Brick block (4 bricks → brick block)  Block 45
+    shaped22({I(336,1,0), I(336,1,0),
+              I(336,1,0), I(336,1,0)}, I(45,1,0));
+
+    // Quartz block (4 quartz → quartz block)  Block 155
+    shaped22({I(406,1,0), I(406,1,0),
+              I(406,1,0), I(406,1,0)}, I(155,1,0));
+
+    // Sticks (2 planks → 4 sticks)
+    shaped12({I(5,1,W), I(5,1,W)}, I(280,4,0));
+
+    // Planks (1 log → 4 planks) for each log type
+    for (int32_t lt = 0; lt < 4; ++lt)
+        addShapelessRecipe(I(5,4,lt), {I(17,1,lt)});
+    // Log2 types (acacia=0, dark_oak=1)
+    addShapelessRecipe(I(5,4,4), {I(162,1,0)}); // acacia log → acacia planks
+    addShapelessRecipe(I(5,4,5), {I(162,1,1)}); // dark oak log → dark oak planks
+
     // ─── Sort by recipe size (larger first) ─────────────────────────
     std::sort(recipes_.begin(), recipes_.end(),
         [](const std::unique_ptr<IRecipe>& a, const std::unique_ptr<IRecipe>& b) {
