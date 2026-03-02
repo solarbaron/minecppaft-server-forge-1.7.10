@@ -57,7 +57,7 @@
 
 ## 🔶 Partially Implemented (Headers + Stubs)
 
-### Commands (14 commands, chat→command bridge ✅)
+### Commands (15 commands, chat→command bridge ✅)
 | Command | Status |
 |---------|---------|
 | `/stop` | ✅ Working via chat |
@@ -74,6 +74,7 @@
 | `/kill` | ✅ Working — sets health to 0, triggers death |
 | `/weather` | ✅ Working — clear/rain/thunder + timer |
 | `/effect` | ✅ Working — potion effects with S1D/S1E |
+| `/xp` | ✅ Working — XP points/levels, S1F SetExperience |
 
 ### Entity System
 - **Entity base** — ID counter, UUID, position/rotation, bounding box
@@ -336,3 +337,4 @@
 79. **Hopper automation** — ✅ Done (HopperData 5 slots + 8-tick cooldown, pull from chest/hopper above, push to direction output)
 80. **Cactus growth** — ✅ Done (block 81 meta 0-15 counter, grows up when ≥15, max height 3)
 81. **Sugar cane growth** — ✅ Done (block 83 meta 0-15 counter, grows up when ≥15, max height 3)
+82. **/xp command** — ✅ Done (15th command, /xp <amount>[L] [player], points or levels via S1F)
