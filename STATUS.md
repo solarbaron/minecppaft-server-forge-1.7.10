@@ -57,7 +57,7 @@
 
 ## 🔶 Partially Implemented (Headers + Stubs)
 
-### Commands (24 commands, chat→command bridge ✅)
+### Commands (26 commands, chat→command bridge ✅)
 | Command | Status |
 |---------|---------|
 | `/stop` | ✅ Working via chat |
@@ -84,6 +84,8 @@
 | `/tell` | ✅ Working — private message to player |
 | `/ban` | ✅ Working — kick player + broadcast ban |
 | `/kick` | ✅ Working — disconnect with reason (S40) |
+| `/setblock` | ✅ Working — set block at xyz with meta |
+| `/fill` | ✅ Working — fill cuboid area (max 32768 blocks) |
 
 ### Entity System
 - **Entity base** — ID counter, UUID, position/rotation, bounding box
@@ -236,8 +238,8 @@
 - ~~**Terrain**~~ — ✅ OverworldGenerator with noise-based density + surface replacement
 - ~~**Caves**~~ — ✅ MapGenCaves worm carving integrated
 - ~~**Ores**~~ — ✅ All 11 vanilla ores (coal, iron, gold, diamond, redstone, lapis, emerald, dirt, gravel)
-- **Structures** — no villages, temples, strongholds, dungeons
-- ~~**Trees/vegetation**~~ — ✅ Oak tree generation via TreeGenerator (1/10 chance per chunk in plains)
+- **Structures** — ✅ Dungeons (cobblestone/mossy rooms with mob spawner); no villages, temples, strongholds
+- ~~**Trees/vegetation**~~ — ✅ Oak/birch/spruce tree generation + flowers, tallgrass, sugar cane decoration
 - **Nether/End** — dimensions declared but not generated
 
 ---
@@ -359,3 +361,9 @@
 92. **/tell command** — ✅ Done (22nd command, /tell <player> <message>, private whisper message in §d)
 93. **/ban command** — ✅ Done (23rd command, /ban <player> [reason], kick + broadcast ban message)
 94. **/kick command** — ✅ Done (24th command, /kick <player> [reason], S40 Disconnect packet with JSON reason)
+95. **Dungeon generation** — ✅ Done (8 attempts/chunk Y:2-63, cobblestone/mossy walls, mob spawner center, 1-5 opening validation)
+96. **Birch/spruce tree variants** — ✅ Done (1/3 chance each: oak meta 0, birch meta 2 minH=5, spruce meta 1 minH=6)
+97. **Flower/tallgrass/sugar cane decoration** — ✅ Done (4 flowers, 10 tallgrass, 1/4 sugar cane near water, 2-3 blocks tall)
+98. **Colored block metadata from item damage** — ✅ Done (wool, stained glass, stained clay, stained glass pane, carpet, hardened clay, sandstone, stone brick, planks — all use item damage as block metadata)
+99. **/setblock command** — ✅ Done (25th command, /setblock <x> <y> <z> <blockId> [meta] via setBlockInWorld)
+100. **/fill command** — ✅ Done (26th command, /fill <x1> <y1> <z1> <x2> <y2> <z2> <blockId> [meta], max 32768 blocks)
