@@ -2382,6 +2382,107 @@ void MinecraftServer::tickMobs() {
             }
         }
 
+        // ─── Mob contact damage ─────────────────────────────────────
+        // Java: EntityCreature.attackEntityAsMob() — deal damage to nearby players
+        // Simplified: proximity-based melee attack, 20-tick cooldown
+        auto getMobAttackDamage = [](uint8_t mobType) -> float {
+            switch (mobType) {
+                case 54: return 3.0f;   // Zombie — Java: 3.0 (Easy: 2, Normal: 3, Hard: 4)
+                case 51: return 2.0f;   // Skeleton (melee fallback) — arrows handled separately
+                case 50: return 0.0f;   // Creeper — doesn't melee, explodes
+                case 52: return 2.0f;   // Spider — Java: 2.0
+                case 55: return 3.0f;   // Slime — Java: size-based, simplified to 3
+                case 56: return 0.0f;   // Ghast — ranged only (fireballs)
+                case 57: return 5.0f;   // Zombie Pigman — Java: 5.0 (Normal)
+                case 58: return 7.0f;   // Enderman — Java: 7.0
+                case 59: return 2.0f;   // Cave Spider — Java: 2.0
+                case 60: return 1.0f;   // Silverfish — Java: 1.0
+                case 61: return 6.0f;   // Blaze — Java: 6.0 (melee)
+                case 62: return 3.0f;   // Magma Cube — Java: size-based, simplified
+                case 66: return 0.0f;   // Witch — uses splash potions, no melee
+                default: return 0.0f;
+            }
+        };
+
+        for (auto& mob : mobEntities_) {
+            if (mob.isDead) continue;
+            float atkDmg = getMobAttackDamage(mob.mobType);
+            if (atkDmg <= 0.0f) continue; // Non-melee mob
+
+            // Attack cooldown: 20 ticks (1 second)
+            if (currentTick - mob.lastAttackTick < 20) continue;
+
+            // Check proximity to all players
+            std::lock_guard<std::mutex> connLock(connectionsMutex_);
+            for (auto& conn : connections_) {
+                if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                auto handler = conn->getHandler();
+                auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                if (!ph || ph->isDead()) continue;
+                if (ph->getGameMode() == 1) continue; // Creative immune
+
+                double dx = ph->getPlayerX() - mob.posX;
+                double dy = ph->getPlayerY() - mob.posY;
+                double dz = ph->getPlayerZ() - mob.posZ;
+                double distSq = dx * dx + dy * dy + dz * dz;
+
+                if (distSq < 4.0) { // Within 2 blocks
+                    // Apply armor reduction
+                    float dmg = atkDmg;
+                    int32_t armorVal = ph->getTotalArmorValue();
+                    if (armorVal > 0) {
+                        dmg = dmg * static_cast<float>(25 - armorVal) / 25.0f;
+                    }
+                    // Protection enchantment reduction
+                    int32_t protMod = ph->getEnchantmentProtectionModifier();
+                    if (protMod > 0) {
+                        dmg = dmg * static_cast<float>(25 - protMod) / 25.0f;
+                    }
+                    if (dmg < 0.5f) dmg = 0.5f; // Minimum 0.5 damage
+
+                    ph->applyDamage(dmg);
+                    ph->sendUpdateHealth(*conn, ph->getHealth(), ph->getFood(), ph->getSaturation());
+                    ph->damageArmor(atkDmg);
+
+                    // Hurt animation + sound
+                    broadcastEntityEvent(ph->getEntityId(), 2);
+                    broadcastSound("game.player.hurt",
+                        ph->getPlayerX(), ph->getPlayerY(), ph->getPlayerZ(), 1.0f, 1.0f);
+
+                    // Knockback away from mob
+                    double dist = std::sqrt(distSq);
+                    if (dist > 0.01) {
+                        double kbX = (dx / dist) * 0.4;
+                        double kbZ = (dz / dist) * 0.4;
+                        ph->sendEntityVelocity(*conn, ph->getEntityId(), kbX, 0.4, kbZ);
+                    }
+
+                    // Death check
+                    if (ph->getHealth() <= 0.0f) {
+                        broadcastEntityEvent(ph->getEntityId(), 3);
+                        // Death messages per mob type
+                        const char* deathMsg = "was slain";
+                        switch (mob.mobType) {
+                            case 54: deathMsg = "was slain by Zombie"; break;
+                            case 51: deathMsg = "was shot by Skeleton"; break;
+                            case 52: deathMsg = "was slain by Spider"; break;
+                            case 58: deathMsg = "was slain by Enderman"; break;
+                            case 57: deathMsg = "was slain by Zombie Pigman"; break;
+                            case 61: deathMsg = "was slain by Blaze"; break;
+                            case 59: deathMsg = "was slain by Cave Spider"; break;
+                            case 60: deathMsg = "was slain by Silverfish"; break;
+                            case 62: deathMsg = "was slain by Magma Cube"; break;
+                            case 55: deathMsg = "was slain by Slime"; break;
+                        }
+                        broadcastChatMessage(ph->getPlayerName() + " " + deathMsg);
+                    }
+
+                    mob.lastAttackTick = currentTick;
+                    break; // One attack per tick
+                }
+            }
+        }
+
         // Remove dead
         mobEntities_.erase(
             std::remove_if(mobEntities_.begin(), mobEntities_.end(),

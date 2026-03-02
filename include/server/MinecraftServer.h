@@ -610,6 +610,7 @@ private:
         float yaw = 0, pitch = 0;
         float health = 20.0f;
         int64_t spawnTick = 0;
+        int64_t lastAttackTick = 0;  // Cooldown between attacks (20 ticks = 1s)
         bool isDead = false;
     };
     mutable std::mutex mobEntitiesMutex_;
