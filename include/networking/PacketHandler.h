@@ -885,6 +885,9 @@ private:
     int32_t airSupply_ = 300;     // Entity.air — ticks of air remaining (300 = 15 seconds)
     int32_t fireTicks_ = 0;       // Entity.fire — ticks remaining on fire (>0 = burning)
 
+    // Pressure plate tracking — deactivate when player steps off
+    int32_t pressurePlateX_ = INT_MIN, pressurePlateY_ = INT_MIN, pressurePlateZ_ = INT_MIN;
+
     // Game mode — Java: ItemInWorldManager.theGameType
     int32_t gameMode_ = 0;        // 0=Survival, 1=Creative, 2=Adventure, 3=Spectator
 

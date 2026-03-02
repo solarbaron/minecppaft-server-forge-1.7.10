@@ -6360,6 +6360,60 @@ void PlayHandler::tickFood(Connection& conn) {
         }
     }
 
+    // ─── Pressure plate detection ─────────────────────────────────
+    // Java: BlockPressurePlate.onEntityCollidedWithBlock / setStateIfMobInteractsWithPlate
+    // Stone plate (70): only players, Wooden (72): any entity
+    // Gold weighted (147), Iron weighted (148): signal strength by entity count
+    {
+        auto* world = server_.getWorlds().empty() ? nullptr : server_.getWorlds()[0].get();
+        if (world) {
+            int32_t plateX = static_cast<int32_t>(std::floor(playerX_));
+            int32_t plateY = static_cast<int32_t>(std::floor(playerY_));
+            int32_t plateZ = static_cast<int32_t>(std::floor(playerZ_));
+
+            Block* plateBlock = world->getBlock(plateX, plateY, plateZ);
+            int32_t plateBlockId = plateBlock ? Block::getIdFromBlock(plateBlock) : 0;
+
+            bool isOnPlate = (plateBlockId == 70 || plateBlockId == 72 ||
+                              plateBlockId == 147 || plateBlockId == 148);
+
+            if (isOnPlate) {
+                int32_t meta = world->getBlockMetadata(plateX, plateY, plateZ);
+                if ((meta & 0x01) == 0) {
+                    // Activate: set bit 0x01
+                    world->setBlockMetadata(plateX, plateY, plateZ, meta | 0x01);
+                    server_.broadcastBlockChange(plateX, plateY, plateZ, plateBlockId, meta | 0x01);
+                    server_.broadcastSound("random.click", plateX + 0.5, plateY + 0.5, plateZ + 0.5, 0.3f, 0.6f);
+                }
+                // Track current plate position
+                pressurePlateX_ = plateX;
+                pressurePlateY_ = plateY;
+                pressurePlateZ_ = plateZ;
+            } else {
+                // Check if we just stepped OFF a pressure plate
+                if (pressurePlateX_ != INT_MIN) {
+                    Block* prevPlate = world->getBlock(pressurePlateX_, pressurePlateY_, pressurePlateZ_);
+                    int32_t prevPlateId = prevPlate ? Block::getIdFromBlock(prevPlate) : 0;
+                    if (prevPlateId == 70 || prevPlateId == 72 ||
+                        prevPlateId == 147 || prevPlateId == 148) {
+                        int32_t meta = world->getBlockMetadata(pressurePlateX_, pressurePlateY_, pressurePlateZ_);
+                        if ((meta & 0x01) != 0) {
+                            // Deactivate: clear bit 0x01
+                            world->setBlockMetadata(pressurePlateX_, pressurePlateY_, pressurePlateZ_, meta & ~0x01);
+                            server_.broadcastBlockChange(pressurePlateX_, pressurePlateY_, pressurePlateZ_,
+                                                         prevPlateId, meta & ~0x01);
+                            server_.broadcastSound("random.click",
+                                pressurePlateX_ + 0.5, pressurePlateY_ + 0.5, pressurePlateZ_ + 0.5, 0.3f, 0.5f);
+                        }
+                    }
+                    pressurePlateX_ = INT_MIN;
+                    pressurePlateY_ = INT_MIN;
+                    pressurePlateZ_ = INT_MIN;
+                }
+            }
+        }
+    }
+
     // Get difficulty — WorldServer doesn't expose difficulty yet, default to Normal
     // Java: entityPlayer.worldObj.difficultySetting
     int32_t difficulty = 2; // Normal (TODO: expose difficulty on WorldServer)
