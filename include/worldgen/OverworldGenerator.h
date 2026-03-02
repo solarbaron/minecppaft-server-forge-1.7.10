@@ -605,6 +605,52 @@ public:
             }
         }
 
+        // ── Step 9.13: Lily pad generation (swamp-like) ──
+        // Java ref: BiomeDecorator.waterlilyPerChunk + WorldGenWaterlily
+        // 1/4 chance, 1-3 lilypads on water (block 111 on water source 9)
+        {
+            NoiseGeneratorImproved::RNG lilyRng;
+            lilyRng.setSeed(seed_ ^ (static_cast<int64_t>(chunkX) * 5318008LL +
+                                      static_cast<int64_t>(chunkZ) * 1337420LL));
+            if (lilyRng.nextInt(4) == 0) {
+                int32_t count = 1 + lilyRng.nextInt(3);
+                for (int32_t c = 0; c < count; ++c) {
+                    int32_t lx = lilyRng.nextInt(16);
+                    int32_t lz = lilyRng.nextInt(16);
+                    // Find water surface: scan down for water, place lily above
+                    for (int32_t ly = 70; ly >= 60; --ly) {
+                        int32_t blockAt = blocks[(lx * 16 + lz) * 256 + ly];
+                        int32_t blockAbove = (ly + 1 < 256) ?
+                            blocks[(lx * 16 + lz) * 256 + ly + 1] : 0;
+                        if ((blockAt == 9 || blockAt == 8) && blockAbove == 0) {
+                            blocks[(lx * 16 + lz) * 256 + ly + 1] = 111; // Lily pad
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── Step 9.14: Gravel beach generation ──
+        // Replace grass/dirt at water level edges with gravel/sand
+        {
+            for (int32_t bx = 0; bx < 16; ++bx) {
+                for (int32_t bz = 0; bz < 16; ++bz) {
+                    int32_t y62 = blocks[(bx * 16 + bz) * 256 + 62];
+                    int32_t y63 = blocks[(bx * 16 + bz) * 256 + 63];
+                    // If at Y=62 water, and Y=63 is grass/dirt → sand beach
+                    if ((y62 == 8 || y62 == 9) && (y63 == 2 || y63 == 3)) {
+                        blocks[(bx * 16 + bz) * 256 + 63] = SAND;
+                        // Also replace Y=62 dirt with sand if below water
+                        if (blocks[(bx * 16 + bz) * 256 + 61] == 3 ||
+                            blocks[(bx * 16 + bz) * 256 + 61] == 2) {
+                            blocks[(bx * 16 + bz) * 256 + 61] = SAND;
+                        }
+                    }
+                }
+            }
+        }
+
         // ── Step 10: Fill chunk sections ──
         for (int x = 0; x < 16; ++x) {
             for (int z = 0; z < 16; ++z) {
