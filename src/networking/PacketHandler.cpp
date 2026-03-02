@@ -3127,6 +3127,35 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
                 w->setBlockMetadata(bx, by, bz, newMeta);
                 server_.broadcastBlockChange(bx, by, bz, clickedBlockId, newMeta);
             }
+            // Sapling (6) — set stage bit to trigger tree growth on next random tick
+            // Java: BlockSapling.func_149879_c() — grows tree immediately
+            if (clickedBlockId == 6) {
+                int meta = w->getBlockMetadata(bx, by, bz);
+                int treeType = meta & 0x07; // tree type in lower 3 bits
+                // Set stage bit (0x08) to ready tree growth
+                w->setBlockMetadata(bx, by, bz, treeType | 0x08);
+                server_.broadcastBlockChange(bx, by, bz, 6, treeType | 0x08);
+            }
+            // Melon stem (104) / Pumpkin stem (105) — advance to max growth
+            if (clickedBlockId == 104 || clickedBlockId == 105) {
+                int meta = w->getBlockMetadata(bx, by, bz);
+                std::mt19937 rngStem(std::random_device{}());
+                int growth = std::uniform_int_distribution<>(2, 5)(rngStem);
+                int newMeta = std::min(meta + growth, 7);
+                w->setBlockMetadata(bx, by, bz, newMeta);
+                server_.broadcastBlockChange(bx, by, bz, clickedBlockId, newMeta);
+            }
+            // Cocoa pod (127) — advance growth stage
+            if (clickedBlockId == 127) {
+                int meta = w->getBlockMetadata(bx, by, bz);
+                int stage = (meta >> 2) & 0x03;
+                if (stage < 2) {
+                    int facing = meta & 0x03;
+                    int newMeta = facing | ((stage + 1) << 2);
+                    w->setBlockMetadata(bx, by, bz, newMeta);
+                    server_.broadcastBlockChange(bx, by, bz, 127, newMeta);
+                }
+            }
         }
         return;
     }
