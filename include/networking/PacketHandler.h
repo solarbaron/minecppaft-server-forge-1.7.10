@@ -656,19 +656,45 @@ public:
     }
 
     // Java: EnchantmentHelper.getEnchantmentModifierDamage() — sum protection enchant values
-    // Protection (ID 0): floor((6 + level²) / 3.0 * 0.75) per piece, capped at 20 total
-    // Java: EnchantmentProtection.calcModifierDamage with protectionType=0
-    int32_t getEnchantmentProtectionModifier() const {
+    // Protection (ID 0): applies to ALL damage types — floor((6 + level²) / 3.0 * 0.75)
+    // Fire Protection (ID 1): applies to fire damage — floor((6 + level²) / 3.0 * 1.25)
+    // Blast Protection (ID 3): applies to explosion — floor((6 + level²) / 3.0 * 1.5)
+    // Projectile Protection (ID 4): applies to projectile — floor((6 + level²) / 3.0 * 1.5)
+    // damageType: 0=generic/melee, 1=fire, 3=explosion, 4=projectile
+    int32_t getEnchantmentProtectionModifier(int32_t damageType = 0) const {
         int32_t totalMod = 0;
         for (int16_t slot = 1; slot <= 4; ++slot) {
             auto armor = getArmorItem(slot);
             if (!armor || !armor->hasEnchantments()) continue;
-            // Protection (0), Fire Protection (1), Blast Protection (3), Projectile Protection (4)
-            // Simplified: only count Protection (0) for generic melee
+            // Protection (0) — always contributes (type factor 0.75)
             int16_t protLevel = armor->getEnchantmentLevel(0);
             if (protLevel > 0) {
                 float f = static_cast<float>(6 + protLevel * protLevel) / 3.0f;
                 totalMod += static_cast<int32_t>(f * 0.75f);
+            }
+            // Fire Protection (1) — fire damage only (type factor 1.25)
+            if (damageType == 1) {
+                int16_t fpLevel = armor->getEnchantmentLevel(1);
+                if (fpLevel > 0) {
+                    float f = static_cast<float>(6 + fpLevel * fpLevel) / 3.0f;
+                    totalMod += static_cast<int32_t>(f * 1.25f);
+                }
+            }
+            // Blast Protection (3) — explosion damage only (type factor 1.5)
+            if (damageType == 3) {
+                int16_t bpLevel = armor->getEnchantmentLevel(3);
+                if (bpLevel > 0) {
+                    float f = static_cast<float>(6 + bpLevel * bpLevel) / 3.0f;
+                    totalMod += static_cast<int32_t>(f * 1.5f);
+                }
+            }
+            // Projectile Protection (4) — projectile damage only (type factor 1.5)
+            if (damageType == 4) {
+                int16_t ppLevel = armor->getEnchantmentLevel(4);
+                if (ppLevel > 0) {
+                    float f = static_cast<float>(6 + ppLevel * ppLevel) / 3.0f;
+                    totalMod += static_cast<int32_t>(f * 1.5f);
+                }
             }
         }
         // Java: capped at 20 (EnchantmentHelper)
