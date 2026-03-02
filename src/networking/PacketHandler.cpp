@@ -2392,6 +2392,32 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
         return;
     }
 
+    // Trapped Chest (block ID 146) — Java: BlockChest.onBlockActivated()
+    // Functions same as chest for opening; redstone output on open (not implemented yet)
+    if (clickedBlockId == 146 && !isSneaking_) {
+        openChest(conn, blockX, static_cast<int32_t>(blockY), blockZ);
+        return;
+    }
+
+    // Daylight Sensor (block ID 151) — Java: BlockDaylightDetector.onBlockActivated()
+    // Toggle between normal (151) and inverted (178) daylight sensor
+    if (clickedBlockId == 151 && !isSneaking_) {
+        int32_t by = static_cast<int32_t>(blockY);
+        int meta = world->getBlockMetadata(blockX, by, blockZ);
+        world->setBlock(blockX, by, blockZ, Block::getBlockById(178));
+        world->setBlockMetadata(blockX, by, blockZ, meta);
+        server_.broadcastBlockChange(blockX, by, blockZ, 178, meta);
+        return;
+    }
+    if (clickedBlockId == 178 && !isSneaking_) {
+        int32_t by = static_cast<int32_t>(blockY);
+        int meta = world->getBlockMetadata(blockX, by, blockZ);
+        world->setBlock(blockX, by, blockZ, Block::getBlockById(151));
+        world->setBlockMetadata(blockX, by, blockZ, meta);
+        server_.broadcastBlockChange(blockX, by, blockZ, 151, meta);
+        return;
+    }
+
     // Furnace (block ID 61=furnace, 62=lit_furnace) — Java: BlockFurnace.onBlockActivated()
     if ((clickedBlockId == 61 || clickedBlockId == 62) && !isSneaking_) {
         openFurnace(conn, blockX, static_cast<int32_t>(blockY), blockZ);
