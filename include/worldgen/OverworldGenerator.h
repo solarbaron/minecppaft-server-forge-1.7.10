@@ -142,6 +142,75 @@ public:
             OreDistribution::generateChunkOres(chunkX, chunkZ, oreRng, getBlock, setBlock);
         }
 
+        // ── Step 8.5: Dungeon generation ──
+        // Java reference: net.minecraft.world.gen.feature.WorldGenDungeons
+        // 8 attempts per chunk at random positions Y:2-64
+        {
+            NoiseGeneratorImproved::RNG dungeonRng;
+            dungeonRng.setSeed(seed_ ^ (static_cast<int64_t>(chunkX) * 341873128712LL +
+                                         static_cast<int64_t>(chunkZ) * 132897987541LL + 777));
+
+            for (int32_t attempt = 0; attempt < 8; ++attempt) {
+                int32_t dx = dungeonRng.nextInt(16);
+                int32_t dy = dungeonRng.nextInt(62) + 2;  // Y: 2-63
+                int32_t dz = dungeonRng.nextInt(16);
+
+                int32_t roomHalfX = dungeonRng.nextInt(2) + 2; // 2-3
+                int32_t roomHalfZ = dungeonRng.nextInt(2) + 2; // 2-3
+                int32_t roomHeight = 3;
+
+                // Check: room bounds within chunk, enough solid walls + 1-5 openings
+                // Simplified: only generate if center is in stone and below surface
+                if (dx - roomHalfX - 1 < 0 || dx + roomHalfX + 1 > 15 ||
+                    dz - roomHalfZ - 1 < 0 || dz + roomHalfZ + 1 > 15 ||
+                    dy + roomHeight + 1 > 255) continue;
+
+                // Count openings (walls at edge that have air)
+                int32_t openings = 0;
+                bool floorSolid = true;
+                for (int32_t wx = dx - roomHalfX - 1; wx <= dx + roomHalfX + 1; ++wx) {
+                    for (int32_t wy = dy - 1; wy <= dy + roomHeight + 1; ++wy) {
+                        for (int32_t wz = dz - roomHalfZ - 1; wz <= dz + roomHalfZ + 1; ++wz) {
+                            int32_t bid = blocks[(wx * 16 + wz) * 256 + wy];
+                            if (wy == dy - 1 && bid == 0) floorSolid = false;
+                            if (wx == dx - roomHalfX - 1 || wx == dx + roomHalfX + 1 ||
+                                wz == dz - roomHalfZ - 1 || wz == dz + roomHalfZ + 1) {
+                                if (wy == dy && bid == 0) {
+                                    int32_t above = blocks[(wx * 16 + wz) * 256 + wy + 1];
+                                    if (above == 0) ++openings;
+                                }
+                            }
+                        }
+                    }
+                }
+                if (!floorSolid || openings < 1 || openings > 5) continue;
+
+                // Carve room: walls cobblestone/mossy, interior air
+                for (int32_t wx = dx - roomHalfX - 1; wx <= dx + roomHalfX + 1; ++wx) {
+                    for (int32_t wy = dy + roomHeight; wy >= dy - 1; --wy) {
+                        for (int32_t wz = dz - roomHalfZ - 1; wz <= dz + roomHalfZ + 1; ++wz) {
+                            bool isWall = (wx == dx - roomHalfX - 1 || wy == dy - 1 ||
+                                          wz == dz - roomHalfZ - 1 || wx == dx + roomHalfX + 1 ||
+                                          wy == dy + roomHeight + 1 || wz == dz + roomHalfZ + 1);
+                            if (isWall) {
+                                int32_t cur = blocks[(wx * 16 + wz) * 256 + wy];
+                                if (cur == 0) continue; // Don't fill air walls
+                                if (wy == dy - 1 && dungeonRng.nextInt(4) != 0) {
+                                    blocks[(wx * 16 + wz) * 256 + wy] = MOSSY_COBBLESTONE;
+                                } else {
+                                    blocks[(wx * 16 + wz) * 256 + wy] = COBBLESTONE;
+                                }
+                            } else {
+                                blocks[(wx * 16 + wz) * 256 + wy] = 0; // Air interior
+                            }
+                        }
+                    }
+                }
+                // Place mob spawner at center (block 52)
+                blocks[(dx * 16 + dz) * 256 + dy] = MOB_SPAWNER;
+            }
+        }
+
         // ── Step 9: Tree generation ──
         // Java reference: BiomeDecorator — plains has treesPerChunk = -1
         // meaning 0 trees + 1/10 chance of an extra tree
@@ -175,12 +244,27 @@ public:
                     }
                 }
 
+                // Tree type selection: 1/3 oak, 1/3 birch, 1/3 spruce
+                int32_t treeType = treeRng.nextInt(3);
+                int32_t minHeight = 4;
+                int32_t metaWood = 0;
+                int32_t metaLeaves = 0;
+                if (treeType == 1) {
+                    metaWood = 2;    // Birch log (meta 2)
+                    metaLeaves = 2;  // Birch leaves (meta 2)
+                    minHeight = 5;
+                } else if (treeType == 2) {
+                    metaWood = 1;    // Spruce log (meta 1)
+                    metaLeaves = 1;  // Spruce leaves (meta 1)
+                    minHeight = 6;
+                }
+
                 auto placements = TreeGenerator::generateTree(
                     tx, ty, tz,
-                    4,     // minTreeHeight (oak)
-                    0,     // metaWood (oak)
-                    0,     // metaLeaves (oak)
-                    false, // no vines (standard oak)
+                    minHeight,
+                    metaWood,
+                    metaLeaves,
+                    false, // no vines
                     treeRng,
                     getBlockForTree,
                     isReplaceable
@@ -263,6 +347,9 @@ private:
     static constexpr int32_t SANDSTONE = 24;
     static constexpr int32_t STONE = 1;
     static constexpr int32_t WATER = 9;
+    static constexpr int32_t COBBLESTONE = 4;
+    static constexpr int32_t MOSSY_COBBLESTONE = 48;
+    static constexpr int32_t MOB_SPAWNER = 52;
 
     // Java: replaceBlocksForBiome — replace stone surface with grass/dirt/sand
     void replaceBlocksForBiome(int32_t chunkX, int32_t chunkZ,
