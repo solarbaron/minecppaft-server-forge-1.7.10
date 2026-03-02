@@ -155,6 +155,11 @@
 - ✅ **Farmland hydration** — 9×9 water check, decay without water
 - ✅ **Melon/pumpkin stems** — grow, then place fruit adjacent
 - ✅ **Leaf decay** — natural leaves without logs (4-block manhattan) decay
+- ✅ **Sand/gravel gravity** — blocks 12/13 fall through air/liquids
+- ✅ **Water/lava flow** — flow simulation, infinite water source, lava+water interaction
+- ✅ **Fire spread** — fire burns 25+ flammable block types, eternal on netherrack
+- ✅ **Ice melting** — ice melts to water, mushroom spread
+- ✅ **Vine/nether wart/cocoa growth** — vine grows down, nether wart 4 stages, cocoa 3 stages
 
 ### Biomes & World Gen
 - **BiomeRegistry** — 355 lines, biome types registered
@@ -323,3 +328,6 @@
 73. **Fire spread** — ✅ Done (block 51 burns 25+ flammable IDs, meta age, eternal on netherrack 87, burns out without fuel)
 74. **Ice melting** — ✅ Done (block 79→flowing water 8, ~1/8 probability per random tick)
 75. **Mushroom spread** — ✅ Done (blocks 39/40 spread to adjacent air on opaque blocks, 1/25 chance)
+76. **Vine growth** — ✅ Done (block 106 grows downward through air, 1/4 chance, preserves direction meta)
+77. **Nether wart growth** — ✅ Done (block 115 meta 0→1→2→3 growth stages, 1/10 chance per tick)
+78. **Cocoa bean growth** — ✅ Done (block 127 age in bits 2-3, 0→1→2, 1/5 chance per tick)
