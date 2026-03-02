@@ -1594,7 +1594,34 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
 
             // Hurt animation
             broadcastEntityEvent(targetEntityId, 2);
-            broadcastSound("game.hostile.hurt", mob.posX, mob.posY, mob.posZ, 1.0f, 1.0f);
+
+            // ─── Mob-specific hurt sounds ─────────────────────────────
+            // Java: EntityLiving.attackEntityFrom() → getHurtSound()
+            {
+                const char* hurtSound = "game.hostile.hurt";
+                switch (mob.mobType) {
+                    case 50: hurtSound = "mob.creeper.say"; break;
+                    case 51: hurtSound = "mob.skeleton.hurt"; break;
+                    case 52: hurtSound = "mob.spider.say"; break;
+                    case 54: hurtSound = "mob.zombie.hurt"; break;
+                    case 55: hurtSound = "mob.slime.small"; break;
+                    case 56: hurtSound = "mob.ghast.scream"; break;
+                    case 57: hurtSound = "mob.zombiepig.zpighurt"; break;
+                    case 58: hurtSound = "mob.endermen.hit"; break;
+                    case 59: hurtSound = "mob.spider.say"; break;
+                    case 60: hurtSound = "mob.silverfish.hit"; break;
+                    case 61: hurtSound = "mob.blaze.hit"; break;
+                    case 62: hurtSound = "mob.magmacube.small"; break;
+                    case 66: hurtSound = "mob.witch.hurt"; break;
+                    case 92: hurtSound = "mob.cow.hurt"; break;
+                    case 90: hurtSound = "mob.pig.say"; break;
+                    case 91: hurtSound = "mob.sheep.say"; break;
+                    case 93: hurtSound = "mob.chicken.hurt"; break;
+                    case 99: hurtSound = "mob.irongolem.hit"; break;
+                    default: break;
+                }
+                broadcastSound(hurtSound, mob.posX, mob.posY, mob.posZ, 1.0f, 1.0f);
+            }
 
             // ─── Enderman teleport on hit ────────────────────────────
             // Java: EntityEnderman.attackEntityFrom() → teleportRandomly()
@@ -3327,6 +3354,11 @@ void MinecraftServer::tickMobs() {
                     ph->sendUpdateHealth(*conn, ph->getHealth(), ph->getFood(), ph->getSaturation());
                     ph->damageArmor(atkDmg);
 
+                    // ─── Cave Spider poison ─────────────────────────────
+                    // Java: EntityCaveSpider.attackEntity() — 7s Poison on Normal
+                    if (mob.mobType == 59) {
+                        applyPlayerPotionEffect(ph->getPlayerName(), 19, 140, 0); // Poison, 7s, lvl 1
+                    }
                     // Hurt animation + sound
                     broadcastEntityEvent(ph->getEntityId(), 2);
                     broadcastSound("game.player.hurt",
