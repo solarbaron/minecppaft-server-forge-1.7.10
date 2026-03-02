@@ -2483,6 +2483,82 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
                 server_.broadcastSound("random.bow", playerX_, playerY_, playerZ_, 0.5f, 0.4f);
                 std::cout << "[EyeOfEnder] " << playerName_ << " used Eye of Ender\n";
             }
+
+            // ─── Milk bucket — Java: ItemBucketMilk.onItemUseFinish ──
+            // Clears all active potion effects, replaces with empty bucket in survival
+            if (heldItemId == 335) {
+                clearPotionEffects(conn);
+                if (gameMode_ != 1) {
+                    ItemStack emptyBucket(325, 1, 0);
+                    inventory_.setInventorySlotContents(currentSlot_, emptyBucket);
+                    int16_t containerSlot = static_cast<int16_t>(36 + currentSlot_);
+                    sendSetSlot(conn, 0, containerSlot, inventory_.getStackInSlot(currentSlot_));
+                }
+                server_.broadcastSound("random.drink", playerX_, playerY_, playerZ_, 0.5f, 1.0f);
+                std::cout << "[Milk] " << playerName_ << " drank milk (effects cleared)\n";
+            }
+
+            // ─── Potion drinking — Java: ItemPotion.onItemRightClick + onItemUseFinish ──
+            // Non-splash potions (damage & 0x4000 == 0): apply effects, return glass bottle
+            // Splash potions (damage & 0x4000 != 0): throwable (handled like throwables above)
+            if (heldItemId == 373) {
+                auto potionHeld = inventory_.getCurrentItem();
+                int32_t potionDamage = potionHeld.has_value() ? potionHeld->getDamage() : 0;
+                bool isSplash = (potionDamage & 0x4000) != 0;
+
+                if (isSplash) {
+                    // Splash potion — consume + throw sound (projectile entity TODO)
+                    if (gameMode_ != 1) {
+                        inventory_.setInventorySlotContents(currentSlot_, std::nullopt);
+                        int16_t containerSlot = static_cast<int16_t>(36 + currentSlot_);
+                        sendSetSlot(conn, 0, containerSlot, inventory_.getStackInSlot(currentSlot_));
+                    }
+                    float pitch = 0.4f / (static_cast<float>(rand() % 1000) / 1000.0f * 0.4f + 0.8f);
+                    server_.broadcastSound("random.bow", playerX_, playerY_, playerZ_, 0.5f, pitch);
+                    std::cout << "[Potion] " << playerName_ << " threw splash potion dmg=" << potionDamage << "\n";
+                } else {
+                    // Drinkable potion — apply effects based on damage value
+                    // Java: PotionHelper.getPotionEffects maps damage to effect list
+                    // Simplified lookup for common vanilla potions
+                    struct PotionRecipe { int32_t effectId; int32_t duration; int32_t amplifier; };
+                    std::vector<PotionRecipe> effects;
+                    int baseDamage = potionDamage & 0x3F; // lower 6 bits for base effect
+                    bool extended = (potionDamage & 0x40) != 0;  // bit 6 = extended
+                    bool amplified = (potionDamage & 0x20) != 0; // bit 5 = amplified (level II)
+                    int amp = amplified ? 1 : 0;
+                    int dur = extended ? 9600 : (amplified ? 1800 : 3600); // 8min / 1.5min / 3min
+
+                    switch (baseDamage) {
+                        case 1:  effects.push_back({10, dur, amp}); break; // Regeneration
+                        case 2:  effects.push_back({1, dur, amp}); break;  // Swiftness (Speed)
+                        case 3:  effects.push_back({11, dur, amp}); break; // Fire Resistance
+                        case 4:  effects.push_back({18, dur, amp}); break; // Poison
+                        case 5:  effects.push_back({6, 1, 0}); break;      // Instant Health
+                        case 6:  effects.push_back({8, dur, amp}); break;  // Night Vision
+                        case 8:  effects.push_back({5, dur, amp}); break;  // Strength
+                        case 9:  effects.push_back({2, dur, amp}); break;  // Slowness
+                        case 10: effects.push_back({3, dur, amp}); break;  // Leaping (Jump Boost)
+                        case 12: effects.push_back({7, 1, 0}); break;      // Instant Damage
+                        case 13: effects.push_back({13, dur, amp}); break; // Water Breathing
+                        case 14: effects.push_back({14, dur, amp}); break; // Invisibility
+                        default: break; // Unknown potion: water bottle or unrecognized
+                    }
+
+                    for (auto& eff : effects) {
+                        addPotionEffect(conn, eff.effectId, eff.duration, eff.amplifier);
+                    }
+
+                    // Consume potion and return glass bottle
+                    if (gameMode_ != 1) {
+                        ItemStack glassBottle(374, 1, 0); // glass bottle
+                        inventory_.setInventorySlotContents(currentSlot_, glassBottle);
+                        int16_t containerSlot = static_cast<int16_t>(36 + currentSlot_);
+                        sendSetSlot(conn, 0, containerSlot, inventory_.getStackInSlot(currentSlot_));
+                    }
+                    server_.broadcastSound("random.drink", playerX_, playerY_, playerZ_, 0.5f, 1.0f);
+                    std::cout << "[Potion] " << playerName_ << " drank potion dmg=" << potionDamage << "\n";
+                }
+            }
         }
         return;
     }
@@ -3265,6 +3341,46 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
     // Java: ItemShears.onBlockDestroyed() — shears on leaves give the leaf block
     // (This is handled differently in vanilla but we intercept here for right-click shearing)
 
+    // ─── Fire charge (385) — place fire on adjacent block face ────────
+    // Java: ItemFireball.onItemUse() — same as flint-and-steel but consumed
+    if (heldForUse && heldForUse->getItemId() == 385) {
+        int32_t px = blockX, py = static_cast<int32_t>(blockY), pz = blockZ;
+        switch (direction) {
+            case 0: --py; break; case 1: ++py; break;
+            case 2: --pz; break; case 3: ++pz; break;
+            case 4: --px; break; case 5: ++px; break;
+            default: break;
+        }
+        if (py >= 0 && py < 256 && !server_.getWorlds().empty()) {
+            auto& w = server_.getWorlds()[0];
+            Block* target = w->getBlock(px, py, pz);
+            int targetId = target ? Block::getIdFromBlock(target) : 0;
+            if (targetId == 0) {
+                w->setBlock(px, py, pz, Block::getBlockById(51)); // Fire
+                w->setBlockMetadata(px, py, pz, 0);
+                server_.broadcastBlockChange(px, py, pz, 51, 0);
+                server_.broadcastSound("fire.ignite",
+                    static_cast<double>(px) + 0.5, static_cast<double>(py) + 0.5,
+                    static_cast<double>(pz) + 0.5, 1.0f, 0.8f);
+                // Consume fire charge in survival
+                if (gameMode_ != 1) {
+                    auto fc = inventory_.getCurrentItem();
+                    if (fc.has_value() && !fc->isEmpty()) {
+                        int32_t rem = fc->getStackSize() - 1;
+                        if (rem <= 0) {
+                            inventory_.setInventorySlotContents(currentSlot_, std::nullopt);
+                        } else {
+                            ItemStack updated(385, rem, 0);
+                            inventory_.setInventorySlotContents(currentSlot_, updated);
+                        }
+                        sendWindowItems(conn);
+                    }
+                }
+            }
+        }
+        return;
+    }
+
     // ─── Bucket interactions ──────────────────────────────────────────
     // Java: ItemBucket.onItemRightClick → tryPlaceContainedLiquid / ItemBucket → tryPickup
 
@@ -3409,6 +3525,44 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
                     server_.broadcastBlockChange(bx, by, bz, 127, newMeta);
                 }
             }
+        }
+        return;
+    }
+
+    // ─── Spawn egg (383) — Java: ItemMonsterPlacer.onItemUse() ────────
+    // Right-click block face to spawn mob from egg's damage value (entity type ID)
+    if (heldItem && heldItem->getItemId() == 383) {
+        int32_t mobType = heldItem->getDamage();
+        if (mobType > 0) {
+            // Calculate spawn position on the face of the clicked block
+            int32_t sx = blockX, sy = static_cast<int32_t>(blockY), sz = blockZ;
+            switch (direction) {
+                case 0: --sy; break; case 1: ++sy; break;
+                case 2: --sz; break; case 3: ++sz; break;
+                case 4: --sx; break; case 5: ++sx; break;
+                default: break;
+            }
+            double spawnX = static_cast<double>(sx) + 0.5;
+            double spawnY = static_cast<double>(sy);
+            double spawnZ = static_cast<double>(sz) + 0.5;
+            // Java: direction==1 and fencelike blocks add 0.5 offset (simplified)
+            server_.summonMob(static_cast<uint8_t>(mobType), spawnX, spawnY, spawnZ);
+            // Consume spawn egg in survival
+            if (gameMode_ != 1) {
+                auto eggHeld = inventory_.getCurrentItem();
+                if (eggHeld.has_value() && !eggHeld->isEmpty()) {
+                    int32_t rem = eggHeld->getStackSize() - 1;
+                    if (rem <= 0) {
+                        inventory_.setInventorySlotContents(currentSlot_, std::nullopt);
+                    } else {
+                        ItemStack updated(383, rem, heldItem->getDamage());
+                        inventory_.setInventorySlotContents(currentSlot_, updated);
+                    }
+                    sendWindowItems(conn);
+                }
+            }
+            std::cout << "[SpawnEgg] " << playerName_ << " spawned entity type " << mobType
+                      << " at " << sx << "," << sy << "," << sz << "\n";
         }
         return;
     }
