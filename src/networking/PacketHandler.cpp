@@ -1568,6 +1568,17 @@ void PlayHandler::handlePlayerPosition(const uint8_t* data, size_t length, Conne
         // Landed! Apply fall damage — Java: damage = ceil(fallDistance - 3.0)
         if (gameMode_ != 1 && !dead_) { // No fall damage in creative
             int damage = static_cast<int>(std::ceil(fallDistance_ - 3.0f));
+            // ─── Feather Falling enchantment (ID 2 on boots) ───
+            // Java: EnchantmentProtection protectionType=2 → floor((6+level²)/3.0 * 2.5)
+            auto boots = inventory_.getStackInSlot(36); // boots = armor slot 0
+            if (boots && boots->hasEnchantments()) {
+                int16_t ffLevel = boots->getEnchantmentLevel(2);
+                if (ffLevel > 0) {
+                    int32_t mod = static_cast<int32_t>((6.0f + ffLevel * ffLevel) / 3.0f * 2.5f);
+                    if (mod > 25) mod = 25;
+                    damage = static_cast<int>(damage * (25 - mod) / 25.0f);
+                }
+            }
             if (damage > 0) {
                 health_ -= static_cast<float>(damage);
                 if (health_ < 0.0f) health_ = 0.0f;
@@ -1636,6 +1647,16 @@ void PlayHandler::handlePlayerPosAndLook(const uint8_t* data, size_t length, Con
     if (playerOnGround_ && fallDistance_ > 0.0f) {
         if (gameMode_ != 1 && !dead_) {
             int damage = static_cast<int>(std::ceil(fallDistance_ - 3.0f));
+            // Feather Falling (same logic as handlePlayerPosition)
+            auto boots2 = inventory_.getStackInSlot(36);
+            if (boots2 && boots2->hasEnchantments()) {
+                int16_t ffLevel2 = boots2->getEnchantmentLevel(2);
+                if (ffLevel2 > 0) {
+                    int32_t mod2 = static_cast<int32_t>((6.0f + ffLevel2 * ffLevel2) / 3.0f * 2.5f);
+                    if (mod2 > 25) mod2 = 25;
+                    damage = static_cast<int>(damage * (25 - mod2) / 25.0f);
+                }
+            }
             if (damage > 0) {
                 health_ -= static_cast<float>(damage);
                 if (health_ < 0.0f) health_ = 0.0f;

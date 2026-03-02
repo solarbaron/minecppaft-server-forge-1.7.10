@@ -451,6 +451,9 @@ public:
     bool isSneaking() const { return isSneaking_; }
     bool isSprinting() const { return isSprinting_; }
 
+    // Java: Entity.setFire(int seconds) — sets fire ticks
+    void setOnFire(int32_t ticks) { fireTicks_ = ticks; }
+
     /**
      * Tick the food/hunger system once per server tick.
      * Java reference: EntityPlayer.onUpdate() → FoodStats.onUpdate()
@@ -724,6 +727,12 @@ public:
         if (!held) return;
         int32_t maxDur = getMaxDurability(held->getItemId());
         if (maxDur <= 0) return; // Not damageable
+        // Java: Unbreaking (ID 34) — 1/(level+1) chance to actually apply damage
+        // ItemStack.attemptDamageItem() → if random < 1/(unbreaking+1) then apply
+        int16_t unbreaking = held->getEnchantmentLevel(34);
+        if (unbreaking > 0) {
+            if (rand() % (unbreaking + 1) != 0) return; // Survived durability check
+        }
         int32_t newDamage = held->getDamage() + amount;
         if (newDamage > maxDur) {
             // Item breaks — remove from hotbar

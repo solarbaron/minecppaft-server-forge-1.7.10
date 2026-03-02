@@ -1594,8 +1594,32 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
     double kbY = 0.4;
     double kbZ = dz * 0.4;
 
+    // ─── Knockback enchantment (ID 19) ──────────────────────────────
+    // Java: EnchantmentHelper.getKnockbackModifier → extra knockback
+    // Each level adds 0.5 knockback strength multiplier
+    auto attackerHeld = attacker.getHeldItem();
+    if (attackerHeld && attackerHeld->hasEnchantments()) {
+        int16_t kbLevel = attackerHeld->getEnchantmentLevel(19);
+        if (kbLevel > 0) {
+            double kbMult = 1.0 + static_cast<double>(kbLevel) * 0.5;
+            kbX *= kbMult;
+            kbZ *= kbMult;
+        }
+    }
+
     // Send S12 EntityVelocity to the target
     target->sendEntityVelocity(*targetConn, targetEntityId, kbX, kbY, kbZ);
+
+    // ─── Fire Aspect enchantment (ID 20) ────────────────────────────
+    // Java: EnchantmentHelper.getFireAspectModifier → set target on fire
+    // level * 4 seconds = level * 80 ticks
+    if (attackerHeld && attackerHeld->hasEnchantments()) {
+        int16_t faLevel = attackerHeld->getEnchantmentLevel(20);
+        if (faLevel > 0) {
+            int32_t fireTicks = faLevel * 80;
+            target->setOnFire(fireTicks);
+        }
+    }
 
     // ─── Damage sound ───────────────────────────────────────────────
     broadcastSound("game.player.hurt",
