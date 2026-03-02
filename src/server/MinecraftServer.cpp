@@ -2297,6 +2297,47 @@ void MinecraftServer::tickRandomBlocks() {
                         }
                     }
                 }
+
+                // ─── Vine growth (106) — Java: BlockVine.updateTick ─────────────
+                // Vines grow downward through air
+                if (blockId == 106) {
+                    if (rng() % 4 == 0) {
+                        // Grow downward
+                        if (by > 1) {
+                            Block* below = world->getBlock(bx, by - 1, bz);
+                            int belowId = below ? Block::getIdFromBlock(below) : 0;
+                            if (belowId == 0) {
+                                // Place vine below with same metadata
+                                int vineMeta = world->getBlockMetadata(bx, by, bz);
+                                world->setBlock(bx, by - 1, bz, Block::getBlockById(106));
+                                world->setBlockMetadata(bx, by - 1, bz, vineMeta);
+                                broadcastBlockChange(bx, by - 1, bz, 106, vineMeta);
+                            }
+                        }
+                    }
+                }
+
+                // ─── Nether wart growth (115) — Java: BlockNetherWart.updateTick ─
+                // Nether wart grows: meta 0→1→2→3 (3 = mature)
+                if (blockId == 115) {
+                    int wartMeta = world->getBlockMetadata(bx, by, bz);
+                    if (wartMeta < 3 && rng() % 10 == 0) {
+                        world->setBlockMetadata(bx, by, bz, wartMeta + 1);
+                        broadcastBlockChange(bx, by, bz, 115, wartMeta + 1);
+                    }
+                }
+
+                // ─── Cocoa bean growth (127) — Java: BlockCocoa.updateTick ───────
+                // Cocoa beans grow: meta bits 2-3 store age (0→1→2, or 0→4→8)
+                if (blockId == 127) {
+                    int cocoaMeta = world->getBlockMetadata(bx, by, bz);
+                    int age = (cocoaMeta >> 2) & 0x03;
+                    if (age < 2 && rng() % 5 == 0) {
+                        int newMeta = (cocoaMeta & 0x03) | ((age + 1) << 2);
+                        world->setBlockMetadata(bx, by, bz, newMeta);
+                        broadcastBlockChange(bx, by, bz, 127, newMeta);
+                    }
+                }
             }
         }
     }
