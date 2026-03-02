@@ -251,7 +251,7 @@
 - **Gravity/physics** — no server-side player physics (client handles its own)
 - ~~**Liquid flow**~~ — ✅ Done (water/lava flow simulation, infinite water source, lava+water interaction)
 - **Mob spawning** — ✅ Done (natural hostile spawn near players, S0F SpawnMob, despawn >600 ticks)
-- ~~**Functional commands**~~ — ✅ Done (/stop, /gamemode, /time, /give, /tp, /kill, /difficulty, /seed, /list, /say, /gamerule, /weather, /help, /effect, /xp, /enchant, /clear, /spawnpoint, /toggledownfall, /defaultgamemode, /me — all with actual game effects)
+- ~~**Functional commands**~~ — ✅ Done (50+ commands: /stop, /gamemode, /time, /give, /tp, /kill, /difficulty, /seed, /list, /say, /gamerule, /weather, /help, /effect, /xp, /enchant, /clear, /spawnpoint, /toggledownfall, /defaultgamemode, /me, /tell, /ban, /kick, /op, /deop, /ban-ip, /pardon, /pardon-ip, /whitelist, /setblock, /fill, /clone, /testfor, /testforblock, /summon, /playsound, /spreadplayers, /tellraw, /msg, /achievement, /scoreboard, /debug, /blockdata, /entitydata, /replaceitem, /execute, /trigger, /title, /particle)
 - ~~**World saving**~~ — ✅ saveAllChunks on shutdown
 - ~~**Player data persistence**~~ — ✅ save/load position and rotation via NBT to world/playerdata/<uuid>.dat
 - ~~**Tab complete**~~ — ✅ Server-side completion for commands and player names (C14→S3A)
@@ -260,7 +260,9 @@
 - ~~**Entity actions**~~ — ✅ C0B sneak/sprint start/stop → S1C metadata flags broadcast
 - ~~**Bed sleeping**~~ — ✅ Right-click bed at night skips to sunrise, broadcasts message, day check
 - ~~**Nether portal creation**~~ — ✅ Flint-and-steel fire inside obsidian frame → portal blocks (90), X/Z axis detection
-- ~~**Interactive blocks**~~ — ✅ Lever/button/door/trapdoor/fence gate/note block right-click toggle with metadata + sounds
+- ~~**Interactive blocks**~~ — ✅ Lever/button/door/trapdoor/fence gate/note block/cake/repeater/comparator/cauldron/trapped chest/daylight sensor right-click toggle
+- ~~**Cactus damage**~~ — ✅ 1 damage/tick when touching cactus (block 81), death: "was pricked to death"
+- ~~**Bonemeal growth**~~ — ✅ Saplings (set stage bit), melon/pumpkin stems, cocoa pods, crops, grass→tallgrass
 
 ### World Generation
 - ~~**Terrain**~~ — ✅ OverworldGenerator with noise-based density + surface replacement
@@ -448,3 +450,7 @@
 150. **Bed sleeping** — ✅ Done (block 26 right-click: night check 12541-23458, skip night to sunrise, broadcast chat, occupied check)
 151. **Nether portal creation** — ✅ Done (flint-and-steel fire in obsidian frame → portal blocks 90, X/Z axis detection, width 2-21, height 3-21)
 152. **Interactive block toggles** — ✅ Done (lever/button/door/trapdoor/fence gate/note block right-click toggle with metadata + sounds)
+153. **Block interactions batch** — ✅ Done (cake eating +2/0.1 per bite, repeater delay cycle, comparator mode toggle, cauldron water level with buckets/bottles)
+154. **Bonemeal growth extensions** — ✅ Done (saplings set stage bit 0x08, melon/pumpkin stems advance meta, cocoa pods advance growth)
+155. **Trapped chest + daylight sensor** — ✅ Done (trapped chest opens as chest, daylight sensor 151↔178 toggle)
+156. **Cactus contact damage** — ✅ Done (1 dmg/tick in cactus block 81, death: 'was pricked to death')
