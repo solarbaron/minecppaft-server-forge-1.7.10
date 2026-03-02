@@ -658,6 +658,8 @@ public:
         int32_t inBlockMeta = 0;
         int32_t blockX = -1, blockY = -1, blockZ = -1;
         int64_t spawnTick = 0;
+        // Java: 0=no pickup, 1=survival pickup, 2=creative-only (Infinity arrows)
+        int32_t canBePickedUp = 0;
 
         static constexpr float GRAVITY = 0.05f;
         static constexpr float AIR_FRICTION = 0.99f;
@@ -676,7 +678,8 @@ public:
     int32_t spawnArrow(double x, double y, double z,
                        double motionX, double motionY, double motionZ,
                        int32_t shooterEntityId, double damage = 2.0,
-                       int32_t knockback = 0, bool critical = false);
+                       int32_t knockback = 0, bool critical = false,
+                       float speed = 0.0f, float inaccuracy = 1.0f);
 
     /** Tick all arrow projectiles (flight physics, collision, despawn). */
     void tickArrows();

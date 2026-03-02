@@ -3251,23 +3251,23 @@ void MinecraftServer::tickMobs() {
 
             // Calculate arrow trajectory toward player
             // Java: EntityArrow(world, skeleton, player, 1.6f, inaccuracy)
+            // Uses setThrowableHeading(dx, dy+loft, dz, speed=1.6, inaccuracy)
             double dx = nearest->getPlayerX() - mob.posX;
             double dy = (nearest->getPlayerY() + 0.9) - (mob.posY + 1.62); // eye to center
             double dz = nearest->getPlayerZ() - mob.posZ;
-            double dist = std::sqrt(dx*dx + dy*dy + dz*dz);
+            double dist = std::sqrt(dx*dx + dz*dz); // horizontal distance
             if (dist < 0.01) continue;
 
-            // Normalize and add upward loft for arc
-            double speed = 1.6;
-            double nx = (dx / dist) * speed;
-            double ny = (dy / dist) * speed + 0.2; // Upward loft
-            double nz = (dz / dist) * speed;
+            // Java line 79: float f5 = (float)d4 * 0.2f → upward loft
+            double loft = dist * 0.2;
 
-            // Spawn arrow from skeleton's eye height
+            // Pass raw direction to spawnArrow, let setThrowableHeading normalize + scale
+            // Java: speed=1.6, inaccuracy = 14 - difficulty*4 (Normal=2 → 6)
             broadcastSound("random.bow", mob.posX, mob.posY, mob.posZ, 1.0f, 1.2f);
             spawnArrow(mob.posX, mob.posY + 1.62, mob.posZ,
-                        nx, ny, nz,
-                        mob.entityId, 2.0, 0, false);
+                        dx, dy + loft, dz,
+                        mob.entityId, 2.0, 0, false,
+                        1.6f, 6.0f);
 
             mob.attackCooldown = 60; // 3 seconds between shots
         }
@@ -3731,8 +3731,29 @@ void MinecraftServer::tickFurnaces() {
 int32_t MinecraftServer::spawnArrow(double x, double y, double z,
                                      double motionX, double motionY, double motionZ,
                                      int32_t shooterEntityId, double damage,
-                                     int32_t knockback, bool critical) {
+                                     int32_t knockback, bool critical,
+                                     float speed, float inaccuracy) {
     int32_t eid = nextArrowEntityId_++;
+
+    // Java: EntityArrow.setThrowableHeading(motionXYZ, speed, inaccuracy)
+    // Normalize direction, add Gaussian inaccuracy, scale by speed
+    if (speed > 0.001f) {
+        double len = std::sqrt(motionX * motionX + motionY * motionY + motionZ * motionZ);
+        if (len > 1e-7) {
+            motionX /= len;
+            motionY /= len;
+            motionZ /= len;
+        }
+        // Java: d += rand.nextGaussian() * (rand.nextBoolean() ? -1 : 1) * 0.0075 * inaccuracy
+        static thread_local std::mt19937 arrowRng(std::random_device{}());
+        std::normal_distribution<double> gauss(0.0, 1.0);
+        motionX += gauss(arrowRng) * ((rand() % 2 == 0) ? -1.0 : 1.0) * 0.0075 * inaccuracy;
+        motionY += gauss(arrowRng) * ((rand() % 2 == 0) ? -1.0 : 1.0) * 0.0075 * inaccuracy;
+        motionZ += gauss(arrowRng) * ((rand() % 2 == 0) ? -1.0 : 1.0) * 0.0075 * inaccuracy;
+        motionX *= speed;
+        motionY *= speed;
+        motionZ *= speed;
+    }
 
     SpawnedArrow arrow;
     arrow.entityId = eid;
@@ -3783,13 +3804,58 @@ void MinecraftServer::tickArrows() {
     for (auto& arrow : arrowEntities_) {
         if (arrow.isDead) continue;
 
-        // ─── Ground state: check for despawn ─────────────────────────
+        // ─── Ground state: check for despawn + pickup ────────────────
         if (arrow.inGround) {
             ++arrow.ticksInGround;
             if (arrow.ticksInGround >= SpawnedArrow::GROUND_DESPAWN) {
                 arrow.isDead = true;
             }
-            if (arrow.arrowShake > 0) --arrow.arrowShake;
+            if (arrow.arrowShake > 0) { --arrow.arrowShake; continue; }
+
+            // Java: EntityArrow.onCollideWithPlayer() — pickup grounded arrows
+            // Must be inGround, arrowShake==0, canBePickedUp > 0
+            if (arrow.canBePickedUp > 0) {
+                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                for (auto& conn : connections_) {
+                    if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                    auto handler = conn->getHandler();
+                    auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                    if (!ph || ph->isDead()) continue;
+
+                    double dx = ph->getPlayerX() - arrow.posX;
+                    double dy = (ph->getPlayerY() + 0.9) - arrow.posY;
+                    double dz = ph->getPlayerZ() - arrow.posZ;
+                    double distSq = dx*dx + dy*dy + dz*dz;
+                    if (distSq > 1.0) continue; // ~1 block radius
+
+                    // Java: canBePickedUp==1 → survival pickup (add to inventory)
+                    // canBePickedUp==2 → creative only (don't add item)
+                    bool picked = false;
+                    if (arrow.canBePickedUp == 1) {
+                        // Try to add arrow item (ID 262) to player inventory
+                        picked = ph->tryPickupItem(*conn, 262, 0, 1);
+                    } else if (arrow.canBePickedUp == 2 && ph->getGameMode() == 1) {
+                        picked = true; // Creative can always pick up
+                    }
+
+                    if (picked) {
+                        // Java: random.pop, volume=0.2, pitch=((rand-rand)*0.7+1)*2
+                        // NOTE: Can't call broadcastSound here (already holds connectionsMutex_)
+                        // Instead, inline send to all connected players
+                        float randA = static_cast<float>(rand() % 1000) / 1000.0f;
+                        float randB = static_cast<float>(rand() % 1000) / 1000.0f;
+                        float popPitch = ((randA - randB) * 0.7f + 1.0f) * 2.0f;
+                        for (auto& c : connections_) {
+                            if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
+                            auto h = c->getHandler();
+                            auto* p = dynamic_cast<PlayHandler*>(h.get());
+                            if (p) p->sendSoundEffect(*c, "random.pop", arrow.posX, arrow.posY, arrow.posZ, 0.2f, popPitch);
+                        }
+                        arrow.isDead = true;
+                        break;
+                    }
+                }
+            }
             continue;
         }
 

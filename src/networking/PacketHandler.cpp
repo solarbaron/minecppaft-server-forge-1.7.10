@@ -1845,9 +1845,11 @@ void PlayHandler::handlePlayerDigging(const uint8_t* data, size_t length, Connec
             float yawRad = playerYaw_ / 180.0f * static_cast<float>(M_PI);
             float pitchRad = playerPitch_ / 180.0f * static_cast<float>(M_PI);
 
-            double mX = -std::sin(yawRad) * std::cos(pitchRad) * arrowSpeed;
-            double mY = -std::sin(pitchRad) * arrowSpeed;
-            double mZ = std::cos(yawRad) * std::cos(pitchRad) * arrowSpeed;
+            // Java: EntityArrow constructor lines 97-99 — unit direction (NOT scaled by speed)
+            // setThrowableHeading normalizes and scales by speed * 1.5
+            double mX = -std::sin(yawRad) * std::cos(pitchRad);
+            double mY = -std::sin(pitchRad);
+            double mZ = std::cos(yawRad) * std::cos(pitchRad);
 
             // Spawn position: eye height offset — Java: EntityArrow constructor
             double spawnX = playerX_ - std::cos(yawRad) * 0.16;
@@ -1859,17 +1861,24 @@ void PlayHandler::handlePlayerDigging(const uint8_t* data, size_t length, Connec
             float soundPitch = 1.0f / (static_cast<float>(rand() % 1000) / 1000.0f * 0.4f + 1.2f) + f * 0.5f;
             server_.broadcastSound("random.bow", playerX_, playerY_, playerZ_, 1.0f, soundPitch);
 
+            // Java: setThrowableHeading(motionXYZ, f*1.5f, 1.0f)
+            // speed = arrowSpeed * 1.5, inaccuracy = 1.0
             int32_t arrowEid = server_.spawnArrow(spawnX, spawnY, spawnZ,
                 mX, mY, mZ,
-                entityId_, arrowDamage, punchLevel, critical);
+                entityId_, arrowDamage, punchLevel, critical,
+                arrowSpeed * 1.5f, 1.0f);
 
-            // Flame enchantment — Java: entityArrow.setFire(100)
-            if (flameLevel > 0) {
-                // Set isBurning on the arrow entity we just spawned
+            // Post-spawn arrow modifications — single locked section
+            {
                 std::lock_guard<std::mutex> lock(server_.arrowEntitiesMutex_);
                 for (auto& a : server_.arrowEntities_) {
                     if (a.entityId == arrowEid) {
-                        a.isBurning = true;
+                        // Java: canBePickedUp = 1 (player), 2 if Infinity (creative arrow)
+                        a.canBePickedUp = freeArrow ? 2 : 1;
+                        // Flame enchantment — Java: entityArrow.setFire(100)
+                        if (flameLevel > 0) {
+                            a.isBurning = true;
+                        }
                         break;
                     }
                 }
