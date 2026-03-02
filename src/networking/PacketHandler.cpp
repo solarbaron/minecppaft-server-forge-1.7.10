@@ -2245,6 +2245,31 @@ void PlayHandler::handlePlayerDigging(const uint8_t* data, size_t length, Connec
                 foodStats_.addExhaustion(0.025f);
                 std::cout << "[World] " << playerName_ << " broke block at "
                           << blockX << "," << (int)blockY << "," << blockZ << " (instant)\n";
+                // Sand/Gravel gravity (same as survival)
+                {
+                    int32_t checkY = static_cast<int32_t>(blockY) + 1;
+                    while (checkY < 256) {
+                        Block* aboveBlock = world->getBlock(blockX, checkY, blockZ);
+                        if (!aboveBlock) break;
+                        int32_t aboveId = Block::getIdFromBlock(aboveBlock);
+                        if (aboveId != 12 && aboveId != 13) break;
+                        int32_t aboveMeta = world->getBlockMetadata(blockX, checkY, blockZ);
+                        int32_t targetY = checkY - 1;
+                        while (targetY > 0) {
+                            Block* belowBlock = world->getBlock(blockX, targetY, blockZ);
+                            if (belowBlock && Block::getIdFromBlock(belowBlock) != 0) break;
+                            --targetY;
+                        }
+                        ++targetY;
+                        if (targetY < checkY) {
+                            world->setBlock(blockX, checkY, blockZ, Block::getBlockById(0));
+                            server_.broadcastBlockChange(blockX, checkY, blockZ, 0, 0);
+                            world->setBlock(blockX, targetY, blockZ, Block::getBlockById(aboveId));
+                            server_.broadcastBlockChange(blockX, targetY, blockZ, aboveId, aboveMeta);
+                        }
+                        ++checkY;
+                    }
+                }
             }
             // Else: client is starting to mine — we just wait for status 2
         }
@@ -2417,6 +2442,39 @@ void PlayHandler::handlePlayerDigging(const uint8_t* data, size_t length, Connec
             if (xp > 0) {
                 addExperience(xp);
                 sendSetExperience(conn, experienceBar_, experienceLevel_, experienceTotal_);
+            }
+        }
+
+        // ─── Sand/Gravel gravity — Java: BlockFalling.onNeighborBlockChange ─
+        // When a block is broken, check above for sand(12)/gravel(13) and cascade down
+        {
+            int32_t checkY = static_cast<int32_t>(blockY) + 1;
+            while (checkY < 256) {
+                Block* aboveBlock = world->getBlock(blockX, checkY, blockZ);
+                if (!aboveBlock) break;
+                int32_t aboveId = Block::getIdFromBlock(aboveBlock);
+                if (aboveId != 12 && aboveId != 13) break; // Not a falling block
+                // Get metadata of the falling block
+                int32_t aboveMeta = world->getBlockMetadata(blockX, checkY, blockZ);
+                // Find the lowest air block below this falling block
+                int32_t targetY = checkY - 1;
+                while (targetY > 0) {
+                    Block* belowBlock = world->getBlock(blockX, targetY, blockZ);
+                    if (belowBlock) {
+                        int32_t belowId = Block::getIdFromBlock(belowBlock);
+                        if (belowId != 0) break; // Not air — stop here
+                    }
+                    --targetY;
+                }
+                ++targetY; // Place at the block above the solid one
+                if (targetY < checkY) {
+                    // Move the block down
+                    world->setBlock(blockX, checkY, blockZ, Block::getBlockById(0));
+                    server_.broadcastBlockChange(blockX, checkY, blockZ, 0, 0);
+                    world->setBlock(blockX, targetY, blockZ, Block::getBlockById(aboveId));
+                    server_.broadcastBlockChange(blockX, targetY, blockZ, aboveId, aboveMeta);
+                }
+                ++checkY;
             }
         }
 
