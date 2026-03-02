@@ -163,7 +163,8 @@
 - ✅ **Comparators** (149/150) — subtract mode toggle bit 0x04
 - ✅ **Cake** (92) — eat slices meta 0-6, +2 food per slice
 - ✅ **Trapped Chest** (146) — opens like normal chest
-- ❌ Pressure plates, daylight sensors, trip wires
+- ✅ **Daylight sensors** (151/178) — right-click toggles normal↔inverted mode
+- ❌ Pressure plates, trip wires
 
 ### Random Block Ticks
 - ✅ **Crop growth** — wheat (59), carrot (141), potato (142) meta 0→7
@@ -377,3 +378,6 @@
 105. **/summon command** — ✅ Done (29th command, spawns mob by type ID via summonMob+S0F)
 106. **Smelting recipe expansion** — ✅ Done (24 new: gold/iron tool+armor recycling, cracked stone brick, sponge; 46 total)
 107. **Clay underwater worldgen** — ✅ Done (1/3 chance per chunk, disc radius 1-2 below water on dirt/sand/gravel)
+108. **Crafting recipe expansion** — ✅ Done (30+ functional blocks: enchanting table, anvil, hopper, beacon, ender chest, comparator, daylight sensor, 6 stair types, nether brick fence, detector/activator rails, minecart variants, weighted pressure plates)
+109. **Daylight sensor toggle** — ✅ Done (right-click swaps block 151↔178, preserves meta, click sound)
+110. **Mushroom worldgen** — ✅ Done (1/4 chance per chunk, 1-2 mushrooms on grass/dirt/mycelium below Y=60)
