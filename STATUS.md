@@ -205,6 +205,7 @@
 - **Movement validation** — server accepts all positions without anti-cheat; ✅ S18 EntityTeleport + S19 HeadLook broadcast to other players
 - **Lighting** — no light propagation engine
 - **Gravity/physics** — no server-side player physics (client handles its own)
+- ~~**Liquid flow**~~ — ✅ Done (water/lava flow simulation, infinite water source, lava+water interaction)
 - **Mob spawning** — ✅ Done (natural hostile spawn near players, S0F SpawnMob, despawn >600 ticks)
 - ~~**Functional commands**~~ — ✅ Done (/stop, /gamemode, /time, /give, /tp, /kill, /difficulty, /seed, /list, /say, /gamerule, /weather, /help all with actual game effects)
 - ~~**World saving**~~ — ✅ saveAllChunks on shutdown
@@ -317,3 +318,8 @@
 68. **/effect command** — ✅ Done (/effect <player> <id> [sec] [amp], /effect <player> clear, 14th server command)
 69. **Sand/gravel gravity in random tick** — ✅ Done (existing world blocks 12/13 fall through air/liquids during random ticks)
 70. **Slab double-slab placement** — ✅ Done (stone slab 44→double 43, wood slab 126→double 125, sub-type from item damage bits 0-2)
+71. **Water/lava flow** — ✅ Done (water decay 1/7-block, lava decay 2/3-block, downward priority, horizontal spread, lava+water→cobblestone/obsidian)
+72. **Infinite water source** — ✅ Done (2+ adjacent water sources + solid below → new source, Java field_149815_a parity)
+73. **Fire spread** — ✅ Done (block 51 burns 25+ flammable IDs, meta age, eternal on netherrack 87, burns out without fuel)
+74. **Ice melting** — ✅ Done (block 79→flowing water 8, ~1/8 probability per random tick)
+75. **Mushroom spread** — ✅ Done (blocks 39/40 spread to adjacent air on opaque blocks, 1/25 chance)
