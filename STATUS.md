@@ -57,7 +57,7 @@
 
 ## 🔶 Partially Implemented (Headers + Stubs)
 
-### Commands (33 commands, chat→command bridge ✅)
+### Commands (39 commands, chat→command bridge ✅)
 | Command | Status |
 |---------|---------|
 | `/stop` | ✅ Working via chat |
@@ -93,6 +93,12 @@
 | `/whitelist` | ✅ Working — add/remove/on/off/list/reload whitelist |
 | `/playsound` | ✅ Working — play named sound at position |
 | `/spreadplayers` | ✅ Working — random teleport within range |
+| `/tellraw` | ✅ Working — send raw JSON chat message |
+| `/msg` | ✅ Working — whisper (alias /w) |
+| `/op` | ✅ Working — grant operator status |
+| `/deop` | ✅ Working — revoke operator status |
+| `/ban-ip` | ✅ Working — ban IP address |
+| `/pardon-ip` | ✅ Working — unban IP address |
 
 ### Entity System
 - **Entity base** — ID counter, UUID, position/rotation, bounding box
@@ -247,7 +253,8 @@
 - ~~**Caves**~~ — ✅ MapGenCaves worm carving integrated
 - ~~**Ores**~~ — ✅ All 11 vanilla ores (coal, iron, gold, diamond, redstone, lapis, emerald, dirt, gravel)
 - **Structures** — ✅ Dungeons (cobblestone/mossy rooms with mob spawner); no villages, temples, strongholds
-- ~~**Trees/vegetation**~~ — ✅ Oak/birch/spruce tree generation + flowers, tallgrass, sugar cane, pumpkin patches, clay deposits, cactus, dead bush, mushrooms, vines
+- ~~**Trees/vegetation**~~ — ✅ Oak/birch/spruce tree generation + flowers, tallgrass, sugar cane, pumpkin patches, clay deposits, cactus, dead bush, mushrooms, vines, lily pads
+- **Beach generation** — ✅ Sand beach at water edges
 - **Nether/End** — dimensions declared but not generated
 
 ---
@@ -396,3 +403,11 @@
 119. **Crafting recipe expansion II** — ✅ Done (55+ recipes: food, utility blocks, items, ingot conversions; ~300+ total)
 120. **Crafting recipe expansion III** — ✅ Done (40+ recipes: slabs, fences, walls, doors, planks, sticks, arrows, signs; ~350+ total)
 121. **Vine worldgen** — ✅ Done (1/3 chance, 3-6 per chunk, attaches to log faces, 1-3 block growth with metadata)
+122. **/tellraw command** — ✅ Done (34th command, sends raw JSON chat message)
+123. **/msg command** — ✅ Done (35th command, whisper with /w alias)
+124. **/op command** — ✅ Done (36th command, grant operator status)
+125. **/deop command** — ✅ Done (37th command, revoke operator status)
+126. **/ban-ip command** — ✅ Done (38th command, ban IP address)
+127. **/pardon-ip command** — ✅ Done (39th command, unban IP address)
+128. **Lily pad worldgen** — ✅ Done (1/4 chance, 1-3 on water surface)
+129. **Sand beach generation** — ✅ Done (replaces grass/dirt at Y=62-63 water edges with sand)
