@@ -479,3 +479,8 @@
 178. **Mob drop tables** — ✅ Done (13 mob types: zombie→rotten flesh, skeleton→bones+arrows, creeper→gunpowder, spider→string+eye, enderman→pearl, blaze→rod, ghast→tear+gunpowder, slime→ball, pigman→flesh+nugget, cave spider, silverfish, magma cube→cream, witch→redstone)
 179. **Looting enchantment** — ✅ Done (ID 21: adds looting level to base mob drop count on kill)
 180. **Pressure plate activation** — ✅ Done (stone 70, wood 72, gold 147, iron 148: meta bit 0x01 toggle, click sound, deactivate on step-off)
+181. **Farmland trampling** — ✅ Done (landing on farmland block 60 with fall > 1 block reverts to dirt block 3, broadcast to all clients)
+182. **Thorns enchantment** — ✅ Done (ID 7: level*15% chance per armor piece to reflect 1-4 damage back to PvP attacker with damage.thorns sound)
+183. **Mob health values** — ✅ Done (27 mob types with accurate max health: spider=16, enderman=40, ghast=10, silverfish=8, witch=26, iron golem=100, ender dragon=200, wither=300)
+184. **Smite enchantment** — ✅ Done (ID 17: level*2.5 bonus damage vs undead — zombie, skeleton, pigman, wither)
+185. **Bane of Arthropods enchantment** — ✅ Done (ID 18: level*2.5 bonus damage vs arthropods — spider, cave spider, silverfish)
