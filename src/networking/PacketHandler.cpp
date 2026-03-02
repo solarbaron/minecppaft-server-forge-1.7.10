@@ -3026,6 +3026,25 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
         return;
     }
 
+    // Daylight sensor (151=normal, 178=inverted) — toggle mode
+    // Java: BlockDaylightDetector.onBlockActivated()
+    // Right-click swaps between daylight_detector (151) and daylight_detector_inverted (178)
+    if ((clickedBlockId == 151 || clickedBlockId == 178) && !isSneaking_) {
+        if (!server_.getWorlds().empty()) {
+            auto& w = server_.getWorlds()[0];
+            int32_t by = static_cast<int32_t>(blockY);
+            int meta = w->getBlockMetadata(blockX, by, blockZ);
+            int32_t newBlockId = (clickedBlockId == 151) ? 178 : 151;
+            w->setBlock(blockX, by, blockZ, Block::getBlockById(newBlockId));
+            w->setBlockMetadata(blockX, by, blockZ, meta);
+            server_.broadcastBlockChange(blockX, by, blockZ, newBlockId, meta);
+            server_.broadcastSound("random.click",
+                static_cast<double>(blockX) + 0.5, static_cast<double>(by) + 0.5,
+                static_cast<double>(blockZ) + 0.5, 0.3f, 0.6f);
+        }
+        return;
+    }
+
     // Anvil (block ID 145) — Java: BlockAnvil.onBlockActivated()
     // Opens repair/rename GUI (S2D window type 8)
     if (clickedBlockId == 145 && !isSneaking_) {

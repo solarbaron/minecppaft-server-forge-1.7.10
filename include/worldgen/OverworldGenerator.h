@@ -480,6 +480,32 @@ public:
             }
         }
 
+        // ── Step 9.9: Mushroom generation ──
+        // Java reference: BiomeDecorator — mushroomsPerChunk, WorldGenFlowers(Blocks.mushroom)
+        // 1/4 chance per chunk, place 1-2 mushrooms
+        {
+            NoiseGeneratorImproved::RNG mushRng;
+            mushRng.setSeed(seed_ ^ (static_cast<int64_t>(chunkX) * 8675309LL +
+                                      static_cast<int64_t>(chunkZ) * 5551234LL));
+
+            if (mushRng.nextInt(4) == 0) {
+                int32_t count = mushRng.nextInt(2) + 1;
+                for (int32_t m = 0; m < count; ++m) {
+                    int32_t mx = mushRng.nextInt(16);
+                    int32_t mz = mushRng.nextInt(16);
+                    for (int32_t my = 60; my >= 1; --my) {
+                        int32_t below = blocks[(mx * 16 + mz) * 256 + my - 1];
+                        int32_t at = blocks[(mx * 16 + mz) * 256 + my];
+                        if (at == 0 && (below == GRASS || below == DIRT || below == 110)) { // 110=mycelium
+                            blocks[(mx * 16 + mz) * 256 + my] =
+                                mushRng.nextInt(2) == 0 ? 39 : 40; // Brown or red mushroom
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
         // ── Step 10: Fill chunk sections ──
         for (int x = 0; x < 16; ++x) {
             for (int z = 0; z < 16; ++z) {
