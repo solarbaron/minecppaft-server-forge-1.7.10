@@ -1887,7 +1887,34 @@ void PlayHandler::handlePlayerDigging(const uint8_t* data, size_t length, Connec
     // Java reference: Block.getItemDropped() — overridden per subclass
     // Returns: {itemId, quantity, metadata}. itemId=-1 means no drop.
     struct BlockDrop { int32_t itemId; int32_t quantity; int32_t metadata; };
-    auto getBlockDrop = [](int32_t blockId, int32_t blockMeta, int32_t heldItemId = -1) -> BlockDrop {
+    auto getBlockDrop = [](int32_t blockId, int32_t blockMeta, int32_t heldItemId = -1,
+                           bool silkTouch = false, int32_t fortuneLevel = 0) -> BlockDrop {
+        // ─── Silk Touch enchantment (ID 33) — mine the block itself ─────
+        // Java: Block.canSilkHarvest() — most blocks return themselves with silk touch
+        if (silkTouch) {
+            switch (blockId) {
+                case 1:   return {1, 1, 0};   // Stone → stone (not cobblestone)
+                case 16:  return {16, 1, 0};  // Coal ore → coal ore
+                case 56:  return {56, 1, 0};  // Diamond ore → diamond ore
+                case 21:  return {21, 1, 0};  // Lapis ore → lapis ore
+                case 73: case 74: return {73, 1, 0}; // Redstone ore → redstone ore
+                case 129: return {129, 1, 0}; // Emerald ore → emerald ore
+                case 153: return {153, 1, 0}; // Quartz ore → quartz ore
+                case 2:   return {2, 1, 0};   // Grass → grass (not dirt)
+                case 110: return {110, 1, 0}; // Mycelium → mycelium
+                case 130: return {130, 1, 0}; // Ender chest → ender chest (not 8 obsidian)
+                case 20:  return {20, 1, 0};  // Glass → glass
+                case 95:  return {95, 1, blockMeta};  // Stained glass → stained glass
+                case 102: return {102, 1, 0}; // Glass pane → glass pane
+                case 160: return {160, 1, blockMeta}; // Stained glass pane
+                case 89:  return {89, 1, 0};  // Glowstone → glowstone (not dust)
+                case 79:  return {79, 1, 0};  // Ice → ice
+                case 47:  return {47, 1, 0};  // Bookshelf → bookshelf (not 3 books)
+                case 18:  return {18, 1, blockMeta & 0x03};  // Leaves → leaves
+                case 161: return {161, 1, blockMeta & 0x01}; // Leaves2 → leaves2
+                default: break; // Fall through to normal drops
+            }
+        }
         // ─── Shears silk-touch override — Java: Block.canSilkHarvest + ItemShears ──
         // Shears (item 359) cause certain blocks to drop themselves instead of normal drops
         if (heldItemId == 359) {
@@ -1960,17 +1987,41 @@ void PlayHandler::handlePlayerDigging(const uint8_t* data, size_t length, Connec
             // Java: BlockGrass.getItemDropped → dirt (ID 3)
             case 2:   return {3, 1, 0};   // grass → dirt
             // Java: BlockOre coal → coal item (ID 263)
-            case 16:  return {263, 1, 0};  // coal_ore → coal
+            case 16: {
+                int32_t qty = 1;
+                if (fortuneLevel > 0) qty = 1 + (rand() % (fortuneLevel + 1));
+                return {263, qty, 0};  // coal_ore → coal
+            }
             // Java: BlockOre diamond → diamond (ID 264)
-            case 56:  return {264, 1, 0};  // diamond_ore → diamond
+            case 56: {
+                int32_t qty = 1;
+                if (fortuneLevel > 0) qty = 1 + (rand() % (fortuneLevel + 1));
+                return {264, qty, 0};  // diamond_ore → diamond
+            }
             // Java: BlockOre lapis → dye:4 (ID 351, meta 4)
-            case 21:  return {351, 4, 4};  // lapis_ore → 4-8 lapis lazuli (simplified to 4)
+            case 21: {
+                int32_t base = 4 + (rand() % 5); // 4-8 lapis lazuli
+                if (fortuneLevel > 0) base *= 1 + (rand() % (fortuneLevel + 1));
+                return {351, base, 4};  // lapis_ore → lapis lazuli
+            }
             // Java: BlockOre redstone → redstone dust (ID 331), quantity 4-5
-            case 73: case 74: return {331, 4, 0}; // redstone_ore → 4 redstone dust
+            case 73: case 74: {
+                int32_t qty = 4 + (rand() % 2); // 4-5 redstone dust
+                if (fortuneLevel > 0) qty += rand() % (fortuneLevel + 1);
+                return {331, qty, 0}; // redstone_ore → redstone dust
+            }
             // Java: BlockOre emerald → emerald (ID 388)
-            case 129: return {388, 1, 0};  // emerald_ore → emerald
+            case 129: {
+                int32_t qty = 1;
+                if (fortuneLevel > 0) qty = 1 + (rand() % (fortuneLevel + 1));
+                return {388, qty, 0};  // emerald_ore → emerald
+            }
             // Java: BlockOre quartz → quartz item (ID 406)
-            case 153: return {406, 1, 0};  // quartz_ore → quartz
+            case 153: {
+                int32_t qty = 1;
+                if (fortuneLevel > 0) qty = 1 + (rand() % (fortuneLevel + 1));
+                return {406, qty, 0};  // quartz_ore → quartz
+            }
             // Java: BlockGlowstone → 2-4 glowstone dust (ID 348)
             case 89:  return {348, 3, 0};  // glowstone → 3 glowstone dust (avg)
             // Java: BlockClay → 4 clay balls (ID 337)
@@ -2014,8 +2065,12 @@ void PlayHandler::handlePlayerDigging(const uint8_t* data, size_t length, Connec
             // ─── More special drops ───────────────────────────────
             // Bookshelf → 3 books (Java: BlockBookshelf.quantityDropped)
             case 47:  return {340, 3, 0};
-            // Gravel → flint (10% chance, Java: BlockGravel.getItemDropped)
-            case 13:  return (rand() % 10 == 0) ? BlockDrop{318, 1, 0} : BlockDrop{13, 1, 0};
+            // Gravel → flint (10% chance, Fortune increases; Java: BlockGravel.getItemDropped)
+            case 13: {
+                int32_t flintChance = 10;
+                if (fortuneLevel > 0) flintChance = std::max(10 - 3 * fortuneLevel, 1);
+                return (rand() % flintChance == 0) ? BlockDrop{318, 1, 0} : BlockDrop{13, 1, 0};
+            }
             // Nether wart (block 115) → nether wart item (372)
             case 115: return {372, (blockMeta >= 3) ? 3 : 1, 0};
             // Cocoa bean (block 127) → cocoa beans (dye:3, item 351, dmg 3)
@@ -2298,11 +2353,19 @@ void PlayHandler::handlePlayerDigging(const uint8_t* data, size_t length, Connec
 
         // Spawn item drop — Java: block.harvestBlock → dropBlockAsItem → getItemDropped
         int32_t heldToolId = -1;
+        bool hasSilkTouch = false;
+        int32_t fortuneLevel = 0;
         {
             auto heldTool = inventory_.getCurrentItem();
-            if (heldTool.has_value()) heldToolId = heldTool->getItemId();
+            if (heldTool.has_value()) {
+                heldToolId = heldTool->getItemId();
+                if (heldTool->hasEnchantments()) {
+                    hasSilkTouch = heldTool->getEnchantmentLevel(33) > 0; // Silk Touch
+                    fortuneLevel = heldTool->getEnchantmentLevel(35);     // Fortune
+                }
+            }
         }
-        auto drop = getBlockDrop(brokenBlockId, brokenMeta, heldToolId);
+        auto drop = getBlockDrop(brokenBlockId, brokenMeta, heldToolId, hasSilkTouch, fortuneLevel);
         if (drop.itemId >= 0 && drop.quantity > 0) {
             server_.spawnItemDrop(
                 static_cast<double>(blockX),
