@@ -1474,6 +1474,93 @@ CraftingManager::CraftingManager() {
     addShapelessRecipe(I(351,2,1),  {I(175,1,4)});  // rose bush → 2 red
     addShapelessRecipe(I(351,2,9),  {I(175,1,5)});  // peony → 2 pink
 
+    // ═══════════════════════════════════════════════════════════════════
+    // RecipesIngots — Java ref: net.minecraft.item.crafting.RecipesIngots
+    // ═══════════════════════════════════════════════════════════════════
+
+    // Block → 9 ingots/items (deconstruct)
+    // Gold block (41) → 9 gold ingots (266)
+    addShapelessRecipe(I(266,9,0), {I(41,1,0)});
+    // Iron block (42) → 9 iron ingots (265)
+    addShapelessRecipe(I(265,9,0), {I(42,1,0)});
+    // Diamond block (57) → 9 diamonds (264)
+    addShapelessRecipe(I(264,9,0), {I(57,1,0)});
+    // Emerald block (133) → 9 emeralds (388)
+    addShapelessRecipe(I(388,9,0), {I(133,1,0)});
+    // Lapis block (22) → 9 lapis dye (351:4)
+    addShapelessRecipe(I(351,9,4), {I(22,1,0)});
+    // Redstone block (152) → 9 redstone (331)
+    addShapelessRecipe(I(331,9,0), {I(152,1,0)});
+    // Coal block (173) → 9 coal (263)
+    addShapelessRecipe(I(263,9,0), {I(173,1,0)});
+    // Hay block (170) → 9 wheat (296)
+    addShapelessRecipe(I(296,9,0), {I(170,1,0)});
+
+    // 9 ingots/items → block (construct)
+    shaped3({I(266,1,0),I(266,1,0),I(266,1,0),
+             I(266,1,0),I(266,1,0),I(266,1,0),
+             I(266,1,0),I(266,1,0),I(266,1,0)}, I(41,1,0));  // gold block
+    shaped3({I(265,1,0),I(265,1,0),I(265,1,0),
+             I(265,1,0),I(265,1,0),I(265,1,0),
+             I(265,1,0),I(265,1,0),I(265,1,0)}, I(42,1,0));  // iron block
+    shaped3({I(264,1,0),I(264,1,0),I(264,1,0),
+             I(264,1,0),I(264,1,0),I(264,1,0),
+             I(264,1,0),I(264,1,0),I(264,1,0)}, I(57,1,0));  // diamond block
+    shaped3({I(388,1,0),I(388,1,0),I(388,1,0),
+             I(388,1,0),I(388,1,0),I(388,1,0),
+             I(388,1,0),I(388,1,0),I(388,1,0)}, I(133,1,0)); // emerald block
+    shaped3({I(351,1,4),I(351,1,4),I(351,1,4),
+             I(351,1,4),I(351,1,4),I(351,1,4),
+             I(351,1,4),I(351,1,4),I(351,1,4)}, I(22,1,0));  // lapis block
+    shaped3({I(331,1,0),I(331,1,0),I(331,1,0),
+             I(331,1,0),I(331,1,0),I(331,1,0),
+             I(331,1,0),I(331,1,0),I(331,1,0)}, I(152,1,0)); // redstone block
+    shaped3({I(263,1,0),I(263,1,0),I(263,1,0),
+             I(263,1,0),I(263,1,0),I(263,1,0),
+             I(263,1,0),I(263,1,0),I(263,1,0)}, I(173,1,0)); // coal block
+    shaped3({I(296,1,0),I(296,1,0),I(296,1,0),
+             I(296,1,0),I(296,1,0),I(296,1,0),
+             I(296,1,0),I(296,1,0),I(296,1,0)}, I(170,1,0)); // hay block
+
+    // Gold nugget ↔ gold ingot
+    shaped3({I(371,1,0),I(371,1,0),I(371,1,0),
+             I(371,1,0),I(371,1,0),I(371,1,0),
+             I(371,1,0),I(371,1,0),I(371,1,0)}, I(266,1,0)); // 9 nuggets → ingot
+    addShapelessRecipe(I(371,9,0), {I(266,1,0)});              // ingot → 9 nuggets
+
+    // ═══════════════════════════════════════════════════════════════════
+    // RecipesFood — Java ref: net.minecraft.item.crafting.RecipesFood
+    // ═══════════════════════════════════════════════════════════════════
+
+    // Mushroom stew: brown mushroom (39) + red mushroom (40) + bowl (281) → stew (282)
+    addShapelessRecipe(I(282,1,0), {I(39,1,0), I(40,1,0), I(281,1,0)});
+
+    // Cookie: wheat (296) + cocoa (351:3) + wheat → 8 cookies (357)
+    shaped13({I(296,1,0), I(351,1,3), I(296,1,0)}, I(357,8,0));
+
+    // Melon block: 9 melon slices (360) → melon block (103)
+    shaped3({I(360,1,0),I(360,1,0),I(360,1,0),
+             I(360,1,0),I(360,1,0),I(360,1,0),
+             I(360,1,0),I(360,1,0),I(360,1,0)}, I(103,1,0));
+
+    // Melon seeds: melon (360) → melon seeds (362)
+    addShapelessRecipe(I(362,1,0), {I(360,1,0)});
+
+    // Pumpkin seeds: pumpkin (86) → 4 pumpkin seeds (361)
+    addShapelessRecipe(I(361,4,0), {I(86,1,0)});
+
+    // Pumpkin pie: pumpkin (86) + sugar (353) + egg (344) → pie (400)
+    addShapelessRecipe(I(400,1,0), {I(86,1,0), I(353,1,0), I(344,1,0)});
+
+    // Fermented spider eye: spider eye (375) + brown mushroom (39) + sugar (353)
+    addShapelessRecipe(I(376,1,0), {I(375,1,0), I(39,1,0), I(353,1,0)});
+
+    // Blaze powder: blaze rod (369) → 2 blaze powder (377)
+    addShapelessRecipe(I(377,2,0), {I(369,1,0)});
+
+    // Magma cream: blaze powder (377) + slime ball (341) → magma cream (378)
+    addShapelessRecipe(I(378,1,0), {I(377,1,0), I(341,1,0)});
+
     // ─── Sort by recipe size (larger first) ─────────────────────────
     std::sort(recipes_.begin(), recipes_.end(),
         [](const std::unique_ptr<IRecipe>& a, const std::unique_ptr<IRecipe>& b) {
