@@ -1922,6 +1922,34 @@ void PlayHandler::handlePlayerDigging(const uint8_t* data, size_t length, Connec
             world->setBlockMetadata(blockX, blockY, blockZ, 0);
             server_.broadcastBlockChange(blockX, blockY, blockZ, 0, 0);
             server_.broadcastEffect(2001, blockX, blockY, blockZ, brokenBlockId);
+            // Multi-block propagation (doors/beds/cactus/sugar cane)
+            if (brokenBlockId == 64 || brokenBlockId == 71) {
+                int otherY = (brokenMeta & 0x08) ? blockY - 1 : blockY + 1;
+                Block* ob = world->getBlock(blockX, otherY, blockZ);
+                if (ob && Block::getIdFromBlock(ob) == brokenBlockId) {
+                    world->setBlock(blockX, otherY, blockZ, Block::getBlockById(0));
+                    server_.broadcastBlockChange(blockX, otherY, blockZ, 0, 0);
+                }
+            }
+            if (brokenBlockId == 26) {
+                int bf = brokenMeta & 3; bool ih = (brokenMeta & 8) != 0;
+                int ox = blockX, oz = blockZ;
+                if (ih) { switch(bf){case 0:--oz;break;case 1:++ox;break;case 2:++oz;break;case 3:--ox;break;} }
+                else    { switch(bf){case 0:++oz;break;case 1:--ox;break;case 2:--oz;break;case 3:++ox;break;} }
+                Block* ob = world->getBlock(ox, blockY, oz);
+                if (ob && Block::getIdFromBlock(ob) == 26) {
+                    world->setBlock(ox, blockY, oz, Block::getBlockById(0));
+                    server_.broadcastBlockChange(ox, blockY, oz, 0, 0);
+                }
+            }
+            if (brokenBlockId == 81 || brokenBlockId == 83) {
+                for (int cy2 = blockY + 1; cy2 < 256; ++cy2) {
+                    Block* ab = world->getBlock(blockX, cy2, blockZ);
+                    if (!ab || Block::getIdFromBlock(ab) != brokenBlockId) break;
+                    world->setBlock(blockX, cy2, blockZ, Block::getBlockById(0));
+                    server_.broadcastBlockChange(blockX, cy2, blockZ, 0, 0);
+                }
+            }
             server_.broadcastSound(getBreakSound(brokenBlockId),
                 static_cast<double>(blockX) + 0.5,
                 static_cast<double>(blockY) + 0.5,
@@ -1941,6 +1969,35 @@ void PlayHandler::handlePlayerDigging(const uint8_t* data, size_t length, Connec
                 world->setBlockMetadata(blockX, blockY, blockZ, 0);
                 server_.broadcastBlockChange(blockX, blockY, blockZ, 0, 0);
                 server_.broadcastEffect(2001, blockX, blockY, blockZ, brokenBlockId);
+                // Multi-block propagation (doors/beds/cactus/sugar cane)
+                if (brokenBlockId == 64 || brokenBlockId == 71) {
+                    int otherY2 = (brokenMeta & 0x08) ? blockY - 1 : blockY + 1;
+                    Block* ob2 = world->getBlock(blockX, otherY2, blockZ);
+                    if (ob2 && Block::getIdFromBlock(ob2) == brokenBlockId) {
+                        world->setBlock(blockX, otherY2, blockZ, Block::getBlockById(0));
+                        server_.broadcastBlockChange(blockX, otherY2, blockZ, 0, 0);
+                    }
+                }
+                if (brokenBlockId == 26) {
+                    int bf2 = brokenMeta & 3; bool ih2 = (brokenMeta & 8) != 0;
+                    int ox2 = blockX, oz2 = blockZ;
+                    if (ih2) { switch(bf2){case 0:--oz2;break;case 1:++ox2;break;case 2:++oz2;break;case 3:--ox2;break;} }
+                    else     { switch(bf2){case 0:++oz2;break;case 1:--ox2;break;case 2:--oz2;break;case 3:++ox2;break;} }
+                    Block* ob2b = world->getBlock(ox2, blockY, oz2);
+                    if (ob2b && Block::getIdFromBlock(ob2b) == 26) {
+                        world->setBlock(ox2, blockY, oz2, Block::getBlockById(0));
+                        server_.broadcastBlockChange(ox2, blockY, oz2, 0, 0);
+                    }
+                }
+                if (brokenBlockId == 81 || brokenBlockId == 83) {
+                    for (int cy3 = blockY + 1; cy3 < 256; ++cy3) {
+                        Block* ab3 = world->getBlock(blockX, cy3, blockZ);
+                        if (!ab3 || Block::getIdFromBlock(ab3) != brokenBlockId) break;
+                        world->setBlock(blockX, cy3, blockZ, Block::getBlockById(0));
+                        server_.broadcastBlockChange(blockX, cy3, blockZ, 0, 0);
+                        server_.spawnItemDrop(static_cast<double>(blockX), static_cast<double>(cy3), static_cast<double>(blockZ), brokenBlockId, 0, 1);
+                    }
+                }
                 server_.broadcastSound(getBreakSound(brokenBlockId),
                     static_cast<double>(blockX) + 0.5,
                     static_cast<double>(blockY) + 0.5,
@@ -1998,6 +2055,65 @@ void PlayHandler::handlePlayerDigging(const uint8_t* data, size_t length, Connec
         world->setBlockMetadata(blockX, blockY, blockZ, 0);
         server_.broadcastBlockChange(blockX, blockY, blockZ, 0, 0);
         server_.broadcastEffect(2001, blockX, blockY, blockZ, brokenBlockId);
+
+        // ─── Multi-block break propagation ───────────────────────────
+        // Door (64/71): remove other half
+        if (brokenBlockId == 64 || brokenBlockId == 71) {
+            if (brokenMeta & 0x08) {
+                // Broke upper half → remove lower
+                Block* lower = world->getBlock(blockX, blockY - 1, blockZ);
+                if (lower && Block::getIdFromBlock(lower) == brokenBlockId) {
+                    world->setBlock(blockX, blockY - 1, blockZ, Block::getBlockById(0));
+                    server_.broadcastBlockChange(blockX, blockY - 1, blockZ, 0, 0);
+                }
+            } else {
+                // Broke lower half → remove upper
+                Block* upper = world->getBlock(blockX, blockY + 1, blockZ);
+                if (upper && Block::getIdFromBlock(upper) == brokenBlockId) {
+                    world->setBlock(blockX, blockY + 1, blockZ, Block::getBlockById(0));
+                    server_.broadcastBlockChange(blockX, blockY + 1, blockZ, 0, 0);
+                }
+            }
+        }
+        // Bed (26): remove other half
+        if (brokenBlockId == 26) {
+            int bedFacing = brokenMeta & 0x03;
+            bool isHead = (brokenMeta & 0x08) != 0;
+            int otherX = blockX, otherZ = blockZ;
+            if (isHead) {
+                // Remove foot
+                switch (bedFacing) {
+                    case 0: --otherZ; break; case 1: ++otherX; break;
+                    case 2: ++otherZ; break; case 3: --otherX; break;
+                }
+            } else {
+                // Remove head
+                switch (bedFacing) {
+                    case 0: ++otherZ; break; case 1: --otherX; break;
+                    case 2: --otherZ; break; case 3: ++otherX; break;
+                }
+            }
+            Block* other = world->getBlock(otherX, blockY, otherZ);
+            if (other && Block::getIdFromBlock(other) == 26) {
+                world->setBlock(otherX, blockY, otherZ, Block::getBlockById(0));
+                server_.broadcastBlockChange(otherX, blockY, otherZ, 0, 0);
+            }
+        }
+        // Cactus (81) / Sugar cane (83): break all blocks above (chain break)
+        if (brokenBlockId == 81 || brokenBlockId == 83) {
+            for (int cy = blockY + 1; cy < 256; ++cy) {
+                Block* above = world->getBlock(blockX, cy, blockZ);
+                if (!above || Block::getIdFromBlock(above) != brokenBlockId) break;
+                world->setBlock(blockX, cy, blockZ, Block::getBlockById(0));
+                server_.broadcastBlockChange(blockX, cy, blockZ, 0, 0);
+                server_.broadcastEffect(2001, blockX, cy, blockZ, brokenBlockId);
+                // Drop the block
+                server_.spawnItemDrop(
+                    static_cast<double>(blockX), static_cast<double>(cy),
+                    static_cast<double>(blockZ),
+                    brokenBlockId, 0, 1);
+            }
+        }
 
         // Play break sound — material-based
         server_.broadcastSound(getBreakSound(brokenBlockId),
