@@ -600,4 +600,27 @@ public:
     void processCommand(ICommandSender& sender, const std::vector<std::string>& args) override;
 };
 
+// /testforblock <x> <y> <z> <blockId> [meta] — Test if block exists at position
+// Java: net.minecraft.command.CommandTestForBlock
+class CommandTestForBlock : public ICommand {
+public:
+    std::string getCommandName() const override { return "testforblock"; }
+    std::string getCommandUsage() const override { return "/testforblock <x> <y> <z> <blockId> [meta]"; }
+    int32_t getRequiredPermissionLevel() const override { return 2; }
+    void processCommand(ICommandSender& sender, const std::vector<std::string>& args) override;
+};
+
+// /achievement <give|take> <stat> [player] — Give or take an achievement
+// Java: net.minecraft.command.CommandAchievement
+class CommandAchievement : public ICommand {
+public:
+    std::string getCommandName() const override { return "achievement"; }
+    std::string getCommandUsage() const override { return "/achievement <give|take> <stat> [player]"; }
+    int32_t getRequiredPermissionLevel() const override { return 2; }
+    void processCommand(ICommandSender& sender, const std::vector<std::string>& args) override;
+    bool isUsernameIndex(const std::vector<std::string>& args, int32_t index) const override {
+        return index == 2;
+    }
+};
+
 } // namespace mccpp

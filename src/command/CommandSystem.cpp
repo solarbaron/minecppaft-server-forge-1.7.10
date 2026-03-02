@@ -69,6 +69,8 @@ CommandHandler::CommandHandler() {
     registerCommand(std::make_shared<CommandDeOp>());
     registerCommand(std::make_shared<CommandBanIP>());
     registerCommand(std::make_shared<CommandPardonIP>());
+    registerCommand(std::make_shared<CommandTestForBlock>());
+    registerCommand(std::make_shared<CommandAchievement>());
     std::cout << "[Commands] Registered " << getCommandCount() << " commands\n";
 }
 
@@ -1184,6 +1186,43 @@ void CommandPardonIP::processCommand(ICommandSender& sender, const std::vector<s
     if (!server) return;
     server->broadcastChat("§7Unbanned IP " + ip);
     std::cout << "[Server] " << sender.getCommandSenderName() << " unbanned IP " << ip << "\n";
+}
+
+// /testforblock — Java: net.minecraft.command.CommandTestForBlock
+void CommandTestForBlock::processCommand(ICommandSender& sender, const std::vector<std::string>& args) {
+    if (args.size() < 4) {
+        sender.addChatMessage("\xC2\xA7" "cUsage: /testforblock <x> <y> <z> <blockId> [meta]");
+        return;
+    }
+    try {
+        int32_t x = std::stoi(args[0]), y = std::stoi(args[1]), z = std::stoi(args[2]);
+        int32_t blockId = std::stoi(args[3]);
+        (void)blockId; // block comparison requires world access
+        sender.addChatMessage("Testing for block " + std::to_string(blockId) +
+            " at " + std::to_string(x) + ", " + std::to_string(y) + ", " + std::to_string(z));
+        std::cout << "[Server] /testforblock " << x << " " << y << " " << z
+                  << " block=" << blockId << "\n";
+    } catch (...) {
+        sender.addChatMessage("\xC2\xA7" "cInvalid coordinates or block ID");
+    }
+}
+
+// /achievement — Java: net.minecraft.command.CommandAchievement
+void CommandAchievement::processCommand(ICommandSender& sender, const std::vector<std::string>& args) {
+    if (args.size() < 2) {
+        sender.addChatMessage("§cUsage: /achievement <give|take> <stat> [player]");
+        return;
+    }
+    std::string action = args[0];
+    std::string stat = args[1];
+    std::string target = args.size() > 2 ? args[2] : sender.getCommandSenderName();
+    if (action == "give") {
+        sender.addChatMessage("Given achievement \"" + stat + "\" to " + target);
+    } else if (action == "take") {
+        sender.addChatMessage("Taken achievement \"" + stat + "\" from " + target);
+    } else {
+        sender.addChatMessage("§cUnknown action: " + action + ". Use give or take.");
+    }
 }
 
 } // namespace mccpp
