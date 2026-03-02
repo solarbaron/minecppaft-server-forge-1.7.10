@@ -1781,7 +1781,93 @@ void PlayHandler::handlePlayerDigging(const uint8_t* data, size_t length, Connec
     }
 
     if (status == 5) {
-        // Shoot arrow / finish eating — silently consume for now
+        // Shoot arrow / finish eating — Java: ItemBow.onPlayerStoppedUsing()
+        auto currentItem = inventory_.getCurrentItem();
+        if (currentItem && currentItem->getItemId() == 261) { // 261 = bow
+            // Check for arrow in inventory (survival only)
+            bool hasArrow = (gameMode_ == 1); // Creative always has arrows
+            int32_t arrowSlot = -1;
+            if (!hasArrow) {
+                for (int i = 0; i < 36; ++i) {
+                    auto slot = inventory_.getStackInSlot(i);
+                    if (slot && slot->getItemId() == 262) { // 262 = arrow
+                        hasArrow = true;
+                        arrowSlot = i;
+                        break;
+                    }
+                }
+            }
+            if (!hasArrow) return;
+
+            // Java: ItemBow.getMaxItemUseDuration() = 72000
+            // Arrow speed based on charge time (simplified: full charge = 3.0)
+            // Full charge gives: (72000-charge)/20, maxed at 1.0 → speed = 3.0
+            float arrowSpeed = 3.0f; // Full charge speed
+            bool critical = true;    // Full charge = critical
+            double arrowDamage = 2.0;
+
+            // Calculate trajectory from player look direction
+            // Java: EntityArrow(world, player, speed)
+            float yawRad = playerYaw_ / 180.0f * static_cast<float>(M_PI);
+            float pitchRad = playerPitch_ / 180.0f * static_cast<float>(M_PI);
+
+            double mX = -std::sin(yawRad) * std::cos(pitchRad) * arrowSpeed;
+            double mY = -std::sin(pitchRad) * arrowSpeed;
+            double mZ = std::cos(yawRad) * std::cos(pitchRad) * arrowSpeed;
+
+            // Spawn position: eye height offset
+            double spawnX = playerX_ - std::cos(yawRad) * 0.16;
+            double spawnY = playerY_ + 1.62 - 0.1;
+            double spawnZ = playerZ_ - std::sin(yawRad) * 0.16;
+
+            // Check for Power enchantment — Java: Enchantment.power (ID 48)
+            // Check for Punch enchantment — Java: Enchantment.punch (ID 49)
+            // Check for Flame enchantment — Java: Enchantment.flame (ID 50)
+            int32_t powerLevel = 0, punchLevel = 0, flameLevel = 0;
+            if (currentItem->hasEnchantments()) {
+                auto enchants = currentItem->getEnchantments();
+                for (auto& e : enchants) {
+                    if (e.id == 48) powerLevel = e.level;   // Power
+                    if (e.id == 49) punchLevel = e.level;   // Punch
+                    if (e.id == 50) flameLevel = e.level;   // Flame
+                }
+            }
+            // Power: +0.5 * level + 0.5 to base damage
+            if (powerLevel > 0) {
+                arrowDamage += powerLevel * 0.5 + 0.5;
+            }
+
+            server_.broadcastSound("random.bow", playerX_, playerY_, playerZ_, 1.0f, 1.0f);
+            int32_t arrowEid = server_.spawnArrow(spawnX, spawnY, spawnZ,
+                mX, mY, mZ,
+                entityId_, arrowDamage, punchLevel, critical);
+            (void)arrowEid;
+
+            // Consume arrow from inventory (survival only)
+            if (gameMode_ != 1 && arrowSlot >= 0) {
+                auto arrowStack = inventory_.getStackInSlot(arrowSlot);
+                if (arrowStack) {
+                    int32_t remaining = arrowStack->getStackSize() - 1;
+                    if (remaining <= 0) {
+                        inventory_.setInventorySlotContents(arrowSlot, std::nullopt);
+                    } else {
+                        ItemStack updated = *arrowStack;
+                        updated.setStackSize(remaining);
+                        inventory_.setInventorySlotContents(arrowSlot, updated);
+                    }
+                    // Sync slot
+                    int16_t containerSlot = (arrowSlot < 9)
+                        ? static_cast<int16_t>(36 + arrowSlot)
+                        : static_cast<int16_t>(arrowSlot);
+                    sendSetSlot(conn, 0, containerSlot, inventory_.getStackInSlot(arrowSlot));
+                }
+            }
+
+            // Durability damage to bow (survival only)
+            if (gameMode_ != 1) {
+                damageHeldItem(1);
+            }
+        }
         return;
     }
 
@@ -2617,6 +2703,29 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
                     // Play throw sound — Java: world.playSoundAtEntity(player, "random.bow", 0.5, 0.4/(rand*0.4+0.8))
                     float pitch = 0.4f / (static_cast<float>(rand() % 1000) / 1000.0f * 0.4f + 0.8f);
                     server_.broadcastSound("random.bow", playerX_, playerY_, playerZ_, 0.5f, pitch);
+
+                    // Spawn throwable projectile entity
+                    // Java: EntityThrowable constructor — spawn at eye height, offset back 0.16 blocks
+                    float yawRad = playerYaw_ / 180.0f * static_cast<float>(M_PI);
+                    float pitchRad = playerPitch_ / 180.0f * static_cast<float>(M_PI);
+                    double spawnX = playerX_ - static_cast<double>(std::cos(yawRad) * 0.16f);
+                    double spawnY = playerY_ + 1.52 - 0.1; // Eye height - 0.1
+                    double spawnZ = playerZ_ - static_cast<double>(std::sin(yawRad) * 0.16f);
+
+                    // Java: initial motion = -sin(yaw)*cos(pitch) * 0.4, -sin(pitch) * 0.4, cos(yaw)*cos(pitch) * 0.4
+                    double motX = -std::sin(yawRad) * std::cos(pitchRad) * 0.4;
+                    double motY = -std::sin(pitchRad) * 0.4;
+                    double motZ = std::cos(yawRad) * std::cos(pitchRad) * 0.4;
+
+                    // Map item ID to ThrowableType
+                    MinecraftServer::ThrowableType throwType = MinecraftServer::ThrowableType::Snowball;
+                    if (heldItemId == 344) throwType = MinecraftServer::ThrowableType::Egg;
+                    else if (heldItemId == 368) throwType = MinecraftServer::ThrowableType::EnderPearl;
+                    else if (heldItemId == 384) throwType = MinecraftServer::ThrowableType::ExpBottle;
+
+                    server_.spawnThrowable(throwType, spawnX, spawnY, spawnZ,
+                                            motX, motY, motZ,
+                                            entityId_, playerName_);
                     std::cout << "[Throw] " << playerName_ << " threw item " << heldItemId << "\n";
                 }
             }

@@ -681,6 +681,49 @@ public:
     /** Tick all arrow projectiles (flight physics, collision, despawn). */
     void tickArrows();
 
+    // ─── Throwable projectile entities ──────────────────────────────
+    // Java reference: EntityThrowable — snowball, egg, ender pearl, exp bottle
+    enum class ThrowableType : uint8_t {
+        Snowball = 0,
+        Egg = 1,
+        EnderPearl = 2,
+        ExpBottle = 3,
+        SplashPotion = 4
+    };
+
+    struct SpawnedThrowable {
+        int32_t entityId = 0;
+        int32_t throwerEntityId = -1;
+        std::string throwerName;  // For ender pearl teleport
+        ThrowableType type = ThrowableType::Snowball;
+        double posX = 0, posY = 0, posZ = 0;
+        double motionX = 0, motionY = 0, motionZ = 0;
+        bool isDead = false;
+        int32_t ticksInAir = 0;
+        int64_t spawnTick = 0;
+
+        // Java: EntityThrowable physics constants
+        static constexpr float GRAVITY = 0.03f;   // vs arrow's 0.05
+        static constexpr float AIR_FRICTION = 0.99f;
+        static constexpr int32_t MAX_TICKS = 1200; // Despawn after 60 seconds
+    };
+    mutable std::mutex throwableEntitiesMutex_;
+    std::vector<SpawnedThrowable> throwableEntities_;
+    std::atomic<int32_t> nextThrowableEntityId_{400000};
+
+    /**
+     * Spawn a throwable projectile.
+     * Java reference: EntityThrowable(world, thrower) → setThrowableHeading
+     * @return entity ID of the spawned throwable
+     */
+public:
+    int32_t spawnThrowable(ThrowableType type, double x, double y, double z,
+                           double motionX, double motionY, double motionZ,
+                           int32_t throwerEntityId, const std::string& throwerName);
+
+    /** Tick all throwable projectiles (flight physics, collision, despawn). */
+    void tickThrowables();
+
 private:
     // ─── Chest storage (in-memory tile entities) ─────────────────────
     // Key: packed position (x << 40 | (z & 0xFFFFF) << 20 | (y & 0xFFFFF))

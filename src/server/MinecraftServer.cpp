@@ -258,6 +258,7 @@ void MinecraftServer::tick() {
     // Tick mob entities (despawn tracking)
     tickMobs();
     tickArrows();
+    tickThrowables();
 
     // Natural mob spawning every 200 ticks (10 seconds)
     // Java reference: WorldServer.tick() → SpawnerAnimals.findChunksForSpawning()
@@ -3975,6 +3976,307 @@ void MinecraftServer::tickArrows() {
 
     if (!deadIds.empty()) {
         std::lock_guard<std::mutex> connLock(connectionsMutex_);
+        for (auto& conn : connections_) {
+            if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+            auto handler = conn->getHandler();
+            auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+            if (!ph) continue;
+            ph->sendDestroyEntities(*conn, deadIds);
+        }
+    }
+}
+
+// ─── Throwable projectile spawning ──────────────────────────────────
+// Java: EntityThrowable(world, thrower) + setThrowableHeading(motionXYZ, speed=1.5, inaccuracy=1.0)
+int32_t MinecraftServer::spawnThrowable(ThrowableType type, double x, double y, double z,
+                                         double motionX, double motionY, double motionZ,
+                                         int32_t throwerEntityId, const std::string& throwerName) {
+    int32_t eid = nextThrowableEntityId_.fetch_add(1, std::memory_order_relaxed);
+    int64_t currentTick = tickCount_.load(std::memory_order_relaxed);
+
+    SpawnedThrowable t;
+    t.entityId = eid;
+    t.throwerEntityId = throwerEntityId;
+    t.throwerName = throwerName;
+    t.type = type;
+    t.posX = x; t.posY = y; t.posZ = z;
+
+    // Normalize and scale velocity — Java: setThrowableHeading(mx, my, mz, 1.5f, 1.0f)
+    double len = std::sqrt(motionX * motionX + motionY * motionY + motionZ * motionZ);
+    if (len > 0.001) {
+        motionX /= len; motionY /= len; motionZ /= len;
+    }
+    // Add slight inaccuracy — Java: + rand.nextGaussian() * 0.0075 * inaccuracy
+    static thread_local std::mt19937 rng(std::random_device{}());
+    std::normal_distribution<double> gauss(0.0, 0.0075);
+    motionX += gauss(rng);
+    motionY += gauss(rng);
+    motionZ += gauss(rng);
+    // Scale by speed (1.5 for standard throwables)
+    double speed = 1.5;
+    t.motionX = motionX * speed;
+    t.motionY = motionY * speed;
+    t.motionZ = motionZ * speed;
+    t.isDead = false;
+    t.ticksInAir = 0;
+    t.spawnTick = currentTick;
+
+    // Determine SpawnObject type ID for protocol
+    // Java: S0E SpawnObject — type 61=snowball, 62=egg, 65=ender pearl, 75=exp bottle, 73=splash potion
+    uint8_t objectType = 0;
+    switch (type) {
+        case ThrowableType::Snowball:    objectType = 61; break;
+        case ThrowableType::Egg:         objectType = 62; break;
+        case ThrowableType::EnderPearl:  objectType = 65; break;
+        case ThrowableType::ExpBottle:   objectType = 75; break;
+        case ThrowableType::SplashPotion: objectType = 73; break;
+    }
+
+    // Broadcast S0E SpawnObject to all players
+    {
+        std::lock_guard<std::mutex> lock(connectionsMutex_);
+        for (auto& conn : connections_) {
+            if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+            auto handler = conn->getHandler();
+            auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+            if (ph) {
+                ph->sendSpawnObject(*conn, eid, objectType, x, y, z,
+                                    0.0f, 0.0f,
+                                    throwerEntityId > 0 ? throwerEntityId : 0,
+                                    t.motionX, t.motionY, t.motionZ);
+            }
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(throwableEntitiesMutex_);
+        throwableEntities_.push_back(std::move(t));
+    }
+    return eid;
+}
+
+// ─── Throwable projectile ticking ──────────────────────────────────
+// Java: EntityThrowable.onUpdate() — gravity, friction, collision, impact
+void MinecraftServer::tickThrowables() {
+    std::vector<int32_t> deadIds;
+
+    {
+        std::lock_guard<std::mutex> lock(throwableEntitiesMutex_);
+        for (auto& t : throwableEntities_) {
+            if (t.isDead) continue;
+
+            ++t.ticksInAir;
+            if (t.ticksInAir > SpawnedThrowable::MAX_TICKS) {
+                t.isDead = true;
+                deadIds.push_back(t.entityId);
+                continue;
+            }
+
+            // Apply motion
+            double newX = t.posX + t.motionX;
+            double newY = t.posY + t.motionY;
+            double newZ = t.posZ + t.motionZ;
+
+            // ─── Block collision check ──────────────────────────────
+            // Java: world.rayTraceBlocks(pos, pos+motion)
+            if (!worlds_.empty()) {
+                auto* wld = worlds_[0].get();
+                int bx = static_cast<int>(std::floor(newX));
+                int by = static_cast<int>(std::floor(newY));
+                int bz = static_cast<int>(std::floor(newZ));
+                Block* blockHit = wld->getBlock(bx, by, bz);
+                if (blockHit != nullptr) {
+                    // Hit a block — trigger impact
+                    t.isDead = true;
+                    deadIds.push_back(t.entityId);
+
+                    // Impact effects based on type
+                    switch (t.type) {
+                        case ThrowableType::Snowball:
+                            broadcastSound("random.bow", t.posX, t.posY, t.posZ, 0.5f, 0.4f);
+                            break;
+                        case ThrowableType::Egg:
+                            // Java: 1/8 chance spawn chicken, 1/32 chance spawn 4
+                            if ((rand() % 8) == 0) {
+                                int count = ((rand() % 32) == 0) ? 4 : 1;
+                                for (int i = 0; i < count; ++i) {
+                                    summonMob(93, t.posX, t.posY + 1.0, t.posZ); // chicken
+                                }
+                            }
+                            break;
+                        case ThrowableType::EnderPearl: {
+                            // Teleport thrower to impact point
+                            std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                            for (auto& conn : connections_) {
+                                if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                                auto handler = conn->getHandler();
+                                auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                                if (!ph) continue;
+                                if (ph->getPlayerName() == t.throwerName) {
+                                    // Teleport player — Java: setPositionAndUpdate
+                                    ph->setPlayerPosition(t.posX, t.posY + 1.0, t.posZ);
+                                    ph->sendPlayerPosAndLook(*conn, t.posX, t.posY + 1.0, t.posZ, ph->getPlayerYaw(), ph->getPlayerPitch());
+                                    // 5 fall damage — Java: attackEntityFrom(DamageSource.fall, 5.0f)
+                                    ph->applyDamage(5.0f);
+                                    ph->sendUpdateHealth(*conn, ph->getHealth(), ph->getFood(), ph->getSaturation());
+                                    broadcastSound("mob.endermen.portal", t.posX, t.posY, t.posZ, 1.0f, 1.0f);
+                                    if (ph->getHealth() <= 0.0f) {
+                                        broadcastEntityEvent(ph->getEntityId(), 3);
+                                        broadcastChatMessage(ph->getPlayerName() + " hit the ground too hard");
+                                    }
+                                    break;
+                                }
+                            }
+                            break;
+                        }
+                        case ThrowableType::ExpBottle: {
+                            // Java: 3-11 XP orbs
+                            int xp = 3 + (rand() % 9);
+                            // Give XP to thrower
+                            std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                            for (auto& conn : connections_) {
+                                if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                                auto handler = conn->getHandler();
+                                auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                                if (!ph) continue;
+                                if (ph->getPlayerName() == t.throwerName) {
+                                    ph->grantExperience(xp);
+                                    break;
+                                }
+                            }
+                            broadcastSound("random.glass", t.posX, t.posY, t.posZ, 1.0f, 1.0f);
+                            break;
+                        }
+                        case ThrowableType::SplashPotion:
+                            broadcastSound("game.potion.smash", t.posX, t.posY, t.posZ, 1.0f, 1.0f);
+                            break;
+                    }
+                    continue;
+                }
+            }
+
+            // ─── Entity (player) collision check ────────────────────
+            // Java: EntityThrowable.onUpdate() — check entity AABB
+            {
+                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                for (auto& conn : connections_) {
+                    if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                    auto handler = conn->getHandler();
+                    auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                    if (!ph || ph->isDead()) continue;
+                    if (ph->getEntityId() == t.throwerEntityId && t.ticksInAir < 5) continue;
+
+                    double dx = ph->getPlayerX() - newX;
+                    double dy = (ph->getPlayerY() + 0.9) - newY; // Center of player
+                    double dz = ph->getPlayerZ() - newZ;
+                    double distSq = dx * dx + dy * dy + dz * dz;
+
+                    if (distSq < 1.0) { // Hit radius ~1 block
+                        t.isDead = true;
+                        deadIds.push_back(t.entityId);
+
+                        switch (t.type) {
+                            case ThrowableType::Snowball: {
+                                // Java: 0 damage to entities (3 to blazes, handled via mob collision)
+                                broadcastEntityEvent(ph->getEntityId(), 2);
+                                broadcastSound("game.player.hurt", ph->getPlayerX(), ph->getPlayerY(), ph->getPlayerZ(), 1.0f, 1.0f);
+                                break;
+                            }
+                            case ThrowableType::Egg: {
+                                // Java: 0 damage, knockback
+                                broadcastEntityEvent(ph->getEntityId(), 2);
+                                break;
+                            }
+                            case ThrowableType::EnderPearl: {
+                                // Teleport thrower to impact location (not the hit player)
+                                for (auto& conn2 : connections_) {
+                                    if (!conn2->isConnected() || conn2->getState() != ConnectionState::Play) continue;
+                                    auto handler2 = conn2->getHandler();
+                                    auto* thrower = dynamic_cast<PlayHandler*>(handler2.get());
+                                    if (!thrower) continue;
+                                    if (thrower->getPlayerName() == t.throwerName) {
+                                        thrower->setPlayerPosition(newX, newY, newZ);
+                                        thrower->sendPlayerPosAndLook(*conn2, newX, newY, newZ, thrower->getPlayerYaw(), thrower->getPlayerPitch());
+                                        thrower->applyDamage(5.0f);
+                                        thrower->sendUpdateHealth(*conn2, thrower->getHealth(), thrower->getFood(), thrower->getSaturation());
+                                        broadcastSound("mob.endermen.portal", newX, newY, newZ, 1.0f, 1.0f);
+                                        break;
+                                    }
+                                }
+                                break;
+                            }
+                            default:
+                                break;
+                        }
+                        break; // Only hit one player
+                    }
+                }
+            }
+            if (t.isDead) continue;
+
+            // ─── Mob collision check (snowball → blaze damage) ──────
+            if (t.type == ThrowableType::Snowball || t.type == ThrowableType::Egg) {
+                std::lock_guard<std::mutex> mobLock(mobEntitiesMutex_);
+                for (auto& mob : mobEntities_) {
+                    if (mob.isDead) continue;
+                    double dx = mob.posX - newX;
+                    double dy = (mob.posY + 1.0) - newY;
+                    double dz = mob.posZ - newZ;
+                    if (dx * dx + dy * dy + dz * dz < 1.5) {
+                        t.isDead = true;
+                        deadIds.push_back(t.entityId);
+                        // Snowball does 3 damage to blazes — Java: EntitySnowball.onImpact
+                        if (t.type == ThrowableType::Snowball && mob.mobType == 61) { // Blaze
+                            mob.health -= 3.0f;
+                            broadcastEntityEvent(mob.entityId, 2); // Hurt
+                            broadcastSound("mob.blaze.hit", mob.posX, mob.posY, mob.posZ, 1.0f, 1.0f);
+                            if (mob.health <= 0.0f) {
+                                mob.isDead = true;
+                                deadIds.push_back(mob.entityId);
+                                broadcastEntityEvent(mob.entityId, 3);
+                                broadcastSound("mob.blaze.death", mob.posX, mob.posY, mob.posZ, 1.0f, 1.0f);
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+            if (t.isDead) continue;
+
+            // Update position
+            t.posX = newX;
+            t.posY = newY;
+            t.posZ = newZ;
+
+            // Apply physics — Java: EntityThrowable.onUpdate()
+            t.motionX *= SpawnedThrowable::AIR_FRICTION;
+            t.motionY *= SpawnedThrowable::AIR_FRICTION;
+            t.motionZ *= SpawnedThrowable::AIR_FRICTION;
+            t.motionY -= SpawnedThrowable::GRAVITY;
+
+            // Broadcast position update
+            {
+                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                for (auto& conn : connections_) {
+                    if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                    auto handler = conn->getHandler();
+                    auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                    if (!ph) continue;
+                    ph->sendEntityTeleport(*conn, t.entityId, t.posX, t.posY, t.posZ, 0.0f, 0.0f);
+                }
+            }
+        }
+
+        // Remove dead throwables
+        throwableEntities_.erase(
+            std::remove_if(throwableEntities_.begin(), throwableEntities_.end(),
+                [](const SpawnedThrowable& t) { return t.isDead; }),
+            throwableEntities_.end());
+    }
+
+    // Broadcast destroy for dead throwables
+    if (!deadIds.empty()) {
+        std::lock_guard<std::mutex> lock(connectionsMutex_);
         for (auto& conn : connections_) {
             if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
             auto handler = conn->getHandler();
