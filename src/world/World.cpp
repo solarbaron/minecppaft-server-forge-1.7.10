@@ -135,6 +135,12 @@ Chunk* ChunkProviderServer::loadChunk(int chunkX, int chunkZ) {
         chunk = std::make_unique<Chunk>(chunkX, chunkZ);
     }
 
+    // Initialize sky light + block light after terrain generation
+    // Java reference: Chunk.generateSkylightMap()
+    if (chunk && !chunk->isLightPopulated) {
+        chunk->generateSkylightMap();
+    }
+
     // Insert (write lock)
     {
         std::unique_lock<std::shared_mutex> wlock(chunkMapMutex_);

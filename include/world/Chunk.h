@@ -221,6 +221,75 @@ public:
      * Java reference: AnvilChunkLoader.readChunkFromNBT()
      */
     static std::unique_ptr<Chunk> readFromNBT(const nbt::NBTTagCompound& levelTag);
+
+    /**
+     * Generate sky light map — initialize skylight values for all columns.
+     * Java reference: Chunk.generateSkylightMap()
+     *
+     * For each (x,z) column, scans from Y=255 downward:
+     *   - Sets skylight=15 for all blocks with lightOpacity=0 (air, glass, etc.)
+     *   - Stops at the first block with lightOpacity>0 (opaque block)
+     *   - Updates heightMap[] with the Y+1 of the highest opaque block
+     *
+     * Also initializes block light from light-emitting blocks.
+     */
+    void generateSkylightMap() {
+        // Compute height map + set sky light
+        for (int x = 0; x < 16; ++x) {
+            for (int z = 0; z < 16; ++z) {
+                int topY = 0;
+
+                // Scan from top down to find highest opaque block
+                for (int y = 255; y >= 0; --y) {
+                    int blockId = 0;
+                    int sectionIdx = y >> 4;
+                    if (sections[sectionIdx]) {
+                        auto* block = sections[sectionIdx]->getBlock(x, y & 15, z);
+                        if (block) blockId = Block::getIdFromBlock(block);
+                    }
+
+                    auto* blockDef = Block::getBlockById(blockId);
+                    int opacity = blockDef ? blockDef->getLightOpacity() : 0;
+
+                    if (opacity > 0) {
+                        topY = y + 1;
+                        break;
+                    }
+                }
+
+                heightMap[z * 16 + x] = topY;
+
+                // Set skylight in existing sections only
+                // (client fills skylight=15 for missing sections in overworld)
+                for (int y = 255; y >= 0; --y) {
+                    int sectionIdx = y >> 4;
+                    if (!sections[sectionIdx]) continue;
+                    int skyVal = (y >= topY) ? 15 : 0;
+                    sections[sectionIdx]->setSkyLight(x, y & 15, z, skyVal);
+                }
+            }
+        }
+
+        // Initialize block light from light-emitting blocks
+        for (int sIdx = 0; sIdx < SECTION_COUNT; ++sIdx) {
+            if (!sections[sIdx]) continue;
+            for (int x = 0; x < 16; ++x) {
+                for (int y = 0; y < 16; ++y) {
+                    for (int z = 0; z < 16; ++z) {
+                        auto* block = sections[sIdx]->getBlock(x, y, z);
+                        if (block) {
+                            int emission = block->getLightValue();
+                            if (emission > 0) {
+                                sections[sIdx]->setBlockLight(x, y, z, emission);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        isLightPopulated = true;
+    }
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
