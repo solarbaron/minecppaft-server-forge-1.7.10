@@ -51,6 +51,9 @@ CommandHandler::CommandHandler() {
     registerCommand(std::make_shared<CommandToggleDownfall>());
     registerCommand(std::make_shared<CommandDefaultGameMode>());
     registerCommand(std::make_shared<CommandMe>());
+    registerCommand(std::make_shared<CommandTell>());
+    registerCommand(std::make_shared<CommandBan>());
+    registerCommand(std::make_shared<CommandKick>());
     std::cout << "[Commands] Registered " << getCommandCount() << " commands\n";
 }
 
@@ -745,6 +748,68 @@ void CommandMe::processCommand(ICommandSender& sender, const std::vector<std::st
     if (server) {
         server->broadcastChat("* " + sender.getCommandSenderName() + " " + action);
     }
+}
+
+// /tell — Java: net.minecraft.command.CommandMessage
+void CommandTell::processCommand(ICommandSender& sender, const std::vector<std::string>& args) {
+    if (args.size() < 2) {
+        sender.addChatMessage("§cUsage: /tell <player> <message>");
+        return;
+    }
+    std::string target = args[0];
+    std::string message;
+    for (size_t i = 1; i < args.size(); ++i) {
+        if (i > 1) message += " ";
+        message += args[i];
+    }
+    auto* server = sender.getServer();
+    if (!server) return;
+    server->sendPrivateMessage(target, "§d" + sender.getCommandSenderName() + " whispers to you: " + message);
+    sender.addChatMessage("§dYou whisper to " + target + ": " + message);
+}
+
+// /ban — Java: net.minecraft.command.CommandBanPlayer (simplified: kick only)
+void CommandBan::processCommand(ICommandSender& sender, const std::vector<std::string>& args) {
+    if (args.empty()) {
+        sender.addChatMessage("§cUsage: /ban <player> [reason]");
+        return;
+    }
+    std::string target = args[0];
+    std::string reason = "Banned by an operator";
+    if (args.size() > 1) {
+        reason = "";
+        for (size_t i = 1; i < args.size(); ++i) {
+            if (i > 1) reason += " ";
+            reason += args[i];
+        }
+    }
+    auto* server = sender.getServer();
+    if (!server) return;
+    server->kickPlayer(target, reason);
+    server->broadcastChat("§7" + target + " was banned by " + sender.getCommandSenderName() + ": " + reason);
+    std::cout << "[Server] " << sender.getCommandSenderName() << " banned " << target << ": " << reason << "\n";
+}
+
+// /kick — Java: net.minecraft.command.CommandKick
+void CommandKick::processCommand(ICommandSender& sender, const std::vector<std::string>& args) {
+    if (args.empty()) {
+        sender.addChatMessage("§cUsage: /kick <player> [reason]");
+        return;
+    }
+    std::string target = args[0];
+    std::string reason = "Kicked by an operator";
+    if (args.size() > 1) {
+        reason = "";
+        for (size_t i = 1; i < args.size(); ++i) {
+            if (i > 1) reason += " ";
+            reason += args[i];
+        }
+    }
+    auto* server = sender.getServer();
+    if (!server) return;
+    server->kickPlayer(target, reason);
+    sender.addChatMessage("Kicked " + target + ": " + reason);
+    std::cout << "[Server] " << sender.getCommandSenderName() << " kicked " << target << "\n";
 }
 
 } // namespace mccpp

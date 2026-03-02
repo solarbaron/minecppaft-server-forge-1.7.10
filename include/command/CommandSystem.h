@@ -395,4 +395,43 @@ public:
     void processCommand(ICommandSender& sender, const std::vector<std::string>& args) override;
 };
 
+// /tell <player> <message> — Private message
+// Java: net.minecraft.command.CommandMessage
+class CommandTell : public ICommand {
+public:
+    std::string getCommandName() const override { return "tell"; }
+    std::string getCommandUsage() const override { return "/tell <player> <message>"; }
+    int32_t getRequiredPermissionLevel() const override { return 0; }
+    void processCommand(ICommandSender& sender, const std::vector<std::string>& args) override;
+    bool isUsernameIndex(const std::vector<std::string>& args, int32_t index) const override {
+        return index == 0;
+    }
+};
+
+// /ban <player> [reason] — Ban/kick a player
+// Java: net.minecraft.command.CommandBanPlayer
+class CommandBan : public ICommand {
+public:
+    std::string getCommandName() const override { return "ban"; }
+    std::string getCommandUsage() const override { return "/ban <player> [reason]"; }
+    int32_t getRequiredPermissionLevel() const override { return 3; }
+    void processCommand(ICommandSender& sender, const std::vector<std::string>& args) override;
+    bool isUsernameIndex(const std::vector<std::string>& args, int32_t index) const override {
+        return index == 0;
+    }
+};
+
+// /kick <player> [reason] — Kick a player
+// Java: net.minecraft.command.CommandKick
+class CommandKick : public ICommand {
+public:
+    std::string getCommandName() const override { return "kick"; }
+    std::string getCommandUsage() const override { return "/kick <player> [reason]"; }
+    int32_t getRequiredPermissionLevel() const override { return 3; }
+    void processCommand(ICommandSender& sender, const std::vector<std::string>& args) override;
+    bool isUsernameIndex(const std::vector<std::string>& args, int32_t index) const override {
+        return index == 0;
+    }
+};
+
 } // namespace mccpp

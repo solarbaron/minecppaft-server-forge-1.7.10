@@ -512,6 +512,12 @@ public:
     /** Broadcast chat message to all players. */
     void broadcastChat(const std::string& message) { broadcastChatMessage(message); }
 
+    /** Send a private chat message to a specific player by name. */
+    void sendPrivateMessage(const std::string& playerName, const std::string& message);
+
+    /** Kick a player by name with a reason message. */
+    void kickPlayer(const std::string& playerName, const std::string& reason);
+
     /**
      * Apply a potion effect to a player by name.
      * Java reference: EntityLivingBase.addPotionEffect()

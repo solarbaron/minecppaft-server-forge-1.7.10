@@ -1833,6 +1833,42 @@ void MinecraftServer::givePlayerItem(const std::string& playerName, int32_t item
     }
 }
 
+void MinecraftServer::sendPrivateMessage(const std::string& playerName, const std::string& message) {
+    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    for (auto& conn : connections_) {
+        if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+        auto handler = conn->getHandler();
+        auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+        if (!ph || ph->getPlayerName() != playerName) continue;
+        ph->sendChatMessage(*conn, message);
+        return;
+    }
+}
+
+void MinecraftServer::kickPlayer(const std::string& playerName, const std::string& reason) {
+    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    for (auto& conn : connections_) {
+        if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+        auto handler = conn->getHandler();
+        auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+        if (!ph || ph->getPlayerName() != playerName) continue;
+        // Send S40 Disconnect packet with reason (build manually)
+        std::string json = "{\"text\":\"" + reason + "\"}";
+        std::vector<uint8_t> pkt;
+        pkt.push_back(0x40); // Disconnect packet ID (VarInt, single byte)
+        // Write string length as VarInt
+        uint32_t len = static_cast<uint32_t>(json.size());
+        while (len > 0x7F) { pkt.push_back(static_cast<uint8_t>(len & 0x7F) | 0x80); len >>= 7; }
+        pkt.push_back(static_cast<uint8_t>(len));
+        // Write string bytes
+        pkt.insert(pkt.end(), json.begin(), json.end());
+        conn->sendPacket(std::move(pkt));
+        conn->disconnect();
+        std::cout << "[Server] Kicked " << playerName << ": " << reason << "\n";
+        return;
+    }
+}
+
 bool MinecraftServer::isRaining() const {
     for (auto& w : worlds_) {
         if (w->isRaining()) return true;
