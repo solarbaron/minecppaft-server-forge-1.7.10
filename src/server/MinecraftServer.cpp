@@ -1524,7 +1524,129 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
         }
     }
 
-    if (!target || !targetConn || target->isDead()) return;
+    if (!target || !targetConn || target->isDead()) {
+        // ─── Player-vs-Mob attack ────────────────────────────────────
+        // If not a player target, check if it's a mob entity
+        std::lock_guard<std::mutex> mobLock(mobEntitiesMutex_);
+        for (auto& mob : mobEntities_) {
+            if (mob.entityId != targetEntityId || mob.isDead) continue;
+
+            // Apply weapon damage
+            float damage = attacker.getWeaponDamage();
+            mob.health -= damage;
+
+            // Hurt animation
+            broadcastEntityEvent(targetEntityId, 2);
+            broadcastSound("game.hostile.hurt", mob.posX, mob.posY, mob.posZ, 1.0f, 1.0f);
+
+            // Fire Aspect
+            auto attackerHeld = attacker.getHeldItem();
+            if (attackerHeld && attackerHeld->hasEnchantments()) {
+                int16_t faLevel = attackerHeld->getEnchantmentLevel(20);
+                (void)faLevel; // Mobs don't track fire state yet, but we consume the check
+            }
+
+            // Durability + exhaustion
+            attacker.damageHeldItem(1);
+            attacker.getFoodStats().addExhaustion(0.3f);
+
+            // Death check
+            if (mob.health <= 0.0f) {
+                mob.isDead = true;
+
+                // Death animation
+                broadcastEntityEvent(targetEntityId, 3);
+
+                // Destroy entity
+                {
+                    std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                    std::vector<int32_t> dead = {targetEntityId};
+                    for (auto& c : connections_) {
+                        if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
+                        auto h = c->getHandler();
+                        auto* ph = dynamic_cast<PlayHandler*>(h.get());
+                        if (ph) ph->sendDestroyEntities(*c, dead);
+                    }
+                }
+
+                // ─── Mob drops — Java: EntityLiving.dropFewItems() ─────
+                // Looting enchantment (ID 21) adds extra drops
+                int32_t lootingLevel = 0;
+                if (attackerHeld && attackerHeld->hasEnchantments()) {
+                    lootingLevel = attackerHeld->getEnchantmentLevel(21);
+                }
+
+                // Java: EntityLiving.getExperiencePoints() — base 5 + rand(0..2)
+                int32_t killXp = 5 + (rand() % 3);
+                attacker.grantExperience(killXp);
+                attacker.sendExperienceUpdate(attackerConn);
+
+                // Drop items based on mob type
+                // Java: EntityZombie/EntitySkeleton/etc.dropFewItems()
+                auto dropMobItems = [&](uint8_t mobType, int32_t looting) {
+                    int32_t baseCount = 0;
+                    int32_t dropId = 0;
+                    int32_t dropMeta = 0;
+                    switch (mobType) {
+                        case 54: // Zombie → rotten flesh (367)
+                            dropId = 367; baseCount = 1 + (rand() % 2); break;
+                        case 51: // Skeleton → bones (352) + arrows (262)
+                            dropId = 352; baseCount = 1 + (rand() % 2);
+                            if (rand() % 2 == 0) {
+                                int32_t arrowCount = 1 + (rand() % 2) + looting;
+                                spawnItemDrop(mob.posX, mob.posY, mob.posZ, 262, 0, arrowCount);
+                            }
+                            break;
+                        case 50: // Creeper → gunpowder (289)
+                            dropId = 289; baseCount = rand() % 2; break;
+                        case 52: // Spider → string (287) + spider eye (375)
+                            dropId = 287; baseCount = 1 + (rand() % 2);
+                            if (rand() % 3 == 0) {
+                                spawnItemDrop(mob.posX, mob.posY, mob.posZ, 375, 0, 1);
+                            }
+                            break;
+                        case 58: // Enderman → ender pearl (368)
+                            dropId = 368; baseCount = rand() % 2; break;
+                        case 66: // Witch → various potions/glowstone/sticks
+                            dropId = 331; baseCount = 1 + (rand() % 3); break; // redstone
+                        case 61: // Blaze → blaze rod (369)
+                            dropId = 369; baseCount = rand() % 2; break;
+                        case 56: // Ghast → ghast tear (370) + gunpowder (289)
+                            dropId = 370; baseCount = rand() % 2;
+                            spawnItemDrop(mob.posX, mob.posY, mob.posZ, 289, 0, 1 + (rand() % 2));
+                            break;
+                        case 55: // Slime → slimeball (341)
+                            dropId = 341; baseCount = 1; break;
+                        case 57: // Zombie Pigman → rotten flesh (367) + gold nugget (371)
+                            dropId = 367; baseCount = 1;
+                            if (rand() % 2 == 0) {
+                                spawnItemDrop(mob.posX, mob.posY, mob.posZ, 371, 0, 1 + (rand() % 2));
+                            }
+                            break;
+                        case 59: // Cave Spider → string (287) + spider eye (375)
+                            dropId = 287; baseCount = 1;
+                            if (rand() % 3 == 0) spawnItemDrop(mob.posX, mob.posY, mob.posZ, 375, 0, 1);
+                            break;
+                        case 60: // Silverfish → nothing
+                            break;
+                        case 62: // Magma Cube → magma cream (378)
+                            dropId = 378; baseCount = rand() % 2; break;
+                        default: break;
+                    }
+                    if (dropId > 0) {
+                        int32_t totalCount = baseCount + looting;
+                        if (totalCount > 0) {
+                            spawnItemDrop(mob.posX, mob.posY, mob.posZ, dropId, dropMeta, totalCount);
+                        }
+                    }
+                };
+
+                dropMobItems(mob.mobType, lootingLevel);
+            }
+            return; // Found target mob, done
+        }
+        return; // No target found at all
+    }
 
     // ─── Damage calculation ─────────────────────────────────────────
     // Java: EntityPlayer.attackTargetEntityWithCurrentItem()

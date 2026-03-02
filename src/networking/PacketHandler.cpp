@@ -6228,18 +6228,35 @@ void PlayHandler::tickFood(Connection& conn) {
             bool isInFire = (feetBlockId == 51); // fire block
 
             // ─── Drowning ─────────────────────────────────────────────
+            // Java: EntityLivingBase.onEntityUpdate() — if in water and no water breathing
             if (isInWater) {
-                --airSupply_;
-                if (airSupply_ <= -20) {
-                    airSupply_ = 0;
-                    health_ -= 2.0f;
-                    if (health_ < 0.0f) health_ = 0.0f;
-                    sendUpdateHealth(conn, health_, foodStats_.getFoodLevel(), foodStats_.getSaturationLevel());
-                    server_.broadcastSound("game.player.hurt", playerX_, playerY_, playerZ_, 1.0f, 1.0f);
-                    if (health_ <= 0.0f) {
-                        dead_ = true;
-                        server_.broadcastEntityEvent(entityId_, 3);
-                        server_.broadcastChatMessage(playerName_ + " drowned");
+                // Java: isPotionActive(Potion.waterBreathing) → skip drowning entirely
+                bool hasWaterBreathing = (activePotionEffects_.count(13) > 0);
+                if (!hasWaterBreathing && gameMode_ != 1) {
+                    // Java: decreaseAirSupply → Respiration (ID 5) on helmet
+                    // getRespiration → getMaxEnchantmentLevel(respiration, inventory)
+                    // In Java, Respiration is on helmet slot (armor index 3 = slot 39)
+                    int16_t respirationLevel = 0;
+                    auto helmet = inventory_.getStackInSlot(39); // Helmet slot
+                    if (helmet && helmet->hasEnchantments()) {
+                        respirationLevel = helmet->getEnchantmentLevel(5);
+                    }
+                    // Java: if (respiration > 0 && rand.nextInt(respiration + 1) > 0) return air;
+                    bool skipDecrease = (respirationLevel > 0 && (rand() % (respirationLevel + 1)) > 0);
+                    if (!skipDecrease) {
+                        --airSupply_;
+                    }
+                    if (airSupply_ <= -20) {
+                        airSupply_ = 0;
+                        health_ -= 2.0f;
+                        if (health_ < 0.0f) health_ = 0.0f;
+                        sendUpdateHealth(conn, health_, foodStats_.getFoodLevel(), foodStats_.getSaturationLevel());
+                        server_.broadcastSound("game.player.hurt", playerX_, playerY_, playerZ_, 1.0f, 1.0f);
+                        if (health_ <= 0.0f) {
+                            dead_ = true;
+                            server_.broadcastEntityEvent(entityId_, 3);
+                            server_.broadcastChatMessage(playerName_ + " drowned");
+                        }
                     }
                 }
                 // Water extinguishes fire
