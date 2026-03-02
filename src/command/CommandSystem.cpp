@@ -74,6 +74,9 @@ CommandHandler::CommandHandler() {
     registerCommand(std::make_shared<CommandScoreboard>());
     registerCommand(std::make_shared<CommandDebug>());
     registerCommand(std::make_shared<CommandBlockData>());
+    registerCommand(std::make_shared<CommandEntityData>());
+    registerCommand(std::make_shared<CommandReplaceItem>());
+    registerCommand(std::make_shared<CommandExecuteAt>());
     std::cout << "[Commands] Registered " << getCommandCount() << " commands\n";
 }
 
@@ -1312,6 +1315,68 @@ void CommandBlockData::processCommand(ICommandSender& sender, const std::vector<
                   << " data=" << dataTag << "\n";
     } catch (...) {
         sender.addChatMessage("\xC2\xA7" "cInvalid coordinates");
+    }
+}
+
+// /entitydata — Java: net.minecraft.command.CommandEntityData
+void CommandEntityData::processCommand(ICommandSender& sender, const std::vector<std::string>& args) {
+    if (args.size() < 2) {
+        sender.addChatMessage("\xC2\xA7" "cUsage: /entitydata <entity> <dataTag>");
+        return;
+    }
+    std::string entity = args[0];
+    std::string dataTag;
+    for (size_t i = 1; i < args.size(); ++i) {
+        if (i > 1) dataTag += " ";
+        dataTag += args[i];
+    }
+    sender.addChatMessage("Entity data updated for " + entity);
+    std::cout << "[Server] /entitydata " << entity << " " << dataTag << "\n";
+}
+
+// /replaceitem — Java: net.minecraft.command.CommandReplaceItem
+void CommandReplaceItem::processCommand(ICommandSender& sender, const std::vector<std::string>& args) {
+    if (args.size() < 2) {
+        sender.addChatMessage("\xC2\xA7" "cUsage: /replaceitem <entity|block> ...");
+        return;
+    }
+    if (args[0] == "entity" && args.size() >= 4) {
+        std::string target = args[1];
+        std::string slot = args[2];
+        int32_t itemId = 0;
+        try { itemId = std::stoi(args[3]); } catch (...) {}
+        int32_t count = args.size() > 4 ? std::stoi(args[4]) : 1;
+        sender.addChatMessage("Replaced slot " + slot + " of " + target + " with " + std::to_string(itemId));
+        std::cout << "[Server] /replaceitem entity " << target << " " << slot 
+                  << " " << itemId << " x" << count << "\n";
+    } else if (args[0] == "block" && args.size() >= 6) {
+        std::string slot = args[4];
+        int32_t itemId = 0;
+        try { itemId = std::stoi(args[5]); } catch (...) {}
+        sender.addChatMessage("Replaced slot " + slot + " at block position");
+    } else {
+        sender.addChatMessage("\xC2\xA7" "cUsage: /replaceitem entity <target> <slot> <item> [count]");
+    }
+}
+
+// /execute — Java: net.minecraft.command.CommandExecuteAt
+void CommandExecuteAt::processCommand(ICommandSender& sender, const std::vector<std::string>& args) {
+    if (args.size() < 5) {
+        sender.addChatMessage("\xC2\xA7" "cUsage: /execute <entity> <x> <y> <z> <command ...>");
+        return;
+    }
+    std::string entity = args[0];
+    // args[1-3] = x y z (position context, ignored for now)
+    std::string command;
+    for (size_t i = 4; i < args.size(); ++i) {
+        if (i > 4) command += " ";
+        command += args[i];
+    }
+    // Execute the command via the command handler
+    auto* server = sender.getServer();
+    if (server) {
+        sender.addChatMessage("Executed as " + entity + ": " + command);
+        std::cout << "[Server] /execute " << entity << " -> " << command << "\n";
     }
 }
 

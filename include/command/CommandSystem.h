@@ -653,4 +653,37 @@ public:
     void processCommand(ICommandSender& sender, const std::vector<std::string>& args) override;
 };
 
+// /entitydata <entity> <dataTag> — Modify entity NBT data
+// Java: net.minecraft.command.CommandEntityData
+class CommandEntityData : public ICommand {
+public:
+    std::string getCommandName() const override { return "entitydata"; }
+    std::string getCommandUsage() const override { return "/entitydata <entity> <dataTag>"; }
+    int32_t getRequiredPermissionLevel() const override { return 2; }
+    void processCommand(ICommandSender& sender, const std::vector<std::string>& args) override;
+};
+
+// /replaceitem <entity|block> ... — Replace items in inventories
+// Java: net.minecraft.command.CommandReplaceItem
+class CommandReplaceItem : public ICommand {
+public:
+    std::string getCommandName() const override { return "replaceitem"; }
+    std::string getCommandUsage() const override { return "/replaceitem <entity|block> ..."; }
+    int32_t getRequiredPermissionLevel() const override { return 2; }
+    void processCommand(ICommandSender& sender, const std::vector<std::string>& args) override;
+};
+
+// /execute <entity> <x> <y> <z> <command> — Execute command as entity
+// Java: net.minecraft.command.CommandExecuteAt
+class CommandExecuteAt : public ICommand {
+public:
+    std::string getCommandName() const override { return "execute"; }
+    std::string getCommandUsage() const override { return "/execute <entity> <x> <y> <z> <command>"; }
+    int32_t getRequiredPermissionLevel() const override { return 2; }
+    void processCommand(ICommandSender& sender, const std::vector<std::string>& args) override;
+    bool isUsernameIndex(const std::vector<std::string>& args, int32_t index) const override {
+        return index == 0;
+    }
+};
+
 } // namespace mccpp
