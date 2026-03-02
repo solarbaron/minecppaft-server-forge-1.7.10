@@ -772,6 +772,71 @@ CraftingManager::CraftingManager() {
     // Block ID=148
     shaped21({I(265,1,0), I(265,1,0)}, I(148,1,0));
 
+    // ═══════════════════════════════════════════════════════════════════
+    // Dye recipes (RecipesDyes.java)
+    // BlockColored.func_150031_c(n) = 15 - n (dye damage → wool/clay meta)
+    // Items.dye = 351, Blocks.wool = 35, Blocks.stained_hardened_clay = 159
+    // Blocks.stained_glass = 95, Blocks.stained_glass_pane = 160, Blocks.carpet = 171
+    // ═══════════════════════════════════════════════════════════════════
+
+    for (int32_t dyeColor = 0; dyeColor < 16; ++dyeColor) {
+        int32_t woolMeta = 15 - dyeColor; // func_150031_c
+
+        // Dye + white wool → colored wool
+        addShapelessRecipe(I(35, 1, woolMeta), {I(351, 1, dyeColor), I(35, 1, 0)});
+
+        // 8 hardened clay + dye → 8 stained hardened clay
+        shaped3({I(172,1,0), I(172,1,0), I(172,1,0),
+                 I(172,1,0), I(351,1,dyeColor), I(172,1,0),
+                 I(172,1,0), I(172,1,0), I(172,1,0)}, I(159, 8, woolMeta));
+
+        // 8 glass + dye → 8 stained glass
+        shaped3({I(20,1,0), I(20,1,0), I(20,1,0),
+                 I(20,1,0), I(351,1,dyeColor), I(20,1,0),
+                 I(20,1,0), I(20,1,0), I(20,1,0)}, I(95, 8, woolMeta));
+
+        // 6 stained glass → 16 stained glass panes (note: pane meta = dye color, not 15-n)
+        shaped32({I(95,1,dyeColor), I(95,1,dyeColor), I(95,1,dyeColor),
+                  I(95,1,dyeColor), I(95,1,dyeColor), I(95,1,dyeColor)}, I(160, 16, dyeColor));
+
+        // 2 wool → 3 carpet
+        shaped21({I(35,1,dyeColor), I(35,1,dyeColor)}, I(171, 3, dyeColor));
+    }
+
+    // Flower → dye conversions
+    addShapelessRecipe(I(351,1,11), {I(37,1,0)});    // dandelion → yellow dye
+    addShapelessRecipe(I(351,1,1), {I(38,1,0)});     // poppy → rose red
+    addShapelessRecipe(I(351,3,15), {I(352,1,0)});   // bone(352) → 3 bone meal
+
+    // Dye mixing
+    addShapelessRecipe(I(351,2,9), {I(351,1,1), I(351,1,15)});     // red+white → pink
+    addShapelessRecipe(I(351,2,14), {I(351,1,1), I(351,1,11)});    // red+yellow → orange
+    addShapelessRecipe(I(351,2,10), {I(351,1,2), I(351,1,15)});    // green+white → lime
+    addShapelessRecipe(I(351,2,8), {I(351,1,0), I(351,1,15)});     // black+white → gray
+    addShapelessRecipe(I(351,2,7), {I(351,1,8), I(351,1,15)});     // gray+white → light gray
+    addShapelessRecipe(I(351,3,7), {I(351,1,0), I(351,1,15), I(351,1,15)});  // black+2white → light gray
+    addShapelessRecipe(I(351,2,12), {I(351,1,4), I(351,1,15)});    // lapis+white → light blue
+    addShapelessRecipe(I(351,2,6), {I(351,1,4), I(351,1,2)});      // lapis+green → cyan
+    addShapelessRecipe(I(351,2,5), {I(351,1,4), I(351,1,1)});      // lapis+red → purple
+    addShapelessRecipe(I(351,2,13), {I(351,1,5), I(351,1,9)});     // purple+pink → magenta
+    addShapelessRecipe(I(351,3,13), {I(351,1,4), I(351,1,1), I(351,1,9)});   // lapis+red+pink → magenta
+    addShapelessRecipe(I(351,4,13), {I(351,1,4), I(351,1,1), I(351,1,1), I(351,1,15)});  // lapis+2red+white → magenta
+
+    // Flower variants → dye (red_flower subtypes)
+    addShapelessRecipe(I(351,1,12), {I(38,1,1)});    // blue orchid → light blue
+    addShapelessRecipe(I(351,1,13), {I(38,1,2)});    // allium → magenta
+    addShapelessRecipe(I(351,1,7), {I(38,1,3)});     // azure bluet → light gray
+    addShapelessRecipe(I(351,1,1), {I(38,1,4)});     // red tulip → rose red
+    addShapelessRecipe(I(351,1,14), {I(38,1,5)});    // orange tulip → orange
+    addShapelessRecipe(I(351,1,7), {I(38,1,6)});     // white tulip → light gray
+    addShapelessRecipe(I(351,1,9), {I(38,1,7)});     // pink tulip → pink
+    addShapelessRecipe(I(351,1,7), {I(38,1,8)});     // oxeye daisy → light gray
+
+    // Double plant → dye
+    addShapelessRecipe(I(351,2,11), {I(175,1,0)});   // sunflower → 2 yellow
+    addShapelessRecipe(I(351,2,13), {I(175,1,1)});   // lilac → 2 magenta
+    addShapelessRecipe(I(351,2,1), {I(175,1,4)});    // rose bush → 2 red
+    addShapelessRecipe(I(351,2,9), {I(175,1,5)});    // peony → 2 pink
 
     // ─── Sort by recipe size (larger first) ─────────────────────────
     std::sort(recipes_.begin(), recipes_.end(),
