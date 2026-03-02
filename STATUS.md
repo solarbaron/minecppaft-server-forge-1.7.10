@@ -247,7 +247,7 @@
 - ~~**Void damage**~~ — ✅ 4 damage/tick below Y=-64 (applies even in creative), death: "fell out of the world"
 - ~~**Health/hunger**~~ — ✅ Full FoodStats system: exhaustion→saturation→hunger drain, natural health regen (food≥18), starvation damage (food=0), movement exhaustion, food eating, NBT save/load
 - **Movement validation** — server accepts all positions without anti-cheat; ✅ S18 EntityTeleport + S19 HeadLook broadcast to other players
-- **Lighting** — no light propagation engine
+- ~~**Lighting**~~ — ✅ Sky light + block light initialization (column-wise skylight=15 above highest opaque block, block light from emitting blocks)
 - **Gravity/physics** — no server-side player physics (client handles its own)
 - ~~**Liquid flow**~~ — ✅ Done (water/lava flow simulation, infinite water source, lava+water interaction)
 - **Mob spawning** — ✅ Done (natural hostile spawn near players, S0F SpawnMob, despawn >600 ticks)
@@ -440,3 +440,4 @@
 145. **Dark oak tree worldgen** — ✅ Done (1/6 chance, Log2:1/Leaves2:1)
 146. **RecipesIngots crafting** — ✅ Done (18 recipes: 8 block↔ingot 9x conversions + gold nugget↔ingot)
 147. **RecipesFood crafting** — ✅ Done (9 recipes: mushroom stew, cookies, melon block/seeds, pumpkin pie, fermented spider eye, blaze powder, magma cream)
+148. **Lighting engine** — ✅ Done (Chunk::generateSkylightMap — column-wise skylight + block light from emitting blocks, height map)
