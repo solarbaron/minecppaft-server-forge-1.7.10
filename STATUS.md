@@ -487,3 +487,6 @@
 185. **Bane of Arthropods enchantment** — ✅ Done (ID 18: level*2.5 bonus damage vs arthropods — spider, cave spider, silverfish)
 186. **Mob contact damage** — ✅ Done (hostile mobs attack players within 2 blocks: zombie=3, enderman=7, blaze=6, pigman=5, spider/cave spider=2, silverfish=1, slime/magma=3; 20-tick cooldown, armor+Protection reduction, knockback, per-mob death messages, creative immunity)
 187. **Passive mob drops** — ✅ Done (cow→leather+beef, pig→porkchop, sheep→wool, chicken→feather+chicken, squid→ink sac, iron golem→iron ingots+rose; all affected by Looting)
+188. **Mob movement** — ✅ Done (hostile mobs pathfind toward nearest survival player within 16 blocks: zombie=0.23, skeleton=0.25, spider=0.30, creeper=0.25; simulated gravity, yaw rotation, S18 EntityTeleport broadcast)
+189. **Cooked drops on fire** — ✅ Done (cow→steak 364, pig→cooked porkchop 320, chicken→cooked chicken 366 when isOnFire; Fire Aspect sets mob.isOnFire)
+190. **Fire/Blast/Projectile Protection** — ✅ Done (ID 1 factor 1.25 fire, ID 3 factor 1.5 blast, ID 4 factor 1.5 projectile; applied to lava/fire/burning damage with armor reduction formula)

@@ -613,6 +613,8 @@ private:
         int64_t lastAttackTick = 0;  // Cooldown between attacks (20 ticks = 1s)
         bool isDead = false;
         bool isOnFire = false;      // Tracks fire state for cooked drops
+        int32_t fuseTicks = 0;      // Creeper fuse timer (30 ticks = 1.5s)
+        int32_t attackCooldown = 0; // Skeleton arrow cooldown
         // Movement tracking — Java: EntityTrackerEntry last sent position
         int32_t lastSentPosX = 0, lastSentPosY = 0, lastSentPosZ = 0;
         int32_t ticksSinceLastTeleport = 0;

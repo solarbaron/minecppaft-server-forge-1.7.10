@@ -2525,6 +2525,107 @@ void MinecraftServer::tickMobs() {
                 mob.lastSentPosZ = static_cast<int32_t>(std::floor(mob.posZ * 32.0));
             }
         }
+        // ─── Creeper explosion AI ──────────────────────────────────
+        // Java: EntityCreeper.onUpdate() — fuse timer, explode when timeSinceIgnited >= fuseTime(30)
+        for (auto& mob : mobEntities_) {
+            if (mob.isDead || mob.mobType != 50) continue; // Creeper only
+
+            // Find nearest player within 3 blocks
+            PlayHandler* nearest = nullptr;
+            double nearestDistSq = 9.0; // 3 blocks squared
+            {
+                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                for (auto& conn : connections_) {
+                    if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                    auto handler = conn->getHandler();
+                    auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                    if (!ph || ph->isDead()) continue;
+                    if (ph->getGameMode() == 1 || ph->getGameMode() == 3) continue;
+                    double dx = ph->getPlayerX() - mob.posX;
+                    double dz = ph->getPlayerZ() - mob.posZ;
+                    double distSq = dx * dx + dz * dz;
+                    if (distSq < nearestDistSq) {
+                        nearestDistSq = distSq;
+                        nearest = ph;
+                    }
+                }
+            }
+
+            if (nearest) {
+                ++mob.fuseTicks;
+                // Java: EntityCreeper.fuseTime = 30 (1.5 seconds)
+                if (mob.fuseTicks >= 30) {
+                    // EXPLODE — Java: EntityCreeper.explode() → createExplosion(power=3.0)
+                    createExplosion(mob.posX, mob.posY, mob.posZ, 3.0f, false, true);
+                    mob.isDead = true;
+                    deadIds.push_back(mob.entityId);
+                }
+                // Broadcast creeper swell sound via S1C metadata (simplified: S1A status 17 = ignite)
+            } else {
+                // Reset fuse if no player nearby — Java: EntityCreeper.setCreeperState(-1)
+                if (mob.fuseTicks > 0) mob.fuseTicks = 0;
+            }
+        }
+
+        // ─── Skeleton ranged attack AI ─────────────────────────────
+        // Java: EntitySkeleton.attackEntityWithRangedAttack() — shoots arrows
+        // Simplified: instant-hit arrow damage every 60 ticks (3s) within 16 blocks
+        for (auto& mob : mobEntities_) {
+            if (mob.isDead || mob.mobType != 51) continue; // Skeleton only
+            if (mob.attackCooldown > 0) { --mob.attackCooldown; continue; }
+
+            // Find nearest player within 16 blocks
+            PlayHandler* nearest = nullptr;
+            Connection* nearestConn = nullptr;
+            double nearestDistSq = 256.0;
+            {
+                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                for (auto& conn : connections_) {
+                    if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                    auto handler = conn->getHandler();
+                    auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                    if (!ph || ph->isDead()) continue;
+                    if (ph->getGameMode() == 1 || ph->getGameMode() == 3) continue;
+                    double dx = ph->getPlayerX() - mob.posX;
+                    double dz = ph->getPlayerZ() - mob.posZ;
+                    double distSq = dx * dx + dz * dz;
+                    if (distSq < nearestDistSq) {
+                        nearestDistSq = distSq;
+                        nearest = ph;
+                        nearestConn = conn.get();
+                    }
+                }
+            }
+
+            if (!nearest || nearestDistSq < 4.0) continue; // Too close = melee instead
+
+            // Shoot arrow — Java: EntitySkeleton.attackEntityWithRangedAttack
+            // Simplified: instant damage (no projectile entity flight)
+            float arrowDmg = 3.0f; // Java: skeleton arrow base damage
+            // Java: Projectile Protection (damageType=4) reduces arrow damage
+            int32_t armorValue = nearest->getTotalArmorValue();
+            float afterArmor = arrowDmg;
+            if (armorValue > 0) {
+                float reduction = arrowDmg * (1.0f - std::max(armorValue / 5.0f, armorValue - arrowDmg / 2.0f) / 25.0f);
+                afterArmor = std::max(arrowDmg - reduction, arrowDmg * 0.2f);
+            }
+            int32_t protMod = nearest->getEnchantmentProtectionModifier(4); // Projectile Protection
+            if (protMod > 0) {
+                afterArmor *= (1.0f - std::min(protMod, 20) * 0.04f);
+            }
+            nearest->applyDamage(afterArmor);
+            broadcastEntityEvent(nearest->getEntityId(), 2); // Hurt animation
+            broadcastSound("game.player.hurt", nearest->getPlayerX(), nearest->getPlayerY(), nearest->getPlayerZ(), 1.0f, 1.0f);
+            broadcastSound("random.bow", mob.posX, mob.posY, mob.posZ, 1.0f, 1.2f);
+
+            if (nearest->getHealth() <= 0.0f) {
+                broadcastEntityEvent(nearest->getEntityId(), 3);
+                broadcastChatMessage(nearest->getPlayerName() + " was shot by Skeleton");
+            }
+
+            mob.attackCooldown = 60; // 3 seconds between shots
+        }
+
         // ─── Mob contact damage ─────────────────────────────────────
         // Java: EntityCreature.attackEntityAsMob() — deal damage to nearby players
         // Simplified: proximity-based melee attack, 20-tick cooldown
