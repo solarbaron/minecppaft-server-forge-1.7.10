@@ -57,7 +57,7 @@
 
 ## 🔶 Partially Implemented (Headers + Stubs)
 
-### Commands (21 commands, chat→command bridge ✅)
+### Commands (24 commands, chat→command bridge ✅)
 | Command | Status |
 |---------|---------|
 | `/stop` | ✅ Working via chat |
@@ -81,6 +81,9 @@
 | `/toggledownfall` | ✅ Working — toggle rain/clear weather |
 | `/defaultgamemode` | ✅ Working — set default game mode |
 | `/me` | ✅ Working — broadcast action message |
+| `/tell` | ✅ Working — private message to player |
+| `/ban` | ✅ Working — kick player + broadcast ban |
+| `/kick` | ✅ Working — disconnect with reason (S40) |
 
 ### Entity System
 - **Entity base** — ID counter, UUID, position/rotation, bounding box
@@ -352,3 +355,7 @@
 88. **/defaultgamemode command** — ✅ Done (20th command, /defaultgamemode <mode>, survival/creative/adventure)
 89. **/me command** — ✅ Done (21st command, /me <action>, broadcasts "* Player action" to all)
 90. **Block drop expansion** — ✅ Done (30+ new drops: Nether/End blocks, bookshelf→3 books, nether wart growth-aware, cocoa bean meta-aware, double slabs→2 slabs, ender chest→8 obsidian, flower pot, skull, brewing stand, cauldron, and more)
+91. **Probability-based drops** — ✅ Done (leaves: 1/20 sapling + 1/200 apple for oak/dark oak, tall grass: 1/8 seeds, gravel: 10% flint item 318)
+92. **/tell command** — ✅ Done (22nd command, /tell <player> <message>, private whisper message in §d)
+93. **/ban command** — ✅ Done (23rd command, /ban <player> [reason], kick + broadcast ban message)
+94. **/kick command** — ✅ Done (24th command, /kick <player> [reason], S40 Disconnect packet with JSON reason)
