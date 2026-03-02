@@ -2691,6 +2691,116 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
                     static_cast<double>(px) + 0.5, static_cast<double>(py) + 0.5,
                     static_cast<double>(pz) + 0.5, 1.0f, 1.0f);
                 if (gameMode_ != 1) damageHeldItem(1);
+
+                // ─── Nether Portal creation ──────────────────────────
+                // Java: BlockPortal.func_150063_b (trySpawnPortal)
+                // Check for obsidian frame around fire → replace with portal blocks
+                // Try X-axis portal (frame in XZ plane, portal faces X)
+                auto tryPortal = [&](int axis) -> bool {
+                    // axis 0 = X-axis (portal meta 1), axis 1 = Z-axis (portal meta 2)
+                    // Find frame bounds by scanning for obsidian edges
+                    int& h1 = (axis == 0) ? px : pz; // horizontal axis ref
+                    int origH = h1;
+                    auto getBlockId = [&](int hv, int yv) -> int {
+                        Block* b = (axis == 0) ? w->getBlock(hv, yv, pz) : w->getBlock(px, yv, hv);
+                        return b ? Block::getIdFromBlock(b) : 0;
+                    };
+                    auto setPortal = [&](int hv, int yv) {
+                        if (axis == 0) {
+                            w->setBlock(hv, yv, pz, Block::getBlockById(90));
+                            w->setBlockMetadata(hv, yv, pz, 1);
+                            server_.broadcastBlockChange(hv, yv, pz, 90, 1);
+                        } else {
+                            w->setBlock(px, yv, hv, Block::getBlockById(90));
+                            w->setBlockMetadata(px, yv, hv, 2);
+                            server_.broadcastBlockChange(px, yv, hv, 90, 2);
+                        }
+                    };
+
+                    // Find left edge (obsidian)
+                    int left = origH;
+                    while (left > origH - 21) {
+                        int id = getBlockId(left - 1, py);
+                        if (id == 49) { --left; break; } // obsidian edge
+                        if (id != 0 && id != 51 && id != 90) return false;
+                        --left;
+                    }
+                    if (getBlockId(left, py) != 49) return false;
+
+                    // Find right edge (obsidian)
+                    int right = origH;
+                    while (right < origH + 21) {
+                        int id = getBlockId(right + 1, py);
+                        if (id == 49) { ++right; break; }
+                        if (id != 0 && id != 51 && id != 90) return false;
+                        ++right;
+                    }
+                    if (getBlockId(right, py) != 49) return false;
+
+                    int width = right - left - 1; // interior width
+                    if (width < 2 || width > 21) return false;
+
+                    // Find bottom and top (scan down and up for obsidian floor/ceiling)
+                    int bottom = py;
+                    while (bottom > py - 21) {
+                        bool allObs = true;
+                        for (int h = left + 1; h < right; ++h) {
+                            if (getBlockId(h, bottom - 1) != 49) { allObs = false; break; }
+                        }
+                        if (allObs) { --bottom; break; }
+                        // Check that interior is air/fire/portal
+                        for (int h = left + 1; h < right; ++h) {
+                            int id = getBlockId(h, bottom - 1);
+                            if (id != 0 && id != 51 && id != 90) return false;
+                        }
+                        --bottom;
+                    }
+                    // Check floor row is obsidian
+                    for (int h = left + 1; h < right; ++h) {
+                        if (getBlockId(h, bottom) != 49) return false;
+                    }
+
+                    int top = py;
+                    while (top < py + 21) {
+                        bool allObs = true;
+                        for (int h = left + 1; h < right; ++h) {
+                            if (getBlockId(h, top + 1) != 49) { allObs = false; break; }
+                        }
+                        if (allObs) { ++top; break; }
+                        for (int h = left + 1; h < right; ++h) {
+                            int id = getBlockId(h, top + 1);
+                            if (id != 0 && id != 51 && id != 90) return false;
+                        }
+                        ++top;
+                    }
+                    for (int h = left + 1; h < right; ++h) {
+                        if (getBlockId(h, top) != 49) return false;
+                    }
+
+                    int height = top - bottom - 1;
+                    if (height < 3 || height > 21) return false;
+
+                    // Verify side columns are obsidian
+                    for (int y2 = bottom + 1; y2 < top; ++y2) {
+                        if (getBlockId(left, y2) != 49) return false;
+                        if (getBlockId(right, y2) != 49) return false;
+                    }
+
+                    // Valid frame! Fill interior with portal blocks
+                    for (int y2 = bottom + 1; y2 < top; ++y2) {
+                        for (int h = left + 1; h < right; ++h) {
+                            setPortal(h, y2);
+                        }
+                    }
+                    return true;
+                };
+
+                // Try both orientations
+                int savedPx = px, savedPz = pz;
+                if (!tryPortal(0)) {
+                    px = savedPx; pz = savedPz;
+                    tryPortal(1);
+                }
             }
         }
         return;
