@@ -2543,6 +2543,62 @@ void MinecraftServer::tickRandomBlocks() {
                         broadcastBlockChange(bx, by, bz, 127, newMeta);
                     }
                 }
+
+                // ─── Cactus growth (81) — Java: BlockCactus.updateTick ───────────
+                // Cactus uses meta 0-15 as growth counter, grows up when meta >= 15
+                // Max height: 3 blocks
+                if (blockId == 81) {
+                    Block* above = world->getBlock(bx, by + 1, bz);
+                    int aboveId = above ? Block::getIdFromBlock(above) : 0;
+                    if (aboveId == 0 && by < 255) {
+                        // Count cactus stack height below
+                        int height = 1;
+                        while (height < 3) {
+                            Block* below = world->getBlock(bx, by - height, bz);
+                            if (!below || Block::getIdFromBlock(below) != 81) break;
+                            ++height;
+                        }
+                        if (height < 3) {
+                            int cactusMeta = world->getBlockMetadata(bx, by, bz);
+                            if (cactusMeta >= 15) {
+                                world->setBlock(bx, by + 1, bz, Block::getBlockById(81));
+                                world->setBlockMetadata(bx, by + 1, bz, 0);
+                                broadcastBlockChange(bx, by + 1, bz, 81, 0);
+                                world->setBlockMetadata(bx, by, bz, 0);
+                                broadcastBlockChange(bx, by, bz, 81, 0);
+                            } else {
+                                world->setBlockMetadata(bx, by, bz, cactusMeta + 1);
+                            }
+                        }
+                    }
+                }
+
+                // ─── Sugar cane growth (83) — Java: BlockReed.updateTick ─────────
+                // Sugar cane grows upward, max height 3, meta 0-15 counter
+                if (blockId == 83) {
+                    Block* above = world->getBlock(bx, by + 1, bz);
+                    int aboveId = above ? Block::getIdFromBlock(above) : 0;
+                    if (aboveId == 0 && by < 255) {
+                        int height = 1;
+                        while (height < 3) {
+                            Block* below = world->getBlock(bx, by - height, bz);
+                            if (!below || Block::getIdFromBlock(below) != 83) break;
+                            ++height;
+                        }
+                        if (height < 3) {
+                            int reedMeta = world->getBlockMetadata(bx, by, bz);
+                            if (reedMeta >= 15) {
+                                world->setBlock(bx, by + 1, bz, Block::getBlockById(83));
+                                world->setBlockMetadata(bx, by + 1, bz, 0);
+                                broadcastBlockChange(bx, by + 1, bz, 83, 0);
+                                world->setBlockMetadata(bx, by, bz, 0);
+                                broadcastBlockChange(bx, by, bz, 83, 0);
+                            } else {
+                                world->setBlockMetadata(bx, by, bz, reedMeta + 1);
+                            }
+                        }
+                    }
+                }
             }
         }
     }

@@ -57,21 +57,23 @@
 
 ## 🔶 Partially Implemented (Headers + Stubs)
 
-### Commands (12 commands, chat→command bridge ✅)
+### Commands (14 commands, chat→command bridge ✅)
 | Command | Status |
-|---------|--------|
+|---------|---------|
 | `/stop` | ✅ Working via chat |
 | `/say` | ✅ Working via chat |
 | `/help` | ✅ Working via chat |
 | `/gamemode` | ✅ Working — sends S2B + tracks gameMode_ server-side |
-| `/time` | ✅ Working via chat (no actual time change yet) |
-| `/give` | ✅ Working via chat (no actual item give yet) |
-| `/tp` | ✅ Working via chat (no actual teleport yet) |
+| `/time` | ✅ Working — sets world time, S03 broadcast |
+| `/give` | ✅ Working — spawns item entity at player |
+| `/tp` | ✅ Working — teleports player, S08 PosLook |
 | `/gamerule` | ✅ Working via chat |
 | `/difficulty` | ✅ Working via chat |
 | `/seed` | ✅ Working via chat |
 | `/list` | ✅ Working via chat |
-| `/kill` | ✅ Working via chat (no actual kill yet) |
+| `/kill` | ✅ Working — sets health to 0, triggers death |
+| `/weather` | ✅ Working — clear/rain/thunder + timer |
+| `/effect` | ✅ Working — potion effects with S1D/S1E |
 
 ### Entity System
 - **Entity base** — ID counter, UUID, position/rotation, bounding box
@@ -117,11 +119,11 @@
 - ✅ **Brewing Stand** — per-position 4-slot storage, S2D type 5, S31 brew time
 - ✅ **Dispenser** — per-position 9-slot storage, S2D type 3
 - ✅ **Dropper** — per-position 9-slot storage, S2D type 6
-- ✅ **Hopper** — per-position storage, S2D type 9, 5 slots
+- ✅ **Hopper** — per-position storage, S2D type 9, 5 slots, **automated item transfer** (8-tick pull/push to chest/hopper)
 - ✅ **Beacon** — S2D type 7, S31 properties (power/effects)
 - ✅ **Enchanting Table** — S2D type 4, bookshelf counting, S31 enchantment levels
 - ✅ **Anvil** — S2D type 8, repair/rename GUI
-- ❌ No tile entity ticking for brewing stand or hopper automation
+- ❌ No tile entity ticking for brewing stand
 
 ### Inventory System
 - Container hierarchy (679-line header)
