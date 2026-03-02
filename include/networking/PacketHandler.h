@@ -571,33 +571,39 @@ public:
         auto held = inventory_.getCurrentItem();
         if (!held) return 2.0f; // fist
         int32_t id = held->getItemId();
+        float baseDmg = 2.0f;
         switch (id) {
             // Swords: 4.0 + material damage
-            case 268: return 4.0f;  // Wooden sword (4+0)
-            case 272: return 5.0f;  // Stone sword (4+1)
-            case 267: return 6.0f;  // Iron sword (4+2)
-            case 276: return 7.0f;  // Diamond sword (4+3)
-            case 283: return 4.0f;  // Golden sword (4+0)
+            case 268: baseDmg = 4.0f; break;  // Wooden sword (4+0)
+            case 272: baseDmg = 5.0f; break;  // Stone sword (4+1)
+            case 267: baseDmg = 6.0f; break;  // Iron sword (4+2)
+            case 276: baseDmg = 7.0f; break;  // Diamond sword (4+3)
+            case 283: baseDmg = 4.0f; break;  // Golden sword (4+0)
             // Axes: 3.0 + material damage
-            case 271: return 3.0f;  // Wooden axe (3+0)
-            case 275: return 4.0f;  // Stone axe (3+1)
-            case 258: return 5.0f;  // Iron axe (3+2)
-            case 279: return 6.0f;  // Diamond axe (3+3)
-            case 286: return 3.0f;  // Golden axe (3+0)
+            case 271: baseDmg = 3.0f; break;  // Wooden axe (3+0)
+            case 275: baseDmg = 4.0f; break;  // Stone axe (3+1)
+            case 258: baseDmg = 5.0f; break;  // Iron axe (3+2)
+            case 279: baseDmg = 6.0f; break;  // Diamond axe (3+3)
+            case 286: baseDmg = 3.0f; break;  // Golden axe (3+0)
             // Pickaxes: 2.0 + material damage
-            case 270: return 2.0f;  // Wooden pick (2+0)
-            case 274: return 3.0f;  // Stone pick (2+1)
-            case 257: return 4.0f;  // Iron pick (2+2)
-            case 278: return 5.0f;  // Diamond pick (2+3)
-            case 285: return 2.0f;  // Golden pick (2+0)
+            case 270: baseDmg = 2.0f; break;  // Wooden pick (2+0)
+            case 274: baseDmg = 3.0f; break;  // Stone pick (2+1)
+            case 257: baseDmg = 4.0f; break;  // Iron pick (2+2)
+            case 278: baseDmg = 5.0f; break;  // Diamond pick (2+3)
+            case 285: baseDmg = 2.0f; break;  // Golden pick (2+0)
             // Shovels: 1.0 + material damage
-            case 269: return 1.0f;  // Wooden shovel (1+0)
-            case 273: return 2.0f;  // Stone shovel (1+1)
-            case 256: return 3.0f;  // Iron shovel (1+2)
-            case 277: return 4.0f;  // Diamond shovel (1+3)
-            case 284: return 1.0f;  // Golden shovel (1+0)
-            default: return 2.0f;   // Unknown item = fist base
+            case 269: baseDmg = 1.0f; break;  // Wooden shovel (1+0)
+            case 273: baseDmg = 2.0f; break;  // Stone shovel (1+1)
+            case 256: baseDmg = 3.0f; break;  // Iron shovel (1+2)
+            case 277: baseDmg = 4.0f; break;  // Diamond shovel (1+3)
+            case 284: baseDmg = 1.0f; break;  // Golden shovel (1+0)
+            default: break;   // Unknown item = fist base
         }
+        // Java: EnchantmentHelper.func_152377_a — Sharpness (ID 16) adds level * 1.25f
+        // Smite (17) and Bane of Arthropods (18) need target creature type, simplified to Sharpness only
+        int16_t sharpness = held->getEnchantmentLevel(16);
+        if (sharpness > 0) baseDmg += static_cast<float>(sharpness) * 1.25f;
+        return baseDmg;
     }
 
     // Java: EntityLivingBase.getTotalArmorValue() → sum of ItemArmor.damageReduceAmount
@@ -644,6 +650,26 @@ public:
             }
         }
         return total;
+    }
+
+    // Java: EnchantmentHelper.getEnchantmentModifierDamage() — sum protection enchant values
+    // Protection (ID 0): floor((6 + level²) / 3.0 * 0.75) per piece, capped at 20 total
+    // Java: EnchantmentProtection.calcModifierDamage with protectionType=0
+    int32_t getEnchantmentProtectionModifier() const {
+        int32_t totalMod = 0;
+        for (int16_t slot = 1; slot <= 4; ++slot) {
+            auto armor = getArmorItem(slot);
+            if (!armor || !armor->hasEnchantments()) continue;
+            // Protection (0), Fire Protection (1), Blast Protection (3), Projectile Protection (4)
+            // Simplified: only count Protection (0) for generic melee
+            int16_t protLevel = armor->getEnchantmentLevel(0);
+            if (protLevel > 0) {
+                float f = static_cast<float>(6 + protLevel * protLevel) / 3.0f;
+                totalMod += static_cast<int32_t>(f * 0.75f);
+            }
+        }
+        // Java: capped at 20 (EnchantmentHelper)
+        return std::min(totalMod, 20);
     }
 
     // Java: Item.getMaxDamage() for damageable items

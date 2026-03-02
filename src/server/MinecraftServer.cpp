@@ -1540,6 +1540,15 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
         damage = reduced;
     }
 
+    // ─── Enchantment protection reduction ────────────────────────────
+    // Java: EntityLivingBase.applyPotionDamageCalculations()
+    // → EnchantmentHelper.getEnchantmentModifierDamage()
+    // Protection enchants add extra damage reduction: damage * (25 - modifier) / 25
+    int32_t enchProtMod = target->getEnchantmentProtectionModifier();
+    if (enchProtMod > 0) {
+        damage = damage * static_cast<float>(25 - enchProtMod) / 25.0f;
+    }
+
     // Skip if no damage
     if (damage <= 0.0f) return;
 

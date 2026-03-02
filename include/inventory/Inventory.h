@@ -154,6 +154,14 @@ public:
     const std::vector<Enchantment>& getEnchantments() const { return enchantments_; }
     void setEnchantments(const std::vector<Enchantment>& ench) { enchantments_ = ench; }
 
+    // Get the level of a specific enchantment by ID, or 0 if not present
+    int16_t getEnchantmentLevel(int16_t enchId) const {
+        for (auto& e : enchantments_) {
+            if (e.id == enchId) return e.level;
+        }
+        return 0;
+    }
+
 private:
     int32_t itemId_ = 0;
     int32_t stackSize_ = 0;
