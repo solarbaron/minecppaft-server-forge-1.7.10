@@ -44,7 +44,7 @@
 - **Materials** — Air, Rock, Wood, Cloth, Fire, Water, Lava, Plants, etc.
 
 ### Crafting
-- **Shaped/Shapeless Recipes** — 90+ crafting recipes registered (all 5 tool tiers, 5 sword tiers, 4 armor sets, building blocks, utility items, redstone, food, storage blocks)
+- **Shaped/Shapeless Recipes** — 350+ crafting recipes registered (all 5 tool tiers, 5 sword tiers, 4 armor sets, building blocks, utility items, redstone, food, storage blocks, dyes, slabs, fences, walls, doors, rails, pistons, misc items)
 - **Smelting** — 22 smelting recipes with XP values
 - **Stack sizes** — per-item max stack sizes (tools/weapons/armor=1, eggs/snowballs/ender pearls=16, default=64)
 
@@ -247,7 +247,7 @@
 - ~~**Caves**~~ — ✅ MapGenCaves worm carving integrated
 - ~~**Ores**~~ — ✅ All 11 vanilla ores (coal, iron, gold, diamond, redstone, lapis, emerald, dirt, gravel)
 - **Structures** — ✅ Dungeons (cobblestone/mossy rooms with mob spawner); no villages, temples, strongholds
-- ~~**Trees/vegetation**~~ — ✅ Oak/birch/spruce tree generation + flowers, tallgrass, sugar cane, pumpkin patches, clay deposits, cactus, dead bush, mushrooms
+- ~~**Trees/vegetation**~~ — ✅ Oak/birch/spruce tree generation + flowers, tallgrass, sugar cane, pumpkin patches, clay deposits, cactus, dead bush, mushrooms, vines
 - **Nether/End** — dimensions declared but not generated
 
 ---
@@ -393,3 +393,6 @@
 116. **Cactus worldgen** — ✅ Done (1/6 chance, 1-3 tall on sand, adjacency check)
 117. **Dead bush worldgen** — ✅ Done (1/8 chance on sand)
 118. **Bed sleep interaction** — ✅ Done (right-click at night skips to dawn, daytime shows message)
+119. **Crafting recipe expansion II** — ✅ Done (55+ recipes: food, utility blocks, items, ingot conversions; ~300+ total)
+120. **Crafting recipe expansion III** — ✅ Done (40+ recipes: slabs, fences, walls, doors, planks, sticks, arrows, signs; ~350+ total)
+121. **Vine worldgen** — ✅ Done (1/3 chance, 3-6 per chunk, attaches to log faces, 1-3 block growth with metadata)
