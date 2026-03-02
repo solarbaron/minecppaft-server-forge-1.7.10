@@ -485,6 +485,12 @@ public:
     int32_t getExperienceTotal() const { return experienceTotal_; }
     void grantExperience(int32_t amount) { addExperience(amount); }
     void resetExperience() { experienceBar_ = 0.0f; experienceLevel_ = 0; experienceTotal_ = 0; }
+    void addLevels(int32_t levels) {
+        experienceLevel_ += levels;
+        if (experienceLevel_ < 0) experienceLevel_ = 0;
+        // Recalculate total XP from level (simplified)
+        experienceBar_ = 0.0f;
+    }
     void sendExperienceUpdate(Connection& conn) {
         sendSetExperience(conn, experienceBar_, experienceLevel_, experienceTotal_);
     }

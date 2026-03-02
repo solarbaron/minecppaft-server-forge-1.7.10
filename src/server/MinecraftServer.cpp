@@ -1607,6 +1607,32 @@ void MinecraftServer::setPlayerGameMode(const std::string& playerName, int32_t g
     }
 }
 
+void MinecraftServer::addPlayerLevels(const std::string& playerName, int32_t levels) {
+    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    for (auto& conn : connections_) {
+        if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+        auto handler = conn->getHandler();
+        auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+        if (!ph || ph->getPlayerName() != playerName) continue;
+        ph->addLevels(levels);
+        ph->sendExperienceUpdate(*conn);
+        return;
+    }
+}
+
+void MinecraftServer::addPlayerExperience(const std::string& playerName, int32_t amount) {
+    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    for (auto& conn : connections_) {
+        if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+        auto handler = conn->getHandler();
+        auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+        if (!ph || ph->getPlayerName() != playerName) continue;
+        ph->grantExperience(amount);
+        ph->sendExperienceUpdate(*conn);
+        return;
+    }
+}
+
 std::vector<std::string> MinecraftServer::getOnlinePlayerNames() const {
     std::lock_guard<std::mutex> lock(connectionsMutex_);
     std::vector<std::string> names;

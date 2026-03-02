@@ -333,3 +333,6 @@
 76. **Vine growth** — ✅ Done (block 106 grows downward through air, 1/4 chance, preserves direction meta)
 77. **Nether wart growth** — ✅ Done (block 115 meta 0→1→2→3 growth stages, 1/10 chance per tick)
 78. **Cocoa bean growth** — ✅ Done (block 127 age in bits 2-3, 0→1→2, 1/5 chance per tick)
+79. **Hopper automation** — ✅ Done (HopperData 5 slots + 8-tick cooldown, pull from chest/hopper above, push to direction output)
+80. **Cactus growth** — ✅ Done (block 81 meta 0-15 counter, grows up when ≥15, max height 3)
+81. **Sugar cane growth** — ✅ Done (block 83 meta 0-15 counter, grows up when ≥15, max height 3)

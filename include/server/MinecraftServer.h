@@ -453,6 +453,18 @@ public:
     void setPlayerGameMode(const std::string& playerName, int32_t gameMode);
 
     /**
+     * Add XP levels to a player (can be negative).
+     * Java reference: EntityPlayer.addExperienceLevel()
+     */
+    void addPlayerLevels(const std::string& playerName, int32_t levels);
+
+    /**
+     * Add XP points to a player.
+     * Java reference: EntityPlayer.addExperience()
+     */
+    void addPlayerExperience(const std::string& playerName, int32_t amount);
+
+    /**
      * Get a list of all online player names.
      * Java reference: ServerConfigurationManager.func_152600_g()
      */

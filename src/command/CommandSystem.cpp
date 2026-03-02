@@ -44,6 +44,7 @@ CommandHandler::CommandHandler() {
     registerCommand(std::make_shared<CommandKill>());
     registerCommand(std::make_shared<CommandWeather>());
     registerCommand(std::make_shared<CommandEffect>());
+    registerCommand(std::make_shared<CommandXP>());
     std::cout << "[Commands] Registered " << getCommandCount() << " commands\n";
 }
 
@@ -533,6 +534,56 @@ void CommandEffect::processCommand(ICommandSender& sender, const std::vector<std
     sender.addChatMessage("Given " + name + " (ID " + std::to_string(effectId)
         + ") * " + std::to_string(amplifier) + " to " + target
         + " for " + std::to_string(seconds) + " seconds");
+}
+
+// /xp — Java: net.minecraft.command.CommandXP
+// /xp <amount> [player] — adds XP points
+// /xp <amount>L [player] — adds XP levels
+void CommandXP::processCommand(ICommandSender& sender, const std::vector<std::string>& args) {
+    if (args.empty()) {
+        sender.addChatMessage("§cUsage: /xp <amount>[L] [player]");
+        return;
+    }
+
+    std::string amountStr = args[0];
+    bool isLevels = false;
+
+    // Check for L suffix (levels mode)
+    if (!amountStr.empty() && (amountStr.back() == 'L' || amountStr.back() == 'l')) {
+        isLevels = true;
+        amountStr.pop_back();
+    }
+
+    int32_t amount = 0;
+    try { amount = std::stoi(amountStr); } catch (...) {
+        sender.addChatMessage("§cInvalid amount: " + args[0]);
+        return;
+    }
+
+    // XP points must be non-negative
+    if (!isLevels && amount < 0) {
+        sender.addChatMessage("§cCannot give negative XP points. Use levels (L suffix) for negative.");
+        return;
+    }
+
+    std::string target = args.size() > 1 ? args[1] : sender.getCommandSenderName();
+    auto* server = sender.getServer();
+    if (!server) return;
+
+    if (isLevels) {
+        server->addPlayerLevels(target, amount);
+        if (amount >= 0) {
+            sender.addChatMessage("Given " + std::to_string(amount) + " experience levels to " + target);
+        } else {
+            sender.addChatMessage("Taken " + std::to_string(-amount) + " experience levels from " + target);
+        }
+    } else {
+        server->addPlayerExperience(target, amount);
+        sender.addChatMessage("Given " + std::to_string(amount) + " experience to " + target);
+    }
+    std::cout << "[Server] " << sender.getCommandSenderName()
+              << " gave " << target << " " << amount
+              << (isLevels ? " levels" : " XP") << "\n";
 }
 
 } // namespace mccpp

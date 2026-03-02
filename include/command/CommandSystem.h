@@ -313,4 +313,17 @@ public:
     }
 };
 
+// /xp <amount>[L] [player] — Gives XP or levels
+// Java: net.minecraft.command.CommandXP
+class CommandXP : public ICommand {
+public:
+    std::string getCommandName() const override { return "xp"; }
+    std::string getCommandUsage() const override { return "/xp <amount>[L] [player]"; }
+    int32_t getRequiredPermissionLevel() const override { return 2; }
+    void processCommand(ICommandSender& sender, const std::vector<std::string>& args) override;
+    bool isUsernameIndex(const std::vector<std::string>& args, int32_t index) const override {
+        return index == 1;
+    }
+};
+
 } // namespace mccpp
