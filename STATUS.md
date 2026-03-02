@@ -264,7 +264,7 @@
 - ~~**Caves**~~ — ✅ MapGenCaves worm carving integrated
 - ~~**Ores**~~ — ✅ All 11 vanilla ores (coal, iron, gold, diamond, redstone, lapis, emerald, dirt, gravel)
 - **Structures** — ✅ Dungeons (cobblestone/mossy rooms with mob spawner); no villages, temples, strongholds
-- ~~**Trees/vegetation**~~ — ✅ Oak/birch/spruce/jungle tree generation + flowers, tallgrass, sugar cane, pumpkin patches, clay deposits, cactus, dead bush, mushrooms, vines, lily pads
+- ~~**Trees/vegetation**~~ — ✅ Oak/birch/spruce/jungle/acacia/dark oak tree generation + flowers, tallgrass, sugar cane, pumpkin patches, clay deposits, cactus, dead bush, mushrooms, vines, lily pads
 - **Beach generation** — ✅ Sand beach at water edges
 - **Nether/End** — dimensions declared but not generated
 
@@ -436,3 +436,5 @@
 141. **/trigger command** — ✅ Done (48th command, scoreboard trigger)
 142. **/title command** — ✅ Done (49th command, title screen text)
 143. **/particle command** — ✅ Done (50th command, spawn particles)
+144. **Acacia tree worldgen** — ✅ Done (1/6 chance, Log2:0/Leaves2:0)
+145. **Dark oak tree worldgen** — ✅ Done (1/6 chance, Log2:1/Leaves2:1)
