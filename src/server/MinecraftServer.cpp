@@ -1596,6 +1596,41 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
             broadcastEntityEvent(targetEntityId, 2);
             broadcastSound("game.hostile.hurt", mob.posX, mob.posY, mob.posZ, 1.0f, 1.0f);
 
+            // ─── Enderman teleport on hit ────────────────────────────
+            // Java: EntityEnderman.attackEntityFrom() → teleportRandomly()
+            // Enderman tries up to 64 random teleport attempts when hit
+            if (mob.mobType == 58) {
+                for (int tp = 0; tp < 64; ++tp) {
+                    double newX = mob.posX + ((double)rand() / RAND_MAX - 0.5) * 64.0;
+                    double newY = mob.posY + (double)(rand() % 64 - 32);
+                    double newZ = mob.posZ + ((double)rand() / RAND_MAX - 0.5) * 64.0;
+                    int bx = static_cast<int>(std::floor(newX));
+                    int by = static_cast<int>(std::floor(newY));
+                    int bz = static_cast<int>(std::floor(newZ));
+                    if (by < 1 || by > 250) continue;
+                    // Find ground: descend until solid
+                    while (by > 1 && getBlockIdInWorld(bx, by - 1, bz) == 0) --by;
+                    // Check destination is clear (2 blocks of air)
+                    if (getBlockIdInWorld(bx, by, bz) != 0 || getBlockIdInWorld(bx, by + 1, bz) != 0) continue;
+                    // Teleport successful
+                    broadcastSound("mob.endermen.portal", mob.posX, mob.posY, mob.posZ, 1.0f, 1.0f);
+                    mob.posX = newX;
+                    mob.posY = static_cast<double>(by);
+                    mob.posZ = newZ;
+                    broadcastSound("mob.endermen.portal", mob.posX, mob.posY, mob.posZ, 1.0f, 1.0f);
+                    {
+                        std::lock_guard<std::mutex> cl(connectionsMutex_);
+                        for (auto& c : connections_) {
+                            if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
+                            auto h = c->getHandler();
+                            auto* p = dynamic_cast<PlayHandler*>(h.get());
+                            if (p) p->sendEntityTeleport(*c, mob.entityId, mob.posX, mob.posY, mob.posZ, mob.yaw, 0.0f);
+                        }
+                    }
+                    break;
+                }
+            }
+
             // Fire Aspect — set mob on fire for cooked drops
             auto attackerHeld = attacker.getHeldItem();
             if (attackerHeld && attackerHeld->hasEnchantments()) {
@@ -2605,7 +2640,120 @@ void MinecraftServer::tickMobs() {
                 mob.lastSentPosZ = static_cast<int32_t>(std::floor(mob.posZ * 32.0));
             }
         }
+        // ─── Spider leap attack ──────────────────────────────────────
+        // Java: EntitySpider.attackEntity() — leap at player 2-6 blocks away
+        // motionX = dx/dist * 0.5 * 0.8 + motionX * 0.2, motionY = 0.4f
+        for (auto& mob : mobEntities_) {
+            if (mob.isDead) continue;
+            if (mob.mobType != 52 && mob.mobType != 59) continue; // Spider(52) + Cave Spider(59)
+            if (mob.attackCooldown > 0) { --mob.attackCooldown; continue; }
+
+            PlayHandler* nearest = nullptr;
+            double nearestDistSq = 36.0; // 6 blocks max
+            {
+                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                for (auto& conn : connections_) {
+                    if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                    auto handler = conn->getHandler();
+                    auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                    if (!ph || ph->isDead()) continue;
+                    if (ph->getGameMode() == 1 || ph->getGameMode() == 3) continue;
+                    double dx = ph->getPlayerX() - mob.posX;
+                    double dz = ph->getPlayerZ() - mob.posZ;
+                    double distSq = dx * dx + dz * dz;
+                    if (distSq > 4.0 && distSq < nearestDistSq) { // 2-6 blocks
+                        nearestDistSq = distSq;
+                        nearest = ph;
+                    }
+                }
+            }
+
+            if (!nearest || (rand() % 10) != 0) continue; // 1/10 chance per tick
+
+            // Spider leaps — apply velocity-based knockback on target
+            // Simplified: deal spider damage (2.0 for spider, 2.0 for cave spider)
+            float spiderDmg = 2.0f;
+            int32_t armorVal = nearest->getTotalArmorValue();
+            if (armorVal > 0) {
+                spiderDmg *= (25.0f - armorVal) / 25.0f;
+            }
+            int32_t protMod = nearest->getEnchantmentProtectionModifier();
+            if (protMod > 0) {
+                spiderDmg *= (1.0f - std::min(protMod, 20) * 0.04f);
+            }
+            if (spiderDmg < 0.5f) spiderDmg = 0.5f;
+
+            nearest->applyDamage(spiderDmg);
+            broadcastEntityEvent(nearest->getEntityId(), 2);
+            broadcastSound("mob.spider.say", mob.posX, mob.posY, mob.posZ, 1.0f, 1.0f);
+            broadcastSound("game.player.hurt", nearest->getPlayerX(), nearest->getPlayerY(), nearest->getPlayerZ(), 1.0f, 1.0f);
+
+            if (nearest->getHealth() <= 0.0f) {
+                broadcastEntityEvent(nearest->getEntityId(), 3);
+                broadcastChatMessage(nearest->getPlayerName() +
+                    (mob.mobType == 59 ? " was slain by Cave Spider" : " was slain by Spider"));
+            }
+
+            mob.attackCooldown = 20; // 1 second between leap attacks
+        }
+
+        // ─── Enderman water damage ──────────────────────────────────
+        // Java: EntityEnderman.onLivingUpdate() — isWet() → drown 1.0 dmg
+        // Endermen take damage in water and teleport away
+        if (!worlds_.empty()) {
+            for (auto& mob : mobEntities_) {
+                if (mob.isDead || mob.mobType != 58) continue; // Enderman only
+                int bx = static_cast<int>(std::floor(mob.posX));
+                int by = static_cast<int>(std::floor(mob.posY));
+                int bz = static_cast<int>(std::floor(mob.posZ));
+                // Check if standing in water (block 8=flowing, 9=source)
+                int32_t blockId = getBlockIdInWorld(bx, by, bz);
+                if (blockId != 8 && blockId != 9) continue;
+
+                mob.health -= 1.0f; // 1 damage per tick
+                broadcastEntityEvent(mob.entityId, 2);
+                broadcastSound("game.hostile.hurt", mob.posX, mob.posY, mob.posZ, 1.0f, 1.0f);
+
+                if (mob.health <= 0.0f) {
+                    mob.isDead = true;
+                    broadcastEntityEvent(mob.entityId, 3);
+                    continue;
+                }
+
+                // Try to teleport away — same as teleport-on-hit
+                for (int tp = 0; tp < 64; ++tp) {
+                    double newX = mob.posX + ((double)rand() / RAND_MAX - 0.5) * 64.0;
+                    double newY = mob.posY + (double)(rand() % 64 - 32);
+                    double newZ = mob.posZ + ((double)rand() / RAND_MAX - 0.5) * 64.0;
+                    int nbx = static_cast<int>(std::floor(newX));
+                    int nby = static_cast<int>(std::floor(newY));
+                    int nbz = static_cast<int>(std::floor(newZ));
+                    if (nby < 1 || nby > 250) continue;
+                    // Find ground
+                    while (nby > 1 && getBlockIdInWorld(nbx, nby - 1, nbz) == 0) --nby;
+                    // Check 2 air blocks above ground
+                    if (getBlockIdInWorld(nbx, nby, nbz) != 0 || getBlockIdInWorld(nbx, nby + 1, nbz) != 0) continue;
+                    broadcastSound("mob.endermen.portal", mob.posX, mob.posY, mob.posZ, 1.0f, 1.0f);
+                    mob.posX = newX;
+                    mob.posY = static_cast<double>(nby);
+                    mob.posZ = newZ;
+                    broadcastSound("mob.endermen.portal", mob.posX, mob.posY, mob.posZ, 1.0f, 1.0f);
+                    {
+                        std::lock_guard<std::mutex> cl(connectionsMutex_);
+                        for (auto& c : connections_) {
+                            if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
+                            auto h = c->getHandler();
+                            auto* p = dynamic_cast<PlayHandler*>(h.get());
+                            if (p) p->sendEntityTeleport(*c, mob.entityId, mob.posX, mob.posY, mob.posZ, mob.yaw, 0.0f);
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+
         // ─── Creeper explosion AI ──────────────────────────────────
+
         // Java: EntityCreeper.onUpdate() — fuse timer, explode when timeSinceIgnited >= fuseTime(30)
         for (auto& mob : mobEntities_) {
             if (mob.isDead || mob.mobType != 50) continue; // Creeper only
@@ -2757,6 +2905,51 @@ void MinecraftServer::tickMobs() {
             }
 
             mob.attackCooldown = 60;
+        }
+
+        // ─── Ghast fireball AI ─────────────────────────────────────
+        // Java: EntityGhast.updateEntityActionState() — large fireball attack
+        // Range: 64 blocks, explosionStrength=1, attackCounter 0→20→fire→-40
+        for (auto& mob : mobEntities_) {
+            if (mob.isDead || mob.mobType != 56) continue; // Ghast only (type 56)
+            if (mob.attackCooldown > 0) { --mob.attackCooldown; continue; }
+
+            PlayHandler* nearest = nullptr;
+            Connection* nearestConn = nullptr;
+            double nearestDistSq = 4096.0; // 64 blocks squared
+            {
+                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                for (auto& conn : connections_) {
+                    if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                    auto handler = conn->getHandler();
+                    auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                    if (!ph || ph->isDead()) continue;
+                    if (ph->getGameMode() == 1 || ph->getGameMode() == 3) continue;
+                    double dx = ph->getPlayerX() - mob.posX;
+                    double dz = ph->getPlayerZ() - mob.posZ;
+                    double distSq = dx * dx + dz * dz;
+                    if (distSq < nearestDistSq) {
+                        nearestDistSq = distSq;
+                        nearest = ph;
+                        nearestConn = conn.get();
+                    }
+                }
+            }
+
+            if (!nearest) continue;
+
+            // Java: EntityGhast fires large fireball — simplified to instant-hit explosion
+            // EntityLargeFireball.onImpact() → createExplosion(explosionStrength=1)
+            double tx = nearest->getPlayerX();
+            double ty = nearest->getPlayerY();
+            double tz = nearest->getPlayerZ();
+
+            // Create explosion at target (power=1.0, causesFire=true, breakBlocks=true)
+            createExplosion(tx, ty, tz, 1.0f, true, true);
+
+            broadcastSound("mob.ghast.fireball", mob.posX, mob.posY, mob.posZ, 10.0f, 1.0f);
+
+            mob.attackCooldown = 60; // Java: attackCounter = -40, fires at 20 → 60 tick cycle
         }
 
         // ─── Mob contact damage ─────────────────────────────────────
