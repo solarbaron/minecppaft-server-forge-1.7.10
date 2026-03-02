@@ -496,3 +496,5 @@
 194. **Explosion armor + Blast Protection** — ✅ Done (armor absorption on explosion damage, Blast Protection dmgType=3, knockback reduction level*0.15/piece, hurt/death events, "was blown up" death message)
 195. **Per-mob-type XP** — ✅ Done (zombie/skeleton/creeper/spider/enderman=5, blaze=10, passive=1-3, iron golem=0; replaces flat 5+rand(0..2))
 196. **Blaze fireball attack** — ✅ Done (5 fire damage every 60 ticks within 16 blocks, Fire Protection reduction, sets player on fire 100 ticks, mob.blaze.hit sound, death: "was fireballed by Blaze")
+197. **Feather Falling enchantment refactor** — ✅ Done (ID 2 factor 2.5 in unified getEnchantmentProtectionModifier(damageType=2); stacks with Protection on all armor, both fall damage locations use same formula)
+198. **128-block hard despawn** — ✅ Done (immediate despawn >128 blocks regardless of age; soft despawn >32 blocks after 600 ticks; fixed ordering so hard despawn check is unconditional)
