@@ -300,4 +300,17 @@ public:
         const ICommandSender& sender, const std::vector<std::string>& args) const override;
 };
 
+// /effect <player> <effectId> [duration] [amplifier] — Applies potion effects
+// Java: net.minecraft.command.CommandEffect
+class CommandEffect : public ICommand {
+public:
+    std::string getCommandName() const override { return "effect"; }
+    std::string getCommandUsage() const override { return "/effect <player> <effectId> [seconds] [amplifier] OR /effect <player> clear"; }
+    int32_t getRequiredPermissionLevel() const override { return 2; }
+    void processCommand(ICommandSender& sender, const std::vector<std::string>& args) override;
+    bool isUsernameIndex(const std::vector<std::string>& args, int32_t index) const override {
+        return index == 0;
+    }
+};
+
 } // namespace mccpp

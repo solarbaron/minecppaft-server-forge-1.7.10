@@ -43,6 +43,7 @@ CommandHandler::CommandHandler() {
     registerCommand(std::make_shared<CommandList>());
     registerCommand(std::make_shared<CommandKill>());
     registerCommand(std::make_shared<CommandWeather>());
+    registerCommand(std::make_shared<CommandEffect>());
     std::cout << "[Commands] Registered " << getCommandCount() << " commands\n";
 }
 
@@ -483,6 +484,55 @@ std::vector<std::string> CommandWeather::addTabCompletionOptions(
         return options;
     }
     return {};
+}
+
+// /effect — Java: net.minecraft.command.CommandEffect
+void CommandEffect::processCommand(ICommandSender& sender, const std::vector<std::string>& args) {
+    if (args.size() < 2) {
+        sender.addChatMessage("§cUsage: /effect <player> <effectId> [seconds] [amplifier] OR /effect <player> clear");
+        return;
+    }
+
+    std::string target = args[0];
+    auto* server = sender.getServer();
+    if (!server) return;
+
+    // /effect <player> clear
+    if (args[1] == "clear") {
+        server->clearPlayerPotionEffects(target);
+        sender.addChatMessage("Cleared all effects from " + target);
+        return;
+    }
+
+    int32_t effectId = 0;
+    try { effectId = std::stoi(args[1]); } catch (...) {
+        sender.addChatMessage("§cInvalid effect ID: " + args[1]); return;
+    }
+    if (effectId < 1 || effectId > 23) {
+        sender.addChatMessage("§cEffect ID must be 1-23"); return;
+    }
+
+    int32_t seconds = args.size() > 2 ? std::stoi(args[2]) : 30;
+    if (seconds < 1) seconds = 1;
+    if (seconds > 1000000) seconds = 1000000;
+    int32_t amplifier = args.size() > 3 ? std::stoi(args[3]) : 0;
+    if (amplifier < 0) amplifier = 0;
+    if (amplifier > 255) amplifier = 255;
+
+    int32_t durationTicks = seconds * 20;
+    server->applyPlayerPotionEffect(target, effectId, durationTicks, amplifier);
+
+    static const char* effectNames[] = {
+        "", "Speed", "Slowness", "Haste", "MiningFatigue", "Strength",
+        "InstantHealth", "InstantDamage", "JumpBoost", "Nausea", "Regeneration",
+        "Resistance", "FireResistance", "WaterBreathing", "Invisibility", "Blindness",
+        "NightVision", "Hunger", "Weakness", "Poison", "Wither",
+        "HealthBoost", "Absorption", "Saturation"
+    };
+    std::string name = (effectId >= 1 && effectId <= 23) ? effectNames[effectId] : "Unknown";
+    sender.addChatMessage("Given " + name + " (ID " + std::to_string(effectId)
+        + ") * " + std::to_string(amplifier) + " to " + target
+        + " for " + std::to_string(seconds) + " seconds");
 }
 
 } // namespace mccpp

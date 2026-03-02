@@ -464,6 +464,19 @@ public:
      */
     void setWeather(int32_t mode, int32_t durationTicks);
 
+    /**
+     * Apply a potion effect to a player by name.
+     * Java reference: EntityLivingBase.addPotionEffect()
+     */
+    void applyPlayerPotionEffect(const std::string& playerName, int32_t effectId,
+                                  int32_t durationTicks, int32_t amplifier);
+
+    /**
+     * Clear all potion effects from a player by name.
+     * Java reference: EntityLivingBase.clearActivePotions()
+     */
+    void clearPlayerPotionEffects(const std::string& playerName);
+
 private:
     /**
      * Execute a single server tick.

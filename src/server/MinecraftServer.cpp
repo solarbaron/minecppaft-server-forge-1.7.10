@@ -272,6 +272,7 @@ void MinecraftServer::tick() {
             auto* play = dynamic_cast<PlayHandler*>(handler.get());
             if (play) {
                 play->tickFood(*conn);
+                play->tickPotionEffects(*conn);
             }
         }
     }
@@ -1480,6 +1481,37 @@ void MinecraftServer::setWeather(int32_t mode, int32_t durationTicks) {
             }
             ph->sendChangeGameState(*conn, 7, world->getRainingStrength());
             ph->sendChangeGameState(*conn, 8, world->getThunderingStrength());
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Potion effect helpers — used by /effect command
+// ═══════════════════════════════════════════════════════════════════════════
+
+void MinecraftServer::applyPlayerPotionEffect(const std::string& playerName, int32_t effectId,
+                                               int32_t durationTicks, int32_t amplifier) {
+    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    for (auto& conn : connections_) {
+        if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+        auto handler = conn->getHandler();
+        auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+        if (ph && ph->getPlayerName() == playerName) {
+            ph->addPotionEffect(*conn, effectId, durationTicks, amplifier);
+            return;
+        }
+    }
+}
+
+void MinecraftServer::clearPlayerPotionEffects(const std::string& playerName) {
+    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    for (auto& conn : connections_) {
+        if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+        auto handler = conn->getHandler();
+        auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+        if (ph && ph->getPlayerName() == playerName) {
+            ph->clearPotionEffects(*conn);
+            return;
         }
     }
 }
