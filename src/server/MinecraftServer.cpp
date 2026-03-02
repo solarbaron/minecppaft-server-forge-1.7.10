@@ -1804,6 +1804,22 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
                 };
 
                 dropMobItems(mob.mobType, lootingLevel);
+
+                // ─── Slime/Magma Cube split on death ────────────────────
+                // Java: EntitySlime.setDead() — size>1 spawns 2-4 half-size slimes
+                // Slime=55, Magma Cube=62
+                if (mob.mobType == 55 || mob.mobType == 62) {
+                    // For now, assume large slimes (size 4 → spawn size 2 → spawn size 1)
+                    // Simplified: spawn 2-4 smaller slimes at death position
+                    int splitCount = 2 + (rand() % 3); // Java: 2 + rand.nextInt(3)
+                    for (int sc = 0; sc < splitCount; ++sc) {
+                        double offsetX = ((rand() % 100) / 100.0 - 0.5) * 1.0;
+                        double offsetZ = ((rand() % 100) / 100.0 - 0.5) * 1.0;
+                        summonMob(mob.mobType, mob.posX + offsetX, mob.posY + 0.5, mob.posZ + offsetZ);
+                    }
+                    broadcastSound(mob.mobType == 55 ? "mob.slime.big" : "mob.magmacube.big",
+                        mob.posX, mob.posY, mob.posZ, 1.0f, 1.0f);
+                }
             }
             return; // Found target mob, done
         }
@@ -2545,6 +2561,37 @@ void MinecraftServer::tickMobs() {
                 mob.isDead = true;
                 deadIds.push_back(mob.entityId);
                 continue;
+            }
+
+            // ─── Mob ambient sounds ──────────────────────────────────
+            // Java: EntityLiving.onLivingUpdate() — plays getLivingSound()
+            // Random ~1/200 chance per tick = average every 10 seconds
+            if ((rand() % 200) == 0) {
+                const char* sound = nullptr;
+                switch (mob.mobType) {
+                    case 50: sound = "mob.creeper.say"; break;
+                    case 51: sound = "mob.skeleton.say"; break;
+                    case 52: sound = "mob.spider.say"; break;
+                    case 54: sound = "mob.zombie.say"; break;
+                    case 55: sound = (rand() % 2) ? "mob.slime.big" : "mob.slime.small"; break;
+                    case 56: sound = "mob.ghast.moan"; break;
+                    case 57: sound = "mob.zombiepig.zpig"; break;
+                    case 58: sound = "mob.endermen.idle"; break;
+                    case 59: sound = "mob.spider.say"; break;
+                    case 60: sound = "mob.silverfish.say"; break;
+                    case 61: sound = "mob.blaze.breathe"; break;
+                    case 62: sound = (rand() % 2) ? "mob.magmacube.big" : "mob.magmacube.small"; break;
+                    case 66: sound = "mob.witch.idle"; break;
+                    case 92: sound = "mob.cow.say"; break;
+                    case 90: sound = "mob.pig.say"; break;
+                    case 91: sound = "mob.sheep.say"; break;
+                    case 93: sound = "mob.chicken.say"; break;
+                    default: break;
+                }
+                if (sound) {
+                    broadcastSound(sound, mob.posX, mob.posY, mob.posZ, 1.0f,
+                        0.8f + ((float)(rand() % 40) / 100.0f)); // Slight pitch randomization
+                }
             }
 
             int64_t age = currentTick - mob.spawnTick;
