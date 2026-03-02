@@ -1563,11 +1563,13 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
             broadcastEntityEvent(targetEntityId, 2);
             broadcastSound("game.hostile.hurt", mob.posX, mob.posY, mob.posZ, 1.0f, 1.0f);
 
-            // Fire Aspect
+            // Fire Aspect — set mob on fire for cooked drops
             auto attackerHeld = attacker.getHeldItem();
             if (attackerHeld && attackerHeld->hasEnchantments()) {
                 int16_t faLevel = attackerHeld->getEnchantmentLevel(20);
-                (void)faLevel; // Mobs don't track fire state yet, but we consume the check
+                if (faLevel > 0) {
+                    mob.isOnFire = true;
+                }
             }
 
             // Durability + exhaustion
@@ -1656,17 +1658,21 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
                         case 62: // Magma Cube → magma cream (378)
                             dropId = 378; baseCount = rand() % 2; break;
                         // ─── Passive mob drops ──────────────────────────
-                        case 92: // Cow → leather (334) + raw beef (363)
+                        // Java: EntityAnimal.dropFewItems() — drops cooked meat if isBurning()
+                        case 92: // Cow → leather (334) + raw beef (363) / steak (364) if on fire
                             dropId = 334; baseCount = 1 + (rand() % 2);
-                            spawnItemDrop(mob.posX, mob.posY, mob.posZ, 363, 0, 1 + (rand() % 3));
+                            spawnItemDrop(mob.posX, mob.posY, mob.posZ,
+                                mob.isOnFire ? 364 : 363, 0, 1 + (rand() % 3));
                             break;
-                        case 90: // Pig → raw porkchop (319)
-                            dropId = 319; baseCount = 1 + (rand() % 3); break;
+                        case 90: // Pig → raw porkchop (319) / cooked (320) if on fire
+                            dropId = mob.isOnFire ? 320 : 319;
+                            baseCount = 1 + (rand() % 3); break;
                         case 91: // Sheep → wool (35)
                             dropId = 35; baseCount = 1; break;
-                        case 93: // Chicken → feather (288) + raw chicken (365)
+                        case 93: // Chicken → feather (288) + raw chicken (365) / cooked (366) if on fire
                             dropId = 288; baseCount = 1 + (rand() % 2);
-                            spawnItemDrop(mob.posX, mob.posY, mob.posZ, 365, 0, 1);
+                            spawnItemDrop(mob.posX, mob.posY, mob.posZ,
+                                mob.isOnFire ? 366 : 365, 0, 1);
                             break;
                         case 94: // Squid → ink sac (351 damage 0)
                             dropId = 351; baseCount = 1 + (rand() % 3); break;
