@@ -617,6 +617,10 @@ private:
         int32_t attackCooldown = 0; // Skeleton arrow cooldown
         int32_t angerLevel = 0;     // Zombie Pigman anger (Java: EntityPigZombie.angerLevel)
         int32_t angerTarget = -1;   // Entity ID of anger target
+        // Passive mob AI — Java: EntityCreature wander task
+        bool isPassive = false;     // Passive mobs don't despawn
+        int32_t wanderCooldown = 0; // Ticks until next wander direction change
+        float wanderYaw = 0.0f;     // Current wander heading
         // Movement tracking — Java: EntityTrackerEntry last sent position
         int32_t lastSentPosX = 0, lastSentPosY = 0, lastSentPosZ = 0;
         int32_t ticksSinceLastTeleport = 0;
@@ -625,11 +629,59 @@ private:
     std::vector<SpawnedMob> mobEntities_;
     std::atomic<int32_t> nextMobEntityId_{200000};
     static constexpr int MAX_HOSTILE_MOBS = 70;  // Java: EnumCreatureType.MONSTER.maxNumber
+    static constexpr int MAX_PASSIVE_MOBS = 10;  // Java: EnumCreatureType.creature.maxNumber
 
     void spawnNaturalMobs();
+    void spawnPassiveMobs();
     void tickMobs();
     void tickRandomBlocks();
 
+public:
+    // ─── Arrow projectile entities ──────────────────────────────────
+    // Java reference: EntityArrow — projectile with flight physics, block/entity collision
+    struct SpawnedArrow {
+        int32_t entityId = 0;
+        int32_t shooterEntityId = -1;
+        double posX = 0, posY = 0, posZ = 0;
+        double motionX = 0, motionY = 0, motionZ = 0;
+        float yaw = 0, pitch = 0;
+        double damage = 2.0;
+        int32_t knockbackStrength = 0;
+        bool isCritical = false;
+        bool isBurning = false;
+        bool inGround = false;
+        bool isDead = false;
+        int32_t ticksInAir = 0;
+        int32_t ticksInGround = 0;
+        int32_t arrowShake = 0;
+        int32_t inBlockId = 0;
+        int32_t inBlockMeta = 0;
+        int32_t blockX = -1, blockY = -1, blockZ = -1;
+        int64_t spawnTick = 0;
+
+        static constexpr float GRAVITY = 0.05f;
+        static constexpr float AIR_FRICTION = 0.99f;
+        static constexpr int32_t GROUND_DESPAWN = 1200;
+        static constexpr int32_t SHOOTER_GRACE = 5;
+    };
+    mutable std::mutex arrowEntitiesMutex_;
+    std::vector<SpawnedArrow> arrowEntities_;
+    std::atomic<int32_t> nextArrowEntityId_{300000};
+
+    /**
+     * Spawn an arrow projectile.
+     * Java reference: EntityArrow(world, shooter, speed)
+     * @return entity ID of the spawned arrow
+     */
+    int32_t spawnArrow(double x, double y, double z,
+                       double motionX, double motionY, double motionZ,
+                       int32_t shooterEntityId, double damage = 2.0,
+                       int32_t knockback = 0, bool critical = false);
+
+    /** Tick all arrow projectiles (flight physics, collision, despawn). */
+    void tickArrows();
+
+private:
     // ─── Chest storage (in-memory tile entities) ─────────────────────
     // Key: packed position (x << 40 | (z & 0xFFFFF) << 20 | (y & 0xFFFFF))
     mutable std::mutex chestMutex_;

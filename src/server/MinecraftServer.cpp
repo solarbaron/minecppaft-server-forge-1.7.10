@@ -257,11 +257,18 @@ void MinecraftServer::tick() {
 
     // Tick mob entities (despawn tracking)
     tickMobs();
+    tickArrows();
 
     // Natural mob spawning every 200 ticks (10 seconds)
     // Java reference: WorldServer.tick() → SpawnerAnimals.findChunksForSpawning()
     if (ticks > 0 && ticks % 200 == 0) {
         spawnNaturalMobs();
+    }
+
+    // Passive mob spawning every 400 ticks (20 seconds)
+    // Java: SpawnerAnimals.findChunksForSpawning() for EnumCreatureType.creature
+    if (ticks > 0 && ticks % 400 == 0) {
+        spawnPassiveMobs();
     }
 
     // Tick food/hunger for all play-state players
@@ -2350,11 +2357,17 @@ static float getMobMovementSpeed(uint8_t mobType) {
         case 61: return 0.23f;  // Blaze
         case 62: return 0.20f;  // Magma Cube
         case 66: return 0.25f;  // Witch
-        default: return 0.00f;  // Passive mobs don't chase
+        case 90: return 0.125f; // Pig (wander speed)
+        case 91: return 0.115f; // Sheep (wander speed)
+        case 92: return 0.10f;  // Cow (wander speed)
+        case 93: return 0.125f; // Chicken (wander speed)
+        default: return 0.00f;  // Non-moving mob
     }
 }
 
 static bool isMobHostile(uint8_t mobType) {
+    // Passive mobs: pig=90, sheep=91, cow=92, chicken=93
+    if (mobType >= 90 && mobType <= 100) return false;
     return mobType >= 50 && mobType <= 66 && mobType != 56; // Ghast is ranged-only
 }
 
@@ -2369,6 +2382,7 @@ int32_t MinecraftServer::summonMob(uint8_t mobType, double x, double y, double z
     mob.health = getMobMaxHealth(mobType);
     mob.spawnTick = currentTick;
     mob.isDead = false;
+    mob.isPassive = (mobType >= 90 && mobType <= 100);
     mob.lastSentPosX = static_cast<int32_t>(std::floor(x * 32.0));
     mob.lastSentPosY = static_cast<int32_t>(std::floor(y * 32.0));
     mob.lastSentPosZ = static_cast<int32_t>(std::floor(z * 32.0));
@@ -2583,6 +2597,127 @@ void MinecraftServer::spawnNaturalMobs() {
     }
 }
 
+// ─── Passive mob spawning ─────────────────────────────────────────
+// Java: SpawnerAnimals.findChunksForSpawning() for EnumCreatureType.creature
+// Passive mobs (cow, pig, sheep, chicken) spawn on grass blocks, don't despawn
+void MinecraftServer::spawnPassiveMobs() {
+    int playerCount = getOnlinePlayerCount();
+    if (playerCount == 0) return;
+    if (worlds_.empty()) return;
+
+    // Check passive mob cap (separate from hostile)
+    {
+        std::lock_guard<std::mutex> lock(mobEntitiesMutex_);
+        int passiveCount = 0;
+        for (auto& mob : mobEntities_) {
+            if (!mob.isDead && mob.isPassive) passiveCount++;
+        }
+        if (passiveCount >= MAX_PASSIVE_MOBS) return;
+    }
+
+    // Pick a random player to spawn near
+    static thread_local std::mt19937 rng(std::random_device{}());
+    PlayHandler* targetPlayer = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(connectionsMutex_);
+        std::vector<PlayHandler*> players;
+        for (auto& conn : connections_) {
+            if (conn->isConnected() && conn->getState() == ConnectionState::Play) {
+                auto handler = conn->getHandler();
+                auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                if (ph && !ph->isDead()) players.push_back(ph);
+            }
+        }
+        if (players.empty()) return;
+        targetPlayer = players[rng() % players.size()];
+    }
+
+    // Generate spawn position 8-24 blocks from the chosen player
+    std::uniform_int_distribution<int> offsetDist(-24, 24);
+    double spawnX = targetPlayer->getPlayerX() + offsetDist(rng);
+    double spawnZ = targetPlayer->getPlayerZ() + offsetDist(rng);
+
+    // Min 8 blocks away
+    double dx = spawnX - targetPlayer->getPlayerX();
+    double dz = spawnZ - targetPlayer->getPlayerZ();
+    if (dx * dx + dz * dz < 64.0) return;
+
+    WorldServer* world = worlds_[0].get();
+    int bx = static_cast<int>(std::floor(spawnX));
+    int bz = static_cast<int>(std::floor(spawnZ));
+
+    // Find surface Y
+    int surfaceY = 64;
+    for (int y = 255; y > 0; --y) {
+        Block* block = world->getBlock(bx, y, bz);
+        if (block != nullptr) {
+            surfaceY = y + 1;
+            break;
+        }
+    }
+    if (surfaceY <= 1 || surfaceY > 250) return;
+
+    // Java: EntityAnimal.getCanSpawnHere() — requires grass block below
+    // Check that spawn block is grass (block ID 2)
+    int32_t groundBlockId = getBlockIdInWorld(bx, surfaceY - 1, bz);
+    if (groundBlockId != 2) return; // Must be grass block
+
+    // Check air above (no normal cube at spawn location)
+    int32_t blockAtSpawn = getBlockIdInWorld(bx, surfaceY, bz);
+    int32_t blockAboveSpawn = getBlockIdInWorld(bx, surfaceY + 1, bz);
+    if (blockAtSpawn != 0 || blockAboveSpawn != 0) return;
+
+    double spawnY = static_cast<double>(surfaceY);
+
+    // Pick passive mob type — equal chances
+    // 90=Pig, 91=Sheep, 92=Cow, 93=Chicken
+    static const uint8_t passiveMobs[] = {90, 91, 92, 93};
+    uint8_t mobType = passiveMobs[rng() % 4];
+
+    std::uniform_real_distribution<float> yawDist(0.0f, 360.0f);
+    float yaw = yawDist(rng);
+
+    int32_t eid = nextMobEntityId_.fetch_add(1, std::memory_order_relaxed);
+    int64_t currentTick = tickCount_.load(std::memory_order_relaxed);
+
+    SpawnedMob mob;
+    mob.entityId = eid;
+    mob.mobType = mobType;
+    mob.posX = spawnX;
+    mob.posY = spawnY;
+    mob.posZ = spawnZ;
+    mob.yaw = yaw;
+    mob.pitch = 0.0f;
+    mob.health = getMobMaxHealth(mobType);
+    mob.spawnTick = currentTick;
+    mob.isDead = false;
+    mob.isPassive = true;
+    mob.wanderCooldown = 40 + (rng() % 80);  // Initial wander delay
+    mob.wanderYaw = yaw;
+    mob.lastSentPosX = static_cast<int32_t>(std::floor(spawnX * 32.0));
+    mob.lastSentPosY = static_cast<int32_t>(std::floor(spawnY * 32.0));
+    mob.lastSentPosZ = static_cast<int32_t>(std::floor(spawnZ * 32.0));
+
+    // Broadcast S0F SpawnMob to all players
+    {
+        std::lock_guard<std::mutex> lock(connectionsMutex_);
+        for (auto& conn : connections_) {
+            if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+            auto handler = conn->getHandler();
+            auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+            if (ph) {
+                ph->sendSpawnMob(*conn, eid, mobType, spawnX, spawnY, spawnZ,
+                                  yaw, 0.0f, yaw);
+            }
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(mobEntitiesMutex_);
+        mobEntities_.push_back(std::move(mob));
+    }
+}
+
 void MinecraftServer::tickMobs() {
     // Despawn mobs that are old AND far from all players
     // Java reference: EntityLiving.despawnEntity() — >600 ticks + >32 blocks
@@ -2611,11 +2746,21 @@ void MinecraftServer::tickMobs() {
             }
 
             // Java: EntityLiving.despawnEntity()
-            // Hard despawn: immediately if >128 blocks (16384 sq) from all players
-            if (nearestDistSq > 16384.0) {
-                mob.isDead = true;
-                deadIds.push_back(mob.entityId);
-                continue;
+            // Passive mobs never despawn — Java: EntityAnimal.despawnEntity() is no-op
+            if (!mob.isPassive) {
+                // Hard despawn: immediately if >128 blocks (16384 sq) from all players
+                if (nearestDistSq > 16384.0) {
+                    mob.isDead = true;
+                    deadIds.push_back(mob.entityId);
+                    continue;
+                }
+
+                int64_t age = currentTick - mob.spawnTick;
+                // Soft despawn: after 600 ticks if >32 blocks (1024 sq) from all players
+                if (age >= 600 && nearestDistSq > 1024.0) {
+                    mob.isDead = true;
+                    deadIds.push_back(mob.entityId);
+                }
             }
 
             // ─── Mob ambient sounds ──────────────────────────────────
@@ -2649,11 +2794,27 @@ void MinecraftServer::tickMobs() {
                 }
             }
 
-            int64_t age = currentTick - mob.spawnTick;
-            // Soft despawn: after 600 ticks if >32 blocks (1024 sq) from all players
-            if (age >= 600 && nearestDistSq > 1024.0) {
-                mob.isDead = true;
-                deadIds.push_back(mob.entityId);
+            // ─── Passive mob special behaviors ──────────────────────────
+            if (mob.isPassive) {
+                // Chicken egg laying — Java: EntityChicken.onLivingUpdate()
+                // Lays egg every 6000-12000 ticks (1/6000 chance per tick)
+                if (mob.mobType == 93 && (rand() % 6000) == 0) {
+                    // Drop egg item (344) at chicken position
+                    spawnItemDrop(mob.posX, mob.posY, mob.posZ, 344, 0, 1);
+                    broadcastSound("mob.chicken.plop", mob.posX, mob.posY, mob.posZ, 1.0f, 1.0f);
+                }
+                // Sheep grass eating — Java: EntitySheep.eatGrassBonus()
+                // 1/1000 chance per tick = eats grass block → dirt
+                if (mob.mobType == 91 && (rand() % 1000) == 0) {
+                    int bx = static_cast<int>(std::floor(mob.posX));
+                    int by = static_cast<int>(std::floor(mob.posY)) - 1;
+                    int bz = static_cast<int>(std::floor(mob.posZ));
+                    int32_t blockBelow = getBlockIdInWorld(bx, by, bz);
+                    if (blockBelow == 2) { // Grass block
+                        setBlockInWorld(bx, by, bz, 3, 0); // Convert to dirt
+                        broadcastSound("mob.sheep.shear", mob.posX, mob.posY, mob.posZ, 1.0f, 1.0f);
+                    }
+                }
             }
         }
 
@@ -2664,6 +2825,79 @@ void MinecraftServer::tickMobs() {
             if (mob.isDead) continue;
             float speed = getMobMovementSpeed(mob.mobType);
             if (speed <= 0.0f) continue; // Non-moving mob
+
+            // ─── Passive mob wander AI ───────────────────────────────
+            // Java: EntityAIWander — pick random direction, walk slowly
+            if (mob.isPassive) {
+                if (mob.wanderCooldown > 0) {
+                    --mob.wanderCooldown;
+                } else {
+                    // Pick new random wander direction
+                    mob.wanderYaw = static_cast<float>((rand() % 360) - 180);
+                    mob.wanderCooldown = 40 + (rand() % 80); // 2-6 seconds
+                }
+
+                // Only move 50% of the time (idle periods)
+                if (mob.wanderCooldown > 20) {
+                    float yawRad = mob.wanderYaw / 180.0f * static_cast<float>(M_PI);
+                    double moveX = -std::sin(yawRad) * speed * 0.5; // Half speed wander
+                    double moveZ = std::cos(yawRad) * speed * 0.5;
+
+                    double newX = mob.posX + moveX;
+                    double newZ = mob.posZ + moveZ;
+
+                    // Check for valid ground at new position
+                    if (!worlds_.empty()) {
+                        auto* wld = worlds_[0].get();
+                        int bx = static_cast<int>(std::floor(newX));
+                        int bz = static_cast<int>(std::floor(newZ));
+                        int startY = static_cast<int>(mob.posY);
+
+                        Block* feetBlock = wld->getBlock(bx, startY, bz);
+                        if (feetBlock != nullptr) {
+                            // Try step up
+                            Block* stepBlock = wld->getBlock(bx, startY + 1, bz);
+                            Block* headBlock = wld->getBlock(bx, startY + 2, bz);
+                            if (stepBlock == nullptr && headBlock == nullptr) {
+                                mob.posX = newX;
+                                mob.posZ = newZ;
+                                mob.posY = static_cast<double>(startY + 1);
+                            }
+                            // Otherwise don't move (wall)
+                        } else {
+                            // Apply gravity
+                            int groundY = startY;
+                            for (int y = startY - 1; y > 0; --y) {
+                                Block* b = wld->getBlock(bx, y, bz);
+                                if (b != nullptr) { groundY = y + 1; break; }
+                                if (y == 1) groundY = 1;
+                            }
+                            mob.posX = newX;
+                            mob.posZ = newZ;
+                            mob.posY = static_cast<double>(groundY);
+                        }
+                    }
+
+                    mob.yaw = mob.wanderYaw;
+                }
+
+                // Broadcast position update for passive mobs
+                {
+                    std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                    for (auto& conn : connections_) {
+                        if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                        auto handler = conn->getHandler();
+                        auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                        if (!ph) continue;
+                        ph->sendEntityTeleport(*conn, mob.entityId,
+                            mob.posX, mob.posY, mob.posZ, mob.yaw, mob.pitch);
+                    }
+                }
+                mob.lastSentPosX = static_cast<int32_t>(std::floor(mob.posX * 32.0));
+                mob.lastSentPosY = static_cast<int32_t>(std::floor(mob.posY * 32.0));
+                mob.lastSentPosZ = static_cast<int32_t>(std::floor(mob.posZ * 32.0));
+                continue; // Skip hostile AI for passive mobs
+            }
 
             // Zombie pigmen only chase when angry — Java: EntityPigZombie.findPlayerToAttack()
             if (mob.mobType == 57) {
@@ -2985,15 +3219,14 @@ void MinecraftServer::tickMobs() {
         }
 
         // ─── Skeleton ranged attack AI ─────────────────────────────
-        // Java: EntitySkeleton.attackEntityWithRangedAttack() — shoots arrows
-        // Simplified: instant-hit arrow damage every 60 ticks (3s) within 16 blocks
+        // Java: EntitySkeleton.attackEntityWithRangedAttack() — shoots arrow projectile
+        // Now uses real arrow projectiles via spawnArrow() instead of instant-hit
         for (auto& mob : mobEntities_) {
             if (mob.isDead || mob.mobType != 51) continue; // Skeleton only
             if (mob.attackCooldown > 0) { --mob.attackCooldown; continue; }
 
             // Find nearest player within 16 blocks
             PlayHandler* nearest = nullptr;
-            Connection* nearestConn = nullptr;
             double nearestDistSq = 256.0;
             {
                 std::lock_guard<std::mutex> connLock(connectionsMutex_);
@@ -3009,36 +3242,31 @@ void MinecraftServer::tickMobs() {
                     if (distSq < nearestDistSq) {
                         nearestDistSq = distSq;
                         nearest = ph;
-                        nearestConn = conn.get();
                     }
                 }
             }
 
-            if (!nearest || nearestDistSq < 4.0) continue; // Too close = melee instead
+            if (!nearest || nearestDistSq < 4.0) continue; // Too close = melee
 
-            // Shoot arrow — Java: EntitySkeleton.attackEntityWithRangedAttack
-            // Simplified: instant damage (no projectile entity flight)
-            float arrowDmg = 3.0f; // Java: skeleton arrow base damage
-            // Java: Projectile Protection (damageType=4) reduces arrow damage
-            int32_t armorValue = nearest->getTotalArmorValue();
-            float afterArmor = arrowDmg;
-            if (armorValue > 0) {
-                float reduction = arrowDmg * (1.0f - std::max(armorValue / 5.0f, armorValue - arrowDmg / 2.0f) / 25.0f);
-                afterArmor = std::max(arrowDmg - reduction, arrowDmg * 0.2f);
-            }
-            int32_t protMod = nearest->getEnchantmentProtectionModifier(4); // Projectile Protection
-            if (protMod > 0) {
-                afterArmor *= (1.0f - std::min(protMod, 20) * 0.04f);
-            }
-            nearest->applyDamage(afterArmor);
-            broadcastEntityEvent(nearest->getEntityId(), 2); // Hurt animation
-            broadcastSound("game.player.hurt", nearest->getPlayerX(), nearest->getPlayerY(), nearest->getPlayerZ(), 1.0f, 1.0f);
+            // Calculate arrow trajectory toward player
+            // Java: EntityArrow(world, skeleton, player, 1.6f, inaccuracy)
+            double dx = nearest->getPlayerX() - mob.posX;
+            double dy = (nearest->getPlayerY() + 0.9) - (mob.posY + 1.62); // eye to center
+            double dz = nearest->getPlayerZ() - mob.posZ;
+            double dist = std::sqrt(dx*dx + dy*dy + dz*dz);
+            if (dist < 0.01) continue;
+
+            // Normalize and add upward loft for arc
+            double speed = 1.6;
+            double nx = (dx / dist) * speed;
+            double ny = (dy / dist) * speed + 0.2; // Upward loft
+            double nz = (dz / dist) * speed;
+
+            // Spawn arrow from skeleton's eye height
             broadcastSound("random.bow", mob.posX, mob.posY, mob.posZ, 1.0f, 1.2f);
-
-            if (nearest->getHealth() <= 0.0f) {
-                broadcastEntityEvent(nearest->getEntityId(), 3);
-                broadcastChatMessage(nearest->getPlayerName() + " was shot by Skeleton");
-            }
+            spawnArrow(mob.posX, mob.posY + 1.62, mob.posZ,
+                        nx, ny, nz,
+                        mob.entityId, 2.0, 0, false);
 
             mob.attackCooldown = 60; // 3 seconds between shots
         }
@@ -3491,6 +3719,268 @@ void MinecraftServer::tickFurnaces() {
                     }
                 }
             }
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// spawnArrow — Create arrow projectile and broadcast S0E SpawnObject
+// Java reference: EntityArrow(world, shooter, speed) + EntityTracker.trackEntity()
+// ═══════════════════════════════════════════════════════════════════════════
+int32_t MinecraftServer::spawnArrow(double x, double y, double z,
+                                     double motionX, double motionY, double motionZ,
+                                     int32_t shooterEntityId, double damage,
+                                     int32_t knockback, bool critical) {
+    int32_t eid = nextArrowEntityId_++;
+
+    SpawnedArrow arrow;
+    arrow.entityId = eid;
+    arrow.shooterEntityId = shooterEntityId;
+    arrow.posX = x; arrow.posY = y; arrow.posZ = z;
+    arrow.motionX = motionX; arrow.motionY = motionY; arrow.motionZ = motionZ;
+    arrow.damage = damage;
+    arrow.knockbackStrength = knockback;
+    arrow.isCritical = critical;
+    arrow.spawnTick = tickCounter_.load();
+
+    // Compute yaw/pitch from motion
+    float horizSpeed = static_cast<float>(std::sqrt(motionX*motionX + motionZ*motionZ));
+    arrow.yaw = static_cast<float>(std::atan2(motionX, motionZ) * 180.0 / M_PI);
+    arrow.pitch = static_cast<float>(std::atan2(motionY, horizSpeed) * 180.0 / M_PI);
+
+    // Broadcast S0E SpawnObject to all players
+    // Type 60 = arrow, data = shooter entity ID (>0 means velocity is included)
+    {
+        std::lock_guard<std::mutex> connLock(connectionsMutex_);
+        for (auto& conn : connections_) {
+            if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+            auto handler = conn->getHandler();
+            auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+            if (!ph) continue;
+            ph->sendSpawnObject(*conn, eid, 60,
+                x, y, z, arrow.yaw, arrow.pitch,
+                shooterEntityId > 0 ? shooterEntityId : 1,
+                motionX, motionY, motionZ);
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(arrowEntitiesMutex_);
+        arrowEntities_.push_back(arrow);
+    }
+
+    return eid;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// tickArrows — Flight physics, block/player collision, despawn
+// Java reference: EntityArrow.onUpdate()
+// ═══════════════════════════════════════════════════════════════════════════
+void MinecraftServer::tickArrows() {
+    std::lock_guard<std::mutex> lock(arrowEntitiesMutex_);
+
+    for (auto& arrow : arrowEntities_) {
+        if (arrow.isDead) continue;
+
+        // ─── Ground state: check for despawn ─────────────────────────
+        if (arrow.inGround) {
+            ++arrow.ticksInGround;
+            if (arrow.ticksInGround >= SpawnedArrow::GROUND_DESPAWN) {
+                arrow.isDead = true;
+            }
+            if (arrow.arrowShake > 0) --arrow.arrowShake;
+            continue;
+        }
+
+        // ─── Flight physics ──────────────────────────────────────────
+        ++arrow.ticksInAir;
+
+        double prevX = arrow.posX, prevY = arrow.posY, prevZ = arrow.posZ;
+
+        // Apply motion
+        arrow.posX += arrow.motionX;
+        arrow.posY += arrow.motionY;
+        arrow.posZ += arrow.motionZ;
+
+        // ─── Block collision raytrace ────────────────────────────────
+        // Simplified: check block at new position
+        if (!worlds_.empty()) {
+            int bx = static_cast<int>(std::floor(arrow.posX));
+            int by = static_cast<int>(std::floor(arrow.posY));
+            int bz = static_cast<int>(std::floor(arrow.posZ));
+            int32_t blockId = getBlockIdInWorld(bx, by, bz);
+            // Hit a solid block (non-air, non-liquid)
+            if (blockId != 0 && blockId != 8 && blockId != 9 &&
+                blockId != 10 && blockId != 11) {
+                // Embed in block — Java: EntityArrow.onUpdate() block hit
+                arrow.inGround = true;
+                arrow.blockX = bx; arrow.blockY = by; arrow.blockZ = bz;
+                arrow.inBlockId = blockId;
+                arrow.inBlockMeta = getBlockMetaInWorld(bx, by, bz);
+                arrow.arrowShake = 7;
+                arrow.isCritical = false;
+
+                // Back up slightly
+                double mag = std::sqrt(arrow.motionX*arrow.motionX +
+                                        arrow.motionY*arrow.motionY +
+                                        arrow.motionZ*arrow.motionZ);
+                if (mag > 1e-7) {
+                    arrow.posX -= arrow.motionX / mag * 0.05;
+                    arrow.posY -= arrow.motionY / mag * 0.05;
+                    arrow.posZ -= arrow.motionZ / mag * 0.05;
+                }
+
+                arrow.motionX = 0; arrow.motionY = 0; arrow.motionZ = 0;
+
+                // Broadcast position update + arrow hit sound
+                broadcastSound("random.bowhit", arrow.posX, arrow.posY, arrow.posZ, 1.0f, 1.0f);
+
+                // Send S18 for final position
+                {
+                    std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                    for (auto& conn : connections_) {
+                        if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                        auto handler = conn->getHandler();
+                        auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                        if (!ph) continue;
+                        ph->sendEntityTeleport(*conn, arrow.entityId,
+                            arrow.posX, arrow.posY, arrow.posZ, arrow.yaw, arrow.pitch);
+                    }
+                }
+                continue;
+            }
+        }
+
+        // ─── Player collision check ──────────────────────────────────
+        // Java: scan for entities in expanded AABB along motion vector
+        {
+            std::lock_guard<std::mutex> connLock(connectionsMutex_);
+            for (auto& conn : connections_) {
+                if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                auto handler = conn->getHandler();
+                auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                if (!ph || ph->isDead()) continue;
+                if (ph->getGameMode() == 1 || ph->getGameMode() == 3) continue;
+
+                // Skip shooter for first 5 ticks
+                if (arrow.ticksInAir < SpawnedArrow::SHOOTER_GRACE &&
+                    ph->getEntityId() == arrow.shooterEntityId) continue;
+
+                double dx = ph->getPlayerX() - arrow.posX;
+                double dy = (ph->getPlayerY() + 0.9) - arrow.posY; // center of player
+                double dz = ph->getPlayerZ() - arrow.posZ;
+                double distSq = dx*dx + dy*dy + dz*dz;
+
+                // Hit radius ~0.5 blocks (expand 0.3 per Java)
+                if (distSq > 1.0) continue;
+
+                // ─── Calculate arrow damage ──────────────────────────
+                // Java: ceil(speed * baseDamage)
+                double speed = std::sqrt(arrow.motionX*arrow.motionX +
+                                          arrow.motionY*arrow.motionY +
+                                          arrow.motionZ*arrow.motionZ);
+                int32_t dmg = static_cast<int32_t>(std::ceil(speed * arrow.damage));
+                if (dmg < 1) dmg = 1;
+
+                // Critical bonus — rand(damage/2 + 2)
+                if (arrow.isCritical) {
+                    dmg += rand() % (dmg / 2 + 2);
+                }
+
+                // Armor reduction — Java: EntityLivingBase.applyArmorCalculations
+                float actualDmg = static_cast<float>(dmg);
+                int32_t armorVal = ph->getTotalArmorValue();
+                if (armorVal > 0) {
+                    actualDmg = actualDmg * static_cast<float>(25 - armorVal) / 25.0f;
+                }
+                // Projectile Protection — Java: damageType=4
+                int32_t protMod = ph->getEnchantmentProtectionModifier(4);
+                if (protMod > 0) {
+                    actualDmg = actualDmg * (1.0f - std::min(protMod, 20) * 0.04f);
+                }
+                if (actualDmg < 0.5f) actualDmg = 0.5f;
+
+                ph->applyDamage(actualDmg);
+                ph->sendUpdateHealth(*conn, ph->getHealth(), ph->getFood(), ph->getSaturation());
+                ph->damageArmor(static_cast<float>(dmg));
+
+                // Hurt animation + sound
+                broadcastEntityEvent(ph->getEntityId(), 2);
+                broadcastSound("game.player.hurt",
+                    ph->getPlayerX(), ph->getPlayerY(), ph->getPlayerZ(), 1.0f, 1.0f);
+
+                // Knockback
+                double horizDist = std::sqrt(arrow.motionX*arrow.motionX + arrow.motionZ*arrow.motionZ);
+                if (horizDist > 0.01) {
+                    double kbX = arrow.motionX / horizDist * 0.4;
+                    double kbZ = arrow.motionZ / horizDist * 0.4;
+                    ph->sendEntityVelocity(*conn, ph->getEntityId(), kbX, 0.36, kbZ);
+                }
+
+                // Death check
+                if (ph->getHealth() <= 0.0f) {
+                    broadcastEntityEvent(ph->getEntityId(), 3);
+                    broadcastChatMessage(ph->getPlayerName() + " was shot by arrow");
+                }
+
+                // Arrow dies on player hit
+                arrow.isDead = true;
+                break;
+            }
+        }
+
+        // ─── Update rotation from motion ─────────────────────────────
+        float horizSpeed = static_cast<float>(std::sqrt(arrow.motionX*arrow.motionX +
+                                                          arrow.motionZ*arrow.motionZ));
+        arrow.yaw = static_cast<float>(std::atan2(arrow.motionX, arrow.motionZ) * 180.0 / M_PI);
+        arrow.pitch = static_cast<float>(std::atan2(arrow.motionY, horizSpeed) * 180.0 / M_PI);
+
+        // Apply friction + gravity — Java: EntityArrow.onUpdate()
+        arrow.motionX *= SpawnedArrow::AIR_FRICTION;
+        arrow.motionY *= SpawnedArrow::AIR_FRICTION;
+        arrow.motionZ *= SpawnedArrow::AIR_FRICTION;
+        arrow.motionY -= SpawnedArrow::GRAVITY;
+
+        // Broadcast S18 EntityTeleport every tick for smooth flight
+        {
+            std::lock_guard<std::mutex> connLock(connectionsMutex_);
+            for (auto& conn : connections_) {
+                if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                auto handler = conn->getHandler();
+                auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                if (!ph) continue;
+                ph->sendEntityTeleport(*conn, arrow.entityId,
+                    arrow.posX, arrow.posY, arrow.posZ, arrow.yaw, arrow.pitch);
+            }
+        }
+
+        // Max air time — despawn after 1200 ticks if still flying
+        if (arrow.ticksInAir >= 1200) {
+            arrow.isDead = true;
+        }
+    }
+
+    // ─── Remove dead arrows + broadcast S13 DestroyEntities ──────────
+    std::vector<int32_t> deadIds;
+    arrowEntities_.erase(
+        std::remove_if(arrowEntities_.begin(), arrowEntities_.end(),
+            [&deadIds](const SpawnedArrow& a) {
+                if (a.isDead) {
+                    deadIds.push_back(a.entityId);
+                    return true;
+                }
+                return false;
+            }),
+        arrowEntities_.end());
+
+    if (!deadIds.empty()) {
+        std::lock_guard<std::mutex> connLock(connectionsMutex_);
+        for (auto& conn : connections_) {
+            if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+            auto handler = conn->getHandler();
+            auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+            if (!ph) continue;
+            ph->sendDestroyEntities(*conn, deadIds);
         }
     }
 }
