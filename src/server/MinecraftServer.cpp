@@ -242,6 +242,7 @@ void MinecraftServer::tick() {
     // Tick item entities (physics, despawn, pickup)
     tickItemEntities();
     tickFurnaces();
+    tickHoppers();
 
     // Tick world time — Java: WorldServer.tick()
     tickCounter_.fetch_add(1);
@@ -731,6 +732,210 @@ MinecraftServer::BrewingStandData& MinecraftServer::getOrCreateBrewingStand(int6
 MinecraftServer::DispenserData& MinecraftServer::getOrCreateDispenser(int64_t posKey) {
     std::lock_guard<std::mutex> lock(dispenserMutex_);
     return dispenserStorage_[posKey];
+}
+
+MinecraftServer::HopperData& MinecraftServer::getOrCreateHopper(int64_t posKey) {
+    std::lock_guard<std::mutex> lock(hopperMutex_);
+    return hopperStorage_[posKey];
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Hopper tile entity ticking — Java: TileEntityHopper.updateEntity()
+// Every 8 ticks: pull 1 item from inventory above, push 1 item to output direction
+// ═══════════════════════════════════════════════════════════════════════════
+void MinecraftServer::tickHoppers() {
+    std::lock_guard<std::mutex> lock(hopperMutex_);
+    if (hopperStorage_.empty()) return;
+
+    auto world = worlds_.empty() ? nullptr : worlds_[0].get();
+    if (!world) return;
+
+    // Helper: make position key from xyz
+    auto makePosKey = [](int32_t x, int32_t y, int32_t z) -> int64_t {
+        return (static_cast<int64_t>(x) & 0x3FFFFFFLL) << 38 |
+               (static_cast<int64_t>(y) & 0xFFFLL) << 26 |
+               (static_cast<int64_t>(z) & 0x3FFFFFFLL);
+    };
+
+    // Helper: unpack position key
+    auto unpackPos = [](int64_t key, int32_t& x, int32_t& y, int32_t& z) {
+        x = static_cast<int32_t>((key >> 38) & 0x3FFFFFF);
+        if (x & 0x2000000) x |= ~0x3FFFFFF; // sign extend
+        y = static_cast<int32_t>((key >> 26) & 0xFFF);
+        z = static_cast<int32_t>(key & 0x3FFFFFF);
+        if (z & 0x2000000) z |= ~0x3FFFFFF; // sign extend
+    };
+
+    // Helper: check if items can stack
+    auto canStack = [](const std::optional<ItemStack>& a, const ItemStack& b) -> bool {
+        if (!a.has_value()) return false;
+        return a->getItemId() == b.getItemId() &&
+               a->getDamage() == b.getDamage() &&
+               a->getStackSize() < a->getMaxStackSize();
+    };
+
+    // Hopper output direction from metadata
+    // Java: BlockHopper.getDirectionFromMetadata(meta)
+    // 0=down, 2=north, 3=south, 4=west, 5=east
+    static const int offX[] = {0, 0, 0, 0, -1, 1};
+    static const int offY[] = {-1, 0, 0, 0, 0, 0};
+    static const int offZ[] = {0, 0, -1, 1, 0, 0};
+
+    for (auto& [posKey, hopper] : hopperStorage_) {
+        // Decrement cooldown
+        if (hopper.transferCooldown > 0) {
+            --hopper.transferCooldown;
+            continue;
+        }
+
+        int32_t hx, hy, hz;
+        unpackPos(posKey, hx, hy, hz);
+
+        // Get hopper block and meta
+        Block* hBlock = world->getBlock(hx, hy, hz);
+        int hId = hBlock ? Block::getIdFromBlock(hBlock) : 0;
+        if (hId != 154) continue; // Not a hopper anymore
+
+        int hMeta = world->getBlockMetadata(hx, hy, hz);
+        int dir = hMeta & 7;
+        if (dir > 5) dir = 0;
+
+        bool transferred = false;
+
+        // ─── Step 1: Pull from inventory above ───────────────────────
+        int32_t aboveX = hx, aboveY = hy + 1, aboveZ = hz;
+        Block* aboveBlock = world->getBlock(aboveX, aboveY, aboveZ);
+        int aboveId = aboveBlock ? Block::getIdFromBlock(aboveBlock) : 0;
+        int64_t aboveKey = makePosKey(aboveX, aboveY, aboveZ);
+
+        // Pull from chest above (54, 146)
+        if ((aboveId == 54 || aboveId == 146) && !transferred) {
+            std::lock_guard<std::mutex> cLock(chestMutex_);
+            auto cIt = chestStorage_.find(aboveKey);
+            if (cIt != chestStorage_.end()) {
+                for (int s = 0; s < 27 && !transferred; ++s) {
+                    if (cIt->second[s].has_value() && cIt->second[s]->getStackSize() > 0) {
+                        // Try to insert 1 item into hopper
+                        auto& srcItem = cIt->second[s];
+                        for (int h = 0; h < 5; ++h) {
+                            if (!hopper.slots[h].has_value()) {
+                                hopper.slots[h] = ItemStack(srcItem->getItemId(), 1, srcItem->getDamage());
+                                srcItem->setStackSize(srcItem->getStackSize() - 1);
+                                if (srcItem->getStackSize() <= 0) srcItem.reset();
+                                transferred = true;
+                                break;
+                            } else if (canStack(hopper.slots[h], *srcItem) &&
+                                       hopper.slots[h]->getStackSize() < hopper.slots[h]->getMaxStackSize()) {
+                                hopper.slots[h]->setStackSize(hopper.slots[h]->getStackSize() + 1);
+                                srcItem->setStackSize(srcItem->getStackSize() - 1);
+                                if (srcItem->getStackSize() <= 0) srcItem.reset();
+                                transferred = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Pull from hopper above
+        if (aboveId == 154 && !transferred) {
+            auto hIt = hopperStorage_.find(aboveKey);
+            if (hIt != hopperStorage_.end() && &hIt->second != &hopper) {
+                for (int s = 0; s < 5 && !transferred; ++s) {
+                    if (hIt->second.slots[s].has_value() && hIt->second.slots[s]->getStackSize() > 0) {
+                        auto& srcItem = hIt->second.slots[s];
+                        for (int h = 0; h < 5; ++h) {
+                            if (!hopper.slots[h].has_value()) {
+                                hopper.slots[h] = ItemStack(srcItem->getItemId(), 1, srcItem->getDamage());
+                                srcItem->setStackSize(srcItem->getStackSize() - 1);
+                                if (srcItem->getStackSize() <= 0) srcItem.reset();
+                                transferred = true;
+                                break;
+                            } else if (canStack(hopper.slots[h], *srcItem) &&
+                                       hopper.slots[h]->getStackSize() < hopper.slots[h]->getMaxStackSize()) {
+                                hopper.slots[h]->setStackSize(hopper.slots[h]->getStackSize() + 1);
+                                srcItem->setStackSize(srcItem->getStackSize() - 1);
+                                if (srcItem->getStackSize() <= 0) srcItem.reset();
+                                transferred = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ─── Step 2: Push to output inventory ────────────────────────
+        int32_t outX = hx + offX[dir], outY = hy + offY[dir], outZ = hz + offZ[dir];
+        Block* outBlock = world->getBlock(outX, outY, outZ);
+        int outId = outBlock ? Block::getIdFromBlock(outBlock) : 0;
+        int64_t outKey = makePosKey(outX, outY, outZ);
+
+        if (!transferred) {
+            // Push to chest (54, 146)
+            if (outId == 54 || outId == 146) {
+                std::lock_guard<std::mutex> cLock(chestMutex_);
+                auto cIt = chestStorage_.find(outKey);
+                if (cIt != chestStorage_.end()) {
+                    for (int h = 0; h < 5 && !transferred; ++h) {
+                        if (hopper.slots[h].has_value() && hopper.slots[h]->getStackSize() > 0) {
+                            auto& srcItem = hopper.slots[h];
+                            for (int s = 0; s < 27; ++s) {
+                                if (!cIt->second[s].has_value()) {
+                                    cIt->second[s] = ItemStack(srcItem->getItemId(), 1, srcItem->getDamage());
+                                    srcItem->setStackSize(srcItem->getStackSize() - 1);
+                                    if (srcItem->getStackSize() <= 0) srcItem.reset();
+                                    transferred = true;
+                                    break;
+                                } else if (canStack(cIt->second[s], *srcItem) &&
+                                           cIt->second[s]->getStackSize() < cIt->second[s]->getMaxStackSize()) {
+                                    cIt->second[s]->setStackSize(cIt->second[s]->getStackSize() + 1);
+                                    srcItem->setStackSize(srcItem->getStackSize() - 1);
+                                    if (srcItem->getStackSize() <= 0) srcItem.reset();
+                                    transferred = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Push to hopper output
+            if (outId == 154 && !transferred) {
+                auto hIt = hopperStorage_.find(outKey);
+                if (hIt != hopperStorage_.end() && &hIt->second != &hopper) {
+                    for (int h = 0; h < 5 && !transferred; ++h) {
+                        if (hopper.slots[h].has_value() && hopper.slots[h]->getStackSize() > 0) {
+                            auto& srcItem = hopper.slots[h];
+                            for (int s = 0; s < 5; ++s) {
+                                if (!hIt->second.slots[s].has_value()) {
+                                    hIt->second.slots[s] = ItemStack(srcItem->getItemId(), 1, srcItem->getDamage());
+                                    srcItem->setStackSize(srcItem->getStackSize() - 1);
+                                    if (srcItem->getStackSize() <= 0) srcItem.reset();
+                                    transferred = true;
+                                    break;
+                                } else if (canStack(hIt->second.slots[s], *srcItem) &&
+                                           hIt->second.slots[s]->getStackSize() < hIt->second.slots[s]->getMaxStackSize()) {
+                                    hIt->second.slots[s]->setStackSize(hIt->second.slots[s]->getStackSize() + 1);
+                                    srcItem->setStackSize(srcItem->getStackSize() - 1);
+                                    if (srcItem->getStackSize() <= 0) srcItem.reset();
+                                    transferred = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Set cooldown
+        if (transferred) {
+            hopper.transferCooldown = 8; // Java: TileEntityHopper cooldown = 8 ticks
+        }
+    }
 }
 
 void MinecraftServer::createExplosion(double x, double y, double z, float power,

@@ -240,6 +240,20 @@ public:
     mutable std::mutex dispenserMutex_;
 
     /**
+     * Hopper storage (5 slots + transfer cooldown).
+     * Java reference: TileEntityHopper — 8-tick cooldown, pull up/push down
+     */
+    struct HopperData {
+        std::array<std::optional<ItemStack>, 5> slots;
+        int32_t transferCooldown = -1;
+        bool isOnCooldown() const { return transferCooldown > 0; }
+    };
+    HopperData& getOrCreateHopper(int64_t posKey);
+    void tickHoppers();
+    std::map<int64_t, HopperData> hopperStorage_;
+    mutable std::mutex hopperMutex_;
+
+    /**
      * Save all world chunks to disk.\n     * Java reference: MinecraftServer.saveAllWorlds()\n     */
     void saveAllWorlds();
 

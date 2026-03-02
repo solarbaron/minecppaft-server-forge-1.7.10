@@ -2417,8 +2417,8 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
                       (static_cast<int64_t>(blockY) & 0xFFFLL) << 26 |
                       (static_cast<int64_t>(blockZ) & 0x3FFFFFFLL);
 
-        // Reuse dispenser storage for hoppers (they also have 5 slots)
-        auto& hopData = server_.getOrCreateDispenser(key);
+        // Use dedicated hopper storage (5 slots + cooldown)
+        auto& hopData = server_.getOrCreateHopper(key);
 
         // S2D OpenWindow (type 9 = hopper)
         {
