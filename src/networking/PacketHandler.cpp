@@ -1955,6 +1955,74 @@ void PlayHandler::handlePlayerDigging(const uint8_t* data, size_t length, Connec
             // Lit redstone lamp → redstone lamp
             case 124: return {123, 1, 0};
 
+            // ─── Nether / End blocks ──────────────────────────────
+            case 87:  return {87, 1, 0};  // netherrack → netherrack
+            case 88:  return {88, 1, 0};  // soul sand → soul sand
+            case 121: return {121, 1, 0}; // end stone → end stone
+            case 112: return {112, 1, 0}; // nether brick → nether brick
+            case 113: return {113, 1, 0}; // nether brick fence → fence
+            case 114: return {114, 1, 0}; // nether brick stairs → stairs
+
+            // ─── More special drops ───────────────────────────────
+            // Bookshelf → 3 books (Java: BlockBookshelf.quantityDropped)
+            case 47:  return {340, 3, 0};
+            // Gravel → flint (10% chance) or gravel (simplified: always gravel)
+            case 13:  return {13, 1, 0};
+            // Nether wart (block 115) → nether wart item (372)
+            case 115: return {372, (blockMeta >= 3) ? 3 : 1, 0};
+            // Cocoa bean (block 127) → cocoa beans (dye:3, item 351, dmg 3)
+            case 127: return {351, (blockMeta >= 8) ? 3 : 1, 3};
+            // Lily pad → self
+            case 111: return {111, 1, 0};
+            // Vines → nothing (shears needed)
+            case 106: return {-1, 0, 0};
+            // Mycelium → dirt
+            case 110: return {3, 1, 0};
+            // Dragon egg → self
+            case 122: return {122, 1, 0};
+            // Command block → nothing
+            case 137: return {-1, 0, 0};
+            // Beacon → self
+            case 138: return {138, 1, 0};
+            // Anvil → self (with damage preserved in meta)
+            case 145: return {145, 1, blockMeta};
+            // Huge brown mushroom (99) → brown mushroom (39), 0-2
+            case 99:  return {39, 1, 0};
+            // Huge red mushroom (100) → red mushroom (40), 0-2  
+            case 100: return {40, 1, 0};
+            // Double stone slab → 2 slabs
+            case 43:  return {44, 2, blockMeta};
+            case 125: return {126, 2, blockMeta}; // Double wood slab → 2 wood slabs
+            // Brewing stand block → item 379
+            case 117: return {379, 1, 0};
+            // Cauldron block → item 380
+            case 118: return {380, 1, 0};
+            // Enchanting table → self
+            case 116: return {116, 1, 0};
+            // Ender chest → 8 obsidian (Java: BlockEnderChest.quantityDropped)
+            case 130: return {49, 8, 0};
+            // Banner → self (1.8+, skip)
+            // Flower pot → item 390
+            case 140: return {390, 1, 0};
+            // Skull/head → item 397
+            case 144: return {397, 1, blockMeta};
+            // Daylight sensor → self
+            case 151: return {151, 1, 0};
+            // Hopper → self  
+            case 154: return {154, 1, 0};
+            // Dropper → self
+            case 158: return {158, 1, 0};
+            // Stained clay → self
+            case 159: return {159, 1, blockMeta};
+            // Hay bale → self
+            case 170: return {170, 1, 0};
+            // Hardened clay → self
+            case 172: return {172, 1, 0};
+            // Coal block → self
+            case 173: return {173, 1, 0};
+            // Packed ice → nothing (no silk touch support)
+            case 174: return {-1, 0, 0};
+
             // ─── Default: block drops itself as item ──────────────
             // Java: Block.getItemDropped → Item.getItemFromBlock(this)
             // For most blocks, block ID == item ID
