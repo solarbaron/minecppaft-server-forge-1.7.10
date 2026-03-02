@@ -44,7 +44,7 @@
 - **Materials** — Air, Rock, Wood, Cloth, Fire, Water, Lava, Plants, etc.
 
 ### Crafting
-- **Shaped/Shapeless Recipes** — 550+ crafting recipes registered (all 5 tool tiers, 5 sword tiers, 4 armor sets, building blocks, utility items, redstone components, food, storage blocks, dyes, slabs, fences, walls, doors, rails, pistons, minecarts, pressure plates, stairs, **16 wool/clay/glass/pane/carpet dye colors**, dye mixing, **block↔ingot 9x conversions**, gold nuggets, food items, misc items)
+- **Shaped/Shapeless Recipes** — 560+ crafting recipes registered (all 5 tool tiers, 5 sword tiers, 4 armor sets, building blocks, utility items, redstone components, food, storage blocks, dyes, slabs, fences, walls, doors, rails, pistons, minecarts, pressure plates, stairs, **16 wool/clay/glass/pane/carpet dye colors**, dye mixing, **block↔ingot 9x conversions**, gold nuggets, food items, misc items, ender chest, trapped chest, beacon, golden apple)
 - **Smelting** — 22 smelting recipes with XP values
 - **Stack sizes** — per-item max stack sizes (tools/weapons/armor=1, eggs/snowballs/ender pearls=16, default=64)
 
@@ -258,6 +258,9 @@
 - ~~**Held item tracking**~~ — ✅ C09 HeldItemChange updates player's currentSlot (0-8 validated)
 - ~~**Animation broadcast**~~ — ✅ C0A arm swing → S0B broadcast to other players
 - ~~**Entity actions**~~ — ✅ C0B sneak/sprint start/stop → S1C metadata flags broadcast
+- ~~**Bed sleeping**~~ — ✅ Right-click bed at night skips to sunrise, broadcasts message, day check
+- ~~**Nether portal creation**~~ — ✅ Flint-and-steel fire inside obsidian frame → portal blocks (90), X/Z axis detection
+- ~~**Interactive blocks**~~ — ✅ Lever/button/door/trapdoor/fence gate/note block right-click toggle with metadata + sounds
 
 ### World Generation
 - ~~**Terrain**~~ — ✅ OverworldGenerator with noise-based density + surface replacement
@@ -441,3 +444,7 @@
 146. **RecipesIngots crafting** — ✅ Done (18 recipes: 8 block↔ingot 9x conversions + gold nugget↔ingot)
 147. **RecipesFood crafting** — ✅ Done (9 recipes: mushroom stew, cookies, melon block/seeds, pumpkin pie, fermented spider eye, blaze powder, magma cream)
 148. **Lighting engine** — ✅ Done (Chunk::generateSkylightMap — column-wise skylight + block light from emitting blocks, height map)
+149. **RecipesCrafting parity** — ✅ Done (7 recipes: ender chest, trapped chest, beacon, sandstone/quartz chiseled, golden apple, sugar)
+150. **Bed sleeping** — ✅ Done (block 26 right-click: night check 12541-23458, skip night to sunrise, broadcast chat, occupied check)
+151. **Nether portal creation** — ✅ Done (flint-and-steel fire in obsidian frame → portal blocks 90, X/Z axis detection, width 2-21, height 3-21)
+152. **Interactive block toggles** — ✅ Done (lever/button/door/trapdoor/fence gate/note block right-click toggle with metadata + sounds)
