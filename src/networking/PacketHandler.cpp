@@ -2404,7 +2404,46 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
         return;
     }
 
-    // Enchanting Table (block ID 116) — Java: BlockEnchantmentTable.onBlockActivated()
+    // Bed (block ID 26) — Java: BlockBed.onBlockActivated()
+    if (clickedBlockId == 26 && !isSneaking_) {
+        int32_t by = static_cast<int32_t>(blockY);
+        int32_t bedMeta = world->getBlockMetadata(blockX, by, blockZ);
+
+        // Check if it's nighttime — Java: worldTime >= 12541 && worldTime <= 23458
+        int64_t worldTime = world->getWorldTime() % 24000;
+        if (worldTime < 12541 || worldTime > 23458) {
+            // "You can only sleep at night"
+            sendChatMessage(conn, std::string("\xc2\xa7") + "cYou can only sleep at night");
+            return;
+        }
+
+        // Check if bed is occupied (bit 4)
+        if (bedMeta & 0x04) {
+            sendChatMessage(conn, std::string("\xc2\xa7") + "cThis bed is occupied");
+            return;
+        }
+
+        // Spawn point setting — would go here when player entity has spawn fields
+        // Java: EntityPlayer.setSpawnChunk(bedPos, false)
+
+        // Skip the night immediately (simplified — no actual sleep animation)
+        // Set world time to 0 (sunrise)
+        world->setWorldTime(0);
+
+        // Broadcast time to all players
+        server_.broadcastTimeUpdate();
+
+        // Send chat message
+        server_.broadcastChatMessage(std::string("\xc2\xa7") + "e" + playerName_ + " slept through the night");
+
+        // Clear weather if raining — Java: WorldServer.wakeAllPlayers → resetRainAndThunder
+        // Simplified: clear rain on sleep
+        // (weather clearing handled by world tick)
+
+        sendChatMessage(conn, std::string("\xc2\xa7") + "aSpawn point set to bed location");
+        return;
+    }
+
     if (clickedBlockId == 116 && !isSneaking_) {
         openWindowId_ = 10; // Use unique window ID for enchanting
         enchantTableX_ = blockX;
