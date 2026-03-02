@@ -44,7 +44,7 @@
 - **Materials** — Air, Rock, Wood, Cloth, Fire, Water, Lava, Plants, etc.
 
 ### Crafting
-- **Shaped/Shapeless Recipes** — 350+ crafting recipes registered (all 5 tool tiers, 5 sword tiers, 4 armor sets, building blocks, utility items, redstone, food, storage blocks, dyes, slabs, fences, walls, doors, rails, pistons, misc items)
+- **Shaped/Shapeless Recipes** — 410+ crafting recipes registered (all 5 tool tiers, 5 sword tiers, 4 armor sets, building blocks, utility items, redstone components, food, storage blocks, dyes, slabs, fences, walls, doors, rails, pistons, minecarts, pressure plates, stairs, misc items)
 - **Smelting** — 22 smelting recipes with XP values
 - **Stack sizes** — per-item max stack sizes (tools/weapons/armor=1, eggs/snowballs/ender pearls=16, default=64)
 
@@ -57,7 +57,7 @@
 
 ## 🔶 Partially Implemented (Headers + Stubs)
 
-### Commands (39 commands, chat→command bridge ✅)
+### Commands (41 commands, chat→command bridge ✅)
 | Command | Status |
 |---------|---------|
 | `/stop` | ✅ Working via chat |
@@ -99,6 +99,8 @@
 | `/deop` | ✅ Working — revoke operator status |
 | `/ban-ip` | ✅ Working — ban IP address |
 | `/pardon-ip` | ✅ Working — unban IP address |
+| `/testforblock` | ✅ Working — test block at position |
+| `/achievement` | ✅ Working — give/take achievements |
 
 ### Entity System
 - **Entity base** — ID counter, UUID, position/rotation, bounding box
@@ -411,3 +413,6 @@
 127. **/pardon-ip command** — ✅ Done (39th command, unban IP address)
 128. **Lily pad worldgen** — ✅ Done (1/4 chance, 1-3 on water surface)
 129. **Sand beach generation** — ✅ Done (replaces grass/dirt at Y=62-63 water edges with sand)
+130. **Crafting recipe expansion IV** — ✅ Done (30+ recipes: glass bottles, rails, minecarts, brewing stand, enchanting table, anvil, hopper, dispenser, dropper, redstone components, pressure plates, stairs, bow; ~410+ total)
+131. **/testforblock command** — ✅ Done (40th command, test block at position)
+132. **/achievement command** — ✅ Done (41st command, give/take achievements)
