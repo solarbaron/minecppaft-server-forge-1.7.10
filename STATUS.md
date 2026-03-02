@@ -44,7 +44,7 @@
 - **Materials** — Air, Rock, Wood, Cloth, Fire, Water, Lava, Plants, etc.
 
 ### Crafting
-- **Shaped/Shapeless Recipes** — 410+ crafting recipes registered (all 5 tool tiers, 5 sword tiers, 4 armor sets, building blocks, utility items, redstone components, food, storage blocks, dyes, slabs, fences, walls, doors, rails, pistons, minecarts, pressure plates, stairs, misc items)
+- **Shaped/Shapeless Recipes** — 520+ crafting recipes registered (all 5 tool tiers, 5 sword tiers, 4 armor sets, building blocks, utility items, redstone components, food, storage blocks, dyes, slabs, fences, walls, doors, rails, pistons, minecarts, pressure plates, stairs, **16 wool/clay/glass/pane/carpet dye colors**, dye mixing, misc items)
 - **Smelting** — 22 smelting recipes with XP values
 - **Stack sizes** — per-item max stack sizes (tools/weapons/armor=1, eggs/snowballs/ender pearls=16, default=64)
 
@@ -57,7 +57,7 @@
 
 ## 🔶 Partially Implemented (Headers + Stubs)
 
-### Commands (47 commands, chat→command bridge ✅)
+### Commands (50 commands, chat→command bridge ✅)
 | Command | Status |
 |---------|---------|
 | `/stop` | ✅ Working via chat |
@@ -107,6 +107,9 @@
 | `/entitydata` | ✅ Working — modify entity NBT data |
 | `/replaceitem` | ✅ Working — replace inventory items |
 | `/execute` | ✅ Working — execute command as entity |
+| `/trigger` | ✅ Working — scoreboard trigger |
+| `/title` | ✅ Working — title screen text |
+| `/particle` | ✅ Working — spawn particles |
 
 ### Entity System
 - **Entity base** — ID counter, UUID, position/rotation, bounding box
@@ -429,3 +432,7 @@
 137. **/entitydata command** — ✅ Done (45th command, modify entity NBT data)
 138. **/replaceitem command** — ✅ Done (46th command, replace inventory items)
 139. **/execute command** — ✅ Done (47th command, execute command as entity)
+140. **RecipesDyes crafting** — ✅ Done (100+ dye recipes: 16 wool/stained clay/glass/pane/carpet colors + 20+ dye mixing; ~520+ total)
+141. **/trigger command** — ✅ Done (48th command, scoreboard trigger)
+142. **/title command** — ✅ Done (49th command, title screen text)
+143. **/particle command** — ✅ Done (50th command, spawn particles)
