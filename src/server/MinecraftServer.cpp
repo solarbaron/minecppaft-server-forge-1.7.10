@@ -2671,6 +2671,29 @@ void MinecraftServer::tickMobs() {
                 --mob.angerLevel;
             }
 
+            // ─── Skeleton/Zombie flee-from-sun AI ────────────────────
+            // Java: EntityAIFleeSun — undead mobs seek shelter during daytime
+            if ((mob.mobType == 51 || mob.mobType == 54) && !worlds_.empty()) {
+                int64_t wt = getWorldTime() % 24000;
+                if (wt >= 0 && wt < 12300 && !isRaining()) {
+                    int bx = static_cast<int>(std::floor(mob.posX));
+                    int by = static_cast<int>(std::floor(mob.posY));
+                    int bz = static_cast<int>(std::floor(mob.posZ));
+                    int32_t blockAbove = getBlockIdInWorld(bx, by + 1, bz);
+                    if (blockAbove == 0) {
+                        // In sunlight — move randomly to seek shelter instead of chasing player
+                        double fleeDx = ((double)(rand() % 100) / 100.0 - 0.5) * 2.0;
+                        double fleeDz = ((double)(rand() % 100) / 100.0 - 0.5) * 2.0;
+                        double dist = std::sqrt(fleeDx * fleeDx + fleeDz * fleeDz);
+                        if (dist > 0.01) {
+                            mob.posX += (fleeDx / dist) * speed;
+                            mob.posZ += (fleeDz / dist) * speed;
+                        }
+                        continue; // Skip normal targeting while fleeing sun
+                    }
+                }
+            }
+
             // Find nearest player within 16 blocks
             PlayHandler* nearest = nullptr;
             double nearestDistSq = 256.0; // 16 blocks squared
