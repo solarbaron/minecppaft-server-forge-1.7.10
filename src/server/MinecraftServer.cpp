@@ -1996,6 +1996,208 @@ void MinecraftServer::tickRandomBlocks() {
                         }
                     }
                 }
+
+                // ─── Water/Lava flow (8/9/10/11) — Java: BlockDynamicLiquid.updateTick ─
+                // Water: block 8 (flowing) / 9 (still source) — decay 1, tick rate 5
+                // Lava:  block 10 (flowing) / 11 (still source) — decay 2, tick rate 30
+                if (blockId == 8 || blockId == 9 || blockId == 10 || blockId == 11) {
+                    bool isWater = (blockId == 8 || blockId == 9);
+                    int liquidMeta = world->getBlockMetadata(bx, by, bz);
+                    int flowId = isWater ? 8 : 10;   // Flowing block ID
+                    int stillId = isWater ? 9 : 11;   // Still source ID
+                    int decayFactor = isWater ? 1 : 2; // Java: lava overworld decay=2
+                    int maxLevel = 7; // Meta 0=source, 1-7=flow distance, 8+=falling
+
+                    // Helper: can liquid displace this block?
+                    auto canDisplace = [&](int x, int y, int z) -> bool {
+                        Block* b = world->getBlock(x, y, z);
+                        int bid = b ? Block::getIdFromBlock(b) : 0;
+                        if (bid == 0) return true; // Air
+                        // Can't displace same liquid type
+                        if (isWater && (bid == 8 || bid == 9)) return false;
+                        if (!isWater && (bid == 10 || bid == 11)) return false;
+                        // Can't displace solid/movement-blocking blocks
+                        // Simple check: avoid solid blocks (IDs that are typically solid)
+                        if (bid == 64 || bid == 71 || bid == 63 || bid == 68 || bid == 65 || bid == 83) return false; // doors/signs/ladders/reeds
+                        // Check if block is solid (most blocks) — simplified: flowers/grass/snow layer etc. can be displaced
+                        if (bid == 31 || bid == 32 || bid == 37 || bid == 38 || bid == 39 || bid == 40 ||
+                            bid == 6 || bid == 78 || bid == 106 || bid == 175) return true; // Tallgrass/deadbush/flowers/mushrooms/saplings/snow/vine/double plant
+                        // Default: block is solid if it's not air and not a liquid
+                        if (bid >= 1) {
+                            // Check some known non-solid blocks
+                            if (bid == 50 || bid == 51 || bid == 55 || bid == 75 || bid == 76) return true; // Torches/fire/redstone
+                            return false; // Otherwise solid
+                        }
+                        return true;
+                    };
+
+                    // Helper: is position blocksMovement (solid or liquid-blocking)?
+                    auto blocksFlow = [&](int x, int y, int z) -> bool {
+                        Block* b = world->getBlock(x, y, z);
+                        int bid = b ? Block::getIdFromBlock(b) : 0;
+                        if (bid == 0) return false;
+                        if (bid == 64 || bid == 71 || bid == 63 || bid == 68 || bid == 65 || bid == 83) return true; // doors/signs/ladders/reeds
+                        if (bid == 90) return true; // Portal
+                        if (isWater && (bid == 8 || bid == 9)) return false;
+                        if (!isWater && (bid == 10 || bid == 11)) return false;
+                        // Non-solid: air, flowers, grass, torches, etc.
+                        if (bid == 31 || bid == 32 || bid == 37 || bid == 38 || bid == 39 || bid == 40 ||
+                            bid == 6 || bid == 78 || bid == 106 || bid == 50 || bid == 51 || bid == 55 ||
+                            bid == 75 || bid == 76 || bid == 175) return false;
+                        return true; // Most blocks are solid
+                    };
+
+                    // Helper: place flowing liquid at position
+                    auto placeFlow = [&](int x, int y, int z, int meta) {
+                        Block* existing = world->getBlock(x, y, z);
+                        int eid = existing ? Block::getIdFromBlock(existing) : 0;
+
+                        // Lava + water interaction
+                        if (!isWater) {
+                            // Lava flowing into water
+                            if (eid == 8 || eid == 9) {
+                                int waterMeta = world->getBlockMetadata(x, y, z);
+                                if (waterMeta == 0 || eid == 9) {
+                                    // Lava source touching water source → obsidian
+                                    world->setBlock(x, y, z, Block::getBlockById(49)); // Obsidian
+                                    world->setBlockMetadata(x, y, z, 0);
+                                    broadcastBlockChange(x, y, z, 49, 0);
+                                } else {
+                                    // Lava flowing touching flowing water → cobblestone
+                                    world->setBlock(x, y, z, Block::getBlockById(4)); // Cobblestone
+                                    world->setBlockMetadata(x, y, z, 0);
+                                    broadcastBlockChange(x, y, z, 4, 0);
+                                }
+                                broadcastSound("random.fizz",
+                                    static_cast<double>(x) + 0.5, static_cast<double>(y) + 0.5,
+                                    static_cast<double>(z) + 0.5, 0.5f, 2.6f);
+                                return;
+                            }
+                        } else {
+                            // Water flowing into lava
+                            if (eid == 10 || eid == 11) {
+                                int lavaMeta = world->getBlockMetadata(x, y, z);
+                                if (lavaMeta == 0 || eid == 11) {
+                                    // Water touching lava source → obsidian
+                                    world->setBlock(x, y, z, Block::getBlockById(49));
+                                    world->setBlockMetadata(x, y, z, 0);
+                                    broadcastBlockChange(x, y, z, 49, 0);
+                                } else {
+                                    // Water touching flowing lava → cobblestone
+                                    world->setBlock(x, y, z, Block::getBlockById(4));
+                                    world->setBlockMetadata(x, y, z, 0);
+                                    broadcastBlockChange(x, y, z, 4, 0);
+                                }
+                                broadcastSound("random.fizz",
+                                    static_cast<double>(x) + 0.5, static_cast<double>(y) + 0.5,
+                                    static_cast<double>(z) + 0.5, 0.5f, 2.6f);
+                                return;
+                            }
+                        }
+
+                        // Normal displacement
+                        world->setBlock(x, y, z, Block::getBlockById(flowId));
+                        world->setBlockMetadata(x, y, z, meta);
+                        broadcastBlockChange(x, y, z, flowId, meta);
+                    };
+
+                    // Source blocks (meta 0 or still source IDs 9/11) always try to spread
+                    bool isSource = (liquidMeta == 0 || blockId == stillId);
+                    int currentLevel = isSource ? 0 : (liquidMeta & 0x07);
+
+                    // Step 1: Try to flow downward
+                    if (by > 0) {
+                        Block* below = world->getBlock(bx, by - 1, bz);
+                        int belowId = below ? Block::getIdFromBlock(below) : 0;
+
+                        if (belowId == 0 || (!blocksFlow(bx, by - 1, bz) &&
+                            !(isWater ? (belowId == 8 || belowId == 9) : (belowId == 10 || belowId == 11)))) {
+                            // Flow down — falling has meta 8+ (8 = falling from source)
+                            int fallMeta = (currentLevel >= 8) ? currentLevel : (currentLevel + 8);
+                            if (fallMeta > 15) fallMeta = 8;
+                            placeFlow(bx, by - 1, bz, fallMeta);
+                        }
+                    }
+
+                    // Step 2: Spread horizontally if we haven't exceeded range
+                    int nextLevel = currentLevel + decayFactor;
+                    if (currentLevel >= 8) nextLevel = 1; // Falling → restart at level 1
+                    if (nextLevel <= maxLevel) {
+                        // Java: func_149808_o — find shortest path to downward edge
+                        // Simplified: spread to all 4 cardinal directions that aren't blocked
+                        static const int dx[] = {-1, 1, 0, 0};
+                        static const int dz[] = {0, 0, -1, 1};
+
+                        for (int dir = 0; dir < 4; ++dir) {
+                            int nx = bx + dx[dir];
+                            int nz = bz + dz[dir];
+
+                            // Can't flow into solid blocks
+                            if (blocksFlow(nx, by, nz)) continue;
+
+                            Block* nb = world->getBlock(nx, by, nz);
+                            int nid = nb ? Block::getIdFromBlock(nb) : 0;
+
+                            // Skip if same liquid already at equal or lower level
+                            if ((isWater && (nid == 8 || nid == 9)) ||
+                                (!isWater && (nid == 10 || nid == 11))) {
+                                int existingMeta = world->getBlockMetadata(nx, by, nz);
+                                int existingLevel = (existingMeta >= 8) ? 0 : existingMeta;
+                                if (nid == stillId) existingLevel = 0;
+                                if (existingLevel <= nextLevel) continue;
+                            }
+
+                            placeFlow(nx, by, nz, nextLevel);
+                        }
+                    }
+
+                    // Step 3: Source blocks with no feed should have been handled.
+                    // Non-source flowing blocks should shrink if no adjacent source feeds them
+                    if (!isSource && currentLevel < 8) {
+                        // Check if any adjacent block feeds this flow
+                        bool fed = false;
+                        // Check above for falling
+                        Block* above = world->getBlock(bx, by + 1, bz);
+                        int aboveId = above ? Block::getIdFromBlock(above) : 0;
+                        if ((isWater && (aboveId == 8 || aboveId == 9)) ||
+                            (!isWater && (aboveId == 10 || aboveId == 11))) {
+                            fed = true;
+                        }
+                        // Check 4 cardinal directions for lower-level source
+                        if (!fed) {
+                            static const int dx2[] = {-1, 1, 0, 0};
+                            static const int dz2[] = {0, 0, -1, 1};
+                            for (int dir = 0; dir < 4; ++dir) {
+                                int ax = bx + dx2[dir];
+                                int az = bz + dz2[dir];
+                                Block* ab = world->getBlock(ax, by, az);
+                                int aid = ab ? Block::getIdFromBlock(ab) : 0;
+                                if ((isWater && (aid == 8 || aid == 9)) ||
+                                    (!isWater && (aid == 10 || aid == 11))) {
+                                    int adjMeta = world->getBlockMetadata(ax, by, az);
+                                    int adjLevel = (adjMeta >= 8) ? 0 : adjMeta;
+                                    if (aid == stillId) adjLevel = 0;
+                                    if (adjLevel < currentLevel) {
+                                        fed = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        // If not fed, shrink (increase level) or remove
+                        if (!fed) {
+                            int newLevel = currentLevel + decayFactor;
+                            if (newLevel > maxLevel) {
+                                // Remove this flow
+                                world->setBlock(bx, by, bz, Block::getBlockById(0));
+                                broadcastBlockChange(bx, by, bz, 0, 0);
+                            } else {
+                                world->setBlockMetadata(bx, by, bz, newLevel);
+                                broadcastBlockChange(bx, by, bz, flowId, newLevel);
+                            }
+                        }
+                    }
+                }
             }
         }
     }
