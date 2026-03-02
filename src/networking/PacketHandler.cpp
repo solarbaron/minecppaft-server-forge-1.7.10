@@ -1781,11 +1781,26 @@ void PlayHandler::handlePlayerDigging(const uint8_t* data, size_t length, Connec
     }
 
     if (status == 5) {
-        // Shoot arrow / finish eating — Java: ItemBow.onPlayerStoppedUsing()
+        // Shoot arrow — Java: ItemBow.onPlayerStoppedUsing()
         auto currentItem = inventory_.getCurrentItem();
         if (currentItem && currentItem->getItemId() == 261) { // 261 = bow
-            // Check for arrow in inventory (survival only)
-            bool hasArrow = (gameMode_ == 1); // Creative always has arrows
+            // Check enchantments up front
+            int32_t powerLevel = 0, punchLevel = 0, flameLevel = 0;
+            bool hasInfinity = false;
+            if (currentItem->hasEnchantments()) {
+                auto enchants = currentItem->getEnchantments();
+                for (auto& e : enchants) {
+                    if (e.id == 48) powerLevel = e.level;   // Power
+                    if (e.id == 49) punchLevel = e.level;   // Punch
+                    if (e.id == 50) flameLevel = e.level;   // Flame
+                    if (e.id == 51 && e.level > 0) hasInfinity = true; // Infinity
+                }
+            }
+
+            // Java: bl = creative || Infinity
+            bool freeArrow = (gameMode_ == 1) || hasInfinity;
+            // Check for arrow in inventory
+            bool hasArrow = freeArrow;
             int32_t arrowSlot = -1;
             if (!hasArrow) {
                 for (int i = 0; i < 36; ++i) {
@@ -1797,17 +1812,36 @@ void PlayHandler::handlePlayerDigging(const uint8_t* data, size_t length, Connec
                     }
                 }
             }
-            if (!hasArrow) return;
+            if (!hasArrow) { bowChargeStartTick_ = -1; return; }
 
-            // Java: ItemBow.getMaxItemUseDuration() = 72000
-            // Arrow speed based on charge time (simplified: full charge = 3.0)
-            // Full charge gives: (72000-charge)/20, maxed at 1.0 → speed = 3.0
-            float arrowSpeed = 3.0f; // Full charge speed
-            bool critical = true;    // Full charge = critical
+            // ─── Charge time calculation — Java: ItemBow.onPlayerStoppedUsing ──
+            // Java: int chargeTicks = getMaxItemUseDuration(72000) - remaining
+            // f = chargeTicks / 20.0, then f = (f*f + f*2.0) / 3.0, clamped to 1.0
+            int64_t currentTick = server_.getTickCount();
+            int32_t chargeTicks = 20; // default: 1 second (full charge)
+            if (bowChargeStartTick_ >= 0) {
+                chargeTicks = static_cast<int32_t>(currentTick - bowChargeStartTick_);
+                if (chargeTicks < 0) chargeTicks = 0;
+            }
+            bowChargeStartTick_ = -1; // Reset charge
+
+            float f = static_cast<float>(chargeTicks) / 20.0f;
+            f = (f * f + f * 2.0f) / 3.0f;
+            if (f < 0.1f) return; // Too short a charge — no arrow
+            if (f > 1.0f) f = 1.0f;
+
+            // Java: EntityArrow(world, player, f * 2.0f)
+            float arrowSpeed = f * 2.0f;
+            bool critical = (f >= 1.0f); // Java: if (f == 1.0f) setCritical(true)
             double arrowDamage = 2.0;
 
+            // Power enchantment: +0.5 * level + 0.5 — Java: entityArrow.setDamage(getDamage() + n3*0.5 + 0.5)
+            if (powerLevel > 0) {
+                arrowDamage += powerLevel * 0.5 + 0.5;
+            }
+
             // Calculate trajectory from player look direction
-            // Java: EntityArrow(world, player, speed)
+            // Java: EntityArrow(world, player, speed) constructor
             float yawRad = playerYaw_ / 180.0f * static_cast<float>(M_PI);
             float pitchRad = playerPitch_ / 180.0f * static_cast<float>(M_PI);
 
@@ -1815,36 +1849,40 @@ void PlayHandler::handlePlayerDigging(const uint8_t* data, size_t length, Connec
             double mY = -std::sin(pitchRad) * arrowSpeed;
             double mZ = std::cos(yawRad) * std::cos(pitchRad) * arrowSpeed;
 
-            // Spawn position: eye height offset
+            // Spawn position: eye height offset — Java: EntityArrow constructor
             double spawnX = playerX_ - std::cos(yawRad) * 0.16;
             double spawnY = playerY_ + 1.62 - 0.1;
             double spawnZ = playerZ_ - std::sin(yawRad) * 0.16;
 
-            // Check for Power enchantment — Java: Enchantment.power (ID 48)
-            // Check for Punch enchantment — Java: Enchantment.punch (ID 49)
-            // Check for Flame enchantment — Java: Enchantment.flame (ID 50)
-            int32_t powerLevel = 0, punchLevel = 0, flameLevel = 0;
-            if (currentItem->hasEnchantments()) {
-                auto enchants = currentItem->getEnchantments();
-                for (auto& e : enchants) {
-                    if (e.id == 48) powerLevel = e.level;   // Power
-                    if (e.id == 49) punchLevel = e.level;   // Punch
-                    if (e.id == 50) flameLevel = e.level;   // Flame
-                }
-            }
-            // Power: +0.5 * level + 0.5 to base damage
-            if (powerLevel > 0) {
-                arrowDamage += powerLevel * 0.5 + 0.5;
-            }
+            // Sound — Java: world.playSoundAtEntity(player, "random.bow", 1.0,
+            //   1.0 / (rand * 0.4 + 1.2) + f * 0.5)
+            float soundPitch = 1.0f / (static_cast<float>(rand() % 1000) / 1000.0f * 0.4f + 1.2f) + f * 0.5f;
+            server_.broadcastSound("random.bow", playerX_, playerY_, playerZ_, 1.0f, soundPitch);
 
-            server_.broadcastSound("random.bow", playerX_, playerY_, playerZ_, 1.0f, 1.0f);
             int32_t arrowEid = server_.spawnArrow(spawnX, spawnY, spawnZ,
                 mX, mY, mZ,
                 entityId_, arrowDamage, punchLevel, critical);
-            (void)arrowEid;
 
-            // Consume arrow from inventory (survival only)
-            if (gameMode_ != 1 && arrowSlot >= 0) {
+            // Flame enchantment — Java: entityArrow.setFire(100)
+            if (flameLevel > 0) {
+                // Set isBurning on the arrow entity we just spawned
+                std::lock_guard<std::mutex> lock(server_.arrowEntitiesMutex_);
+                for (auto& a : server_.arrowEntities_) {
+                    if (a.entityId == arrowEid) {
+                        a.isBurning = true;
+                        break;
+                    }
+                }
+            }
+
+            // Durability damage to bow — Java: itemStack.damageItem(1, entityPlayer)
+            if (gameMode_ != 1) {
+                damageHeldItem(1);
+            }
+
+            // Consume arrow from inventory — Java: entityPlayer.inventory.consumeInventoryItem(Items.arrow)
+            // Skip if creative or Infinity — Java: entityArrow.canBePickedUp = 2
+            if (!freeArrow && arrowSlot >= 0) {
                 auto arrowStack = inventory_.getStackInSlot(arrowSlot);
                 if (arrowStack) {
                     int32_t remaining = arrowStack->getStackSize() - 1;
@@ -1861,11 +1899,6 @@ void PlayHandler::handlePlayerDigging(const uint8_t* data, size_t length, Connec
                         : static_cast<int16_t>(arrowSlot);
                     sendSetSlot(conn, 0, containerSlot, inventory_.getStackInSlot(arrowSlot));
                 }
-            }
-
-            // Durability damage to bow (survival only)
-            if (gameMode_ != 1) {
-                damageHeldItem(1);
             }
         }
         return;
@@ -2605,6 +2638,31 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
         // Check if held item is food — Java: ItemFood.onItemRightClick
         if (length >= 12) {
             int16_t heldItemId = static_cast<int16_t>((data[10] << 8) | data[11]);
+
+            // ─── Bow charge start — Java: ItemBow.onItemRightClick ──────────
+            // Record server tick when bow draw begins; charge computed on release (C07 status 5)
+            if (heldItemId == 261) { // bow
+                bool hasArrow = (gameMode_ == 1); // Creative always has arrows
+                if (!hasArrow) {
+                    // Check for Infinity enchantment (ID 51)
+                    auto bowStack = inventory_.getCurrentItem();
+                    if (bowStack && bowStack->hasEnchantments()) {
+                        for (auto& e : bowStack->getEnchantments()) {
+                            if (e.id == 51 && e.level > 0) { hasArrow = true; break; }
+                        }
+                    }
+                }
+                if (!hasArrow) {
+                    for (int i = 0; i < 36; ++i) {
+                        auto slot = inventory_.getStackInSlot(i);
+                        if (slot && slot->getItemId() == 262) { hasArrow = true; break; }
+                    }
+                }
+                if (hasArrow) {
+                    bowChargeStartTick_ = server_.getTickCount();
+                }
+            }
+
             const FoodValue* foodVal = FoodValues::getByItemId(heldItemId);
             if (foodVal && foodStats_.needFood()) {
                 // Eat the food — Java: ItemFood.onItemUseFinish

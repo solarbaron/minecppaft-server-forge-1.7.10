@@ -919,6 +919,7 @@ private:
     float fallDistance_ = 0.0f;   // Entity.fallDistance — accumulated fall distance
     int32_t airSupply_ = 300;     // Entity.air — ticks of air remaining (300 = 15 seconds)
     int32_t fireTicks_ = 0;       // Entity.fire — ticks remaining on fire (>0 = burning)
+    int64_t bowChargeStartTick_ = -1; // ItemBow: server tick when bow draw started (-1 = not drawing)
 
     // Pressure plate tracking — deactivate when player steps off
     int32_t pressurePlateX_ = INT_MIN, pressurePlateY_ = INT_MIN, pressurePlateZ_ = INT_MIN;

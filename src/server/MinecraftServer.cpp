@@ -3910,18 +3910,39 @@ void MinecraftServer::tickArrows() {
                 broadcastSound("game.player.hurt",
                     ph->getPlayerX(), ph->getPlayerY(), ph->getPlayerZ(), 1.0f, 1.0f);
 
-                // Knockback
+                // Knockback — Java: EntityArrow.onUpdate() → kb from motion + punch enchant
                 double horizDist = std::sqrt(arrow.motionX*arrow.motionX + arrow.motionZ*arrow.motionZ);
                 if (horizDist > 0.01) {
-                    double kbX = arrow.motionX / horizDist * 0.4;
-                    double kbZ = arrow.motionZ / horizDist * 0.4;
+                    double kbMult = 0.4;
+                    // Punch enchantment — Java: knockbackStrength > 0 → multiply
+                    if (arrow.knockbackStrength > 0) {
+                        kbMult *= (1.0 + arrow.knockbackStrength * 0.5);
+                    }
+                    double kbX = arrow.motionX / horizDist * kbMult;
+                    double kbZ = arrow.motionZ / horizDist * kbMult;
                     ph->sendEntityVelocity(*conn, ph->getEntityId(), kbX, 0.36, kbZ);
+                }
+
+                // Flame enchantment — Java: if (isBurning()) target.setFire(5) (5 seconds = 100 ticks)
+                if (arrow.isBurning) {
+                    ph->setOnFire(100);
                 }
 
                 // Death check
                 if (ph->getHealth() <= 0.0f) {
                     broadcastEntityEvent(ph->getEntityId(), 3);
-                    broadcastChatMessage(ph->getPlayerName() + " was shot by arrow");
+                    // Try to find shooter name for death message
+                    std::string deathMsg = ph->getPlayerName() + " was shot by arrow";
+                    for (auto& conn2 : connections_) {
+                        if (!conn2->isConnected() || conn2->getState() != ConnectionState::Play) continue;
+                        auto handler2 = conn2->getHandler();
+                        auto* shooter = dynamic_cast<PlayHandler*>(handler2.get());
+                        if (shooter && shooter->getEntityId() == arrow.shooterEntityId) {
+                            deathMsg = ph->getPlayerName() + " was shot by " + shooter->getPlayerName();
+                            break;
+                        }
+                    }
+                    broadcastChatMessage(deathMsg);
                 }
 
                 // Arrow dies on player hit
