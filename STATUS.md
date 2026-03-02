@@ -57,7 +57,7 @@
 
 ## 🔶 Partially Implemented (Headers + Stubs)
 
-### Commands (41 commands, chat→command bridge ✅)
+### Commands (44 commands, chat→command bridge ✅)
 | Command | Status |
 |---------|---------|
 | `/stop` | ✅ Working via chat |
@@ -101,6 +101,9 @@
 | `/pardon-ip` | ✅ Working — unban IP address |
 | `/testforblock` | ✅ Working — test block at position |
 | `/achievement` | ✅ Working — give/take achievements |
+| `/scoreboard` | ✅ Working — objectives/players/teams management |
+| `/debug` | ✅ Working — start/stop profiling |
+| `/blockdata` | ✅ Working — set tile entity data |
 
 ### Entity System
 - **Entity base** — ID counter, UUID, position/rotation, bounding box
@@ -255,7 +258,7 @@
 - ~~**Caves**~~ — ✅ MapGenCaves worm carving integrated
 - ~~**Ores**~~ — ✅ All 11 vanilla ores (coal, iron, gold, diamond, redstone, lapis, emerald, dirt, gravel)
 - **Structures** — ✅ Dungeons (cobblestone/mossy rooms with mob spawner); no villages, temples, strongholds
-- ~~**Trees/vegetation**~~ — ✅ Oak/birch/spruce tree generation + flowers, tallgrass, sugar cane, pumpkin patches, clay deposits, cactus, dead bush, mushrooms, vines, lily pads
+- ~~**Trees/vegetation**~~ — ✅ Oak/birch/spruce/jungle tree generation + flowers, tallgrass, sugar cane, pumpkin patches, clay deposits, cactus, dead bush, mushrooms, vines, lily pads
 - **Beach generation** — ✅ Sand beach at water edges
 - **Nether/End** — dimensions declared but not generated
 
@@ -416,3 +419,7 @@
 130. **Crafting recipe expansion IV** — ✅ Done (30+ recipes: glass bottles, rails, minecarts, brewing stand, enchanting table, anvil, hopper, dispenser, dropper, redstone components, pressure plates, stairs, bow; ~410+ total)
 131. **/testforblock command** — ✅ Done (40th command, test block at position)
 132. **/achievement command** — ✅ Done (41st command, give/take achievements)
+133. **Jungle tree worldgen** — ✅ Done (1/4 chance alongside oak/birch/spruce, meta 3 log+leaves)
+134. **/scoreboard command** — ✅ Done (42nd command, objectives/players/teams management)
+135. **/debug command** — ✅ Done (43rd command, start/stop profiling)
+136. **/blockdata command** — ✅ Done (44th command, set tile entity data)
