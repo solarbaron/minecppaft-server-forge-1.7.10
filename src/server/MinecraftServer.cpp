@@ -1631,6 +1631,26 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
                 }
             }
 
+            // ─── Zombie Pigman pack aggro ────────────────────────────
+            // Java: EntityPigZombie.attackEntityFrom() → becomeAngryAt()
+            // All pigmen within 32 blocks become angry at the attacker
+            if (mob.mobType == 57) {
+                mob.angerLevel = 400 + (rand() % 400);
+                mob.angerTarget = attacker.getEntityId();
+                broadcastSound("mob.zombiepig.zpigangry", mob.posX, mob.posY, mob.posZ, 2.0f, 1.8f);
+                // Aggro nearby pigmen — Java: expand(32, 32, 32)
+                for (auto& other : mobEntities_) {
+                    if (&other == &mob || other.isDead || other.mobType != 57) continue;
+                    double dx = other.posX - mob.posX;
+                    double dy = other.posY - mob.posY;
+                    double dz = other.posZ - mob.posZ;
+                    if (dx * dx + dy * dy + dz * dz < 1024.0) { // 32 blocks squared
+                        other.angerLevel = 400 + (rand() % 400);
+                        other.angerTarget = attacker.getEntityId();
+                    }
+                }
+            }
+
             // Fire Aspect — set mob on fire for cooked drops
             auto attackerHeld = attacker.getHeldItem();
             if (attackerHeld && attackerHeld->hasEnchantments()) {
@@ -2543,6 +2563,12 @@ void MinecraftServer::tickMobs() {
             float speed = getMobMovementSpeed(mob.mobType);
             if (speed <= 0.0f) continue; // Non-moving mob
 
+            // Zombie pigmen only chase when angry — Java: EntityPigZombie.findPlayerToAttack()
+            if (mob.mobType == 57) {
+                if (mob.angerLevel <= 0) continue; // Passive unless provoked
+                --mob.angerLevel;
+            }
+
             // Find nearest player within 16 blocks
             PlayHandler* nearest = nullptr;
             double nearestDistSq = 256.0; // 16 blocks squared
@@ -2781,6 +2807,10 @@ void MinecraftServer::tickMobs() {
 
             if (nearest) {
                 ++mob.fuseTicks;
+                // Java: EntityCreeper.onUpdate() — play primed sound when fuse starts
+                if (mob.fuseTicks == 1) {
+                    broadcastSound("creeper.primed", mob.posX, mob.posY, mob.posZ, 1.0f, 0.5f);
+                }
                 // Java: EntityCreeper.fuseTime = 30 (1.5 seconds)
                 if (mob.fuseTicks >= 30) {
                     // EXPLODE — Java: EntityCreeper.explode() → createExplosion(power=3.0)
@@ -2950,6 +2980,65 @@ void MinecraftServer::tickMobs() {
             broadcastSound("mob.ghast.fireball", mob.posX, mob.posY, mob.posZ, 10.0f, 1.0f);
 
             mob.attackCooldown = 60; // Java: attackCounter = -40, fires at 20 → 60 tick cycle
+        }
+
+        // ─── Witch splash potion attack ───────────────────────────────
+        // Java: EntityWitch.attackEntityWithRangedAttack() — EntityPotion projectile
+        // Simplified: instant-hit splash potion dealing magic damage at 10 blocks range
+        for (auto& mob : mobEntities_) {
+            if (mob.isDead || mob.mobType != 66) continue; // Witch only (type 66)
+            if (mob.attackCooldown > 0) { --mob.attackCooldown; continue; }
+
+            PlayHandler* nearest = nullptr;
+            Connection* nearestConn = nullptr;
+            double nearestDistSq = 100.0; // 10 blocks squared
+            {
+                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                for (auto& conn : connections_) {
+                    if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                    auto handler = conn->getHandler();
+                    auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                    if (!ph || ph->isDead()) continue;
+                    if (ph->getGameMode() == 1 || ph->getGameMode() == 3) continue;
+                    double dx = ph->getPlayerX() - mob.posX;
+                    double dz = ph->getPlayerZ() - mob.posZ;
+                    double distSq = dx * dx + dz * dz;
+                    if (distSq < nearestDistSq) {
+                        nearestDistSq = distSq;
+                        nearest = ph;
+                        nearestConn = conn.get();
+                    }
+                }
+            }
+
+            if (!nearest) continue;
+
+            // Apply potion damage — Java witch throws poison/slowness/weakness potions
+            // Simplified: 6 magic damage (similar to harming potion)
+            float potionDmg = 6.0f;
+            int32_t protMod = nearest->getEnchantmentProtectionModifier();
+            if (protMod > 0) {
+                potionDmg *= (1.0f - std::min(protMod, 20) * 0.04f);
+            }
+            if (potionDmg < 0.5f) potionDmg = 0.5f;
+
+            nearest->applyDamage(potionDmg);
+            nearest->sendUpdateHealth(*nearestConn, nearest->getHealth(), nearest->getFood(), nearest->getSaturation());
+
+            // Splash potion effect visual (effectId 2002, data=0)
+            broadcastEffect(2002,
+                static_cast<int32_t>(nearest->getPlayerX()),
+                static_cast<int32_t>(nearest->getPlayerY()),
+                static_cast<int32_t>(nearest->getPlayerZ()), 0);
+            broadcastSound("game.player.hurt",
+                nearest->getPlayerX(), nearest->getPlayerY(), nearest->getPlayerZ(), 1.0f, 1.0f);
+
+            if (nearest->getHealth() <= 0.0f) {
+                broadcastEntityEvent(nearest->getEntityId(), 3);
+                broadcastChatMessage(nearest->getPlayerName() + " was killed by Witch");
+            }
+
+            mob.attackCooldown = 60; // Java: EntityAIArrowAttack attack interval = 60 ticks
         }
 
         // ─── Mob contact damage ─────────────────────────────────────

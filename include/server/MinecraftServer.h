@@ -615,6 +615,8 @@ private:
         bool isOnFire = false;      // Tracks fire state for cooked drops
         int32_t fuseTicks = 0;      // Creeper fuse timer (30 ticks = 1.5s)
         int32_t attackCooldown = 0; // Skeleton arrow cooldown
+        int32_t angerLevel = 0;     // Zombie Pigman anger (Java: EntityPigZombie.angerLevel)
+        int32_t angerTarget = -1;   // Entity ID of anger target
         // Movement tracking — Java: EntityTrackerEntry last sent position
         int32_t lastSentPosX = 0, lastSentPosY = 0, lastSentPosZ = 0;
         int32_t ticksSinceLastTeleport = 0;
