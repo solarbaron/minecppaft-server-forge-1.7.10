@@ -223,8 +223,10 @@ public:
     struct BrewingStandData {
         std::array<std::optional<ItemStack>, 4> slots; // 0-2 = potion, 3 = ingredient
         int32_t brewTime = 0;
+        int32_t ingredientId = 0; // Java: ingredientID — tracks ingredient during brew
     };
     BrewingStandData& getOrCreateBrewingStand(int64_t posKey);
+    void tickBrewingStands();
     std::map<int64_t, BrewingStandData> brewingStandStorage_;
     mutable std::mutex brewingStandMutex_;
 

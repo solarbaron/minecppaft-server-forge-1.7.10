@@ -243,6 +243,7 @@ void MinecraftServer::tick() {
     tickItemEntities();
     tickFurnaces();
     tickHoppers();
+    tickBrewingStands();
 
     // Tick world time — Java: WorldServer.tick()
     tickCounter_.fetch_add(1);
@@ -934,6 +935,104 @@ void MinecraftServer::tickHoppers() {
         // Set cooldown
         if (transferred) {
             hopper.transferCooldown = 8; // Java: TileEntityHopper cooldown = 8 ticks
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Brewing stand automation — Java: TileEntityBrewingStand.updateEntity()
+//
+// Simplified potion brewing using lookup table for common recipes.
+// Brew time = 400 ticks (20 seconds). Ingredient slot 3, potion slots 0-2.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Java: PotionHelper.applyIngredient — simplified lookup
+static int applyPotionIngredient(int potionMeta, int ingredientItemId) {
+    // Water bottle (meta 0) + ingredient → base potion
+    if (potionMeta == 0) {
+        switch (ingredientItemId) {
+            case 372: return 16;   // Nether wart → Awkward
+            case 331: return 64;   // Redstone → Mundane (extended)
+            case 348: return 32;   // Glowstone → Thick
+            case 376: return 8200; // Fermented spider eye → Weakness
+            default: return potionMeta;
+        }
+    }
+    // Awkward potion (meta 16) + ingredient → effect potion
+    if (potionMeta == 16) {
+        switch (ingredientItemId) {
+            case 370: return 8193; // Ghast tear → Regeneration
+            case 377: return 8201; // Blaze powder → Strength
+            case 375: return 8196; // Spider eye → Poison
+            case 382: return 8197; // Glistering melon → Healing
+            case 378: return 8195; // Magma cream → Fire Resistance
+            case 353: return 8194; // Sugar → Swiftness
+            case 396: return 8198; // Golden carrot → Night Vision
+            default: return potionMeta;
+        }
+    }
+    // Extend with redstone (add bit 6 = 0x40)
+    if (ingredientItemId == 331 && !(potionMeta & 0x40)) return potionMeta | 0x40;
+    // Amplify with glowstone (add bit 5 = 0x20)
+    if (ingredientItemId == 348 && !(potionMeta & 0x20)) return potionMeta | 0x20;
+    // Splash with gunpowder (add bit 14 = 0x4000)
+    if (ingredientItemId == 289 && !(potionMeta & 0x4000)) return potionMeta | 0x4000;
+    // Fermented spider eye corrupts
+    if (ingredientItemId == 376) {
+        int base = potionMeta & 0x000F;
+        if (base == 5) return (potionMeta & ~0x000F) | 12; // Healing → Harming
+        if (base == 4) return (potionMeta & ~0x000F) | 12; // Poison → Harming
+        if (base == 2) return (potionMeta & ~0x000F) | 10; // Swiftness → Slowness
+        if (base == 3) return (potionMeta & ~0x000F) | 10; // Fire Res → Slowness
+        if (base == 6) return (potionMeta & ~0x000F) | 14; // Night Vision → Invisibility
+    }
+    return potionMeta;
+}
+
+static bool isPotionIngredient(int itemId) {
+    switch (itemId) {
+        case 372: case 348: case 331: case 376: case 375: case 382:
+        case 370: case 377: case 378: case 353: case 396: case 289:
+            return true;
+        default: return false;
+    }
+}
+
+void MinecraftServer::tickBrewingStands() {
+    std::lock_guard<std::mutex> lock(brewingStandMutex_);
+    for (auto& [posKey, brew] : brewingStandStorage_) {
+        auto& ingredient = brew.slots[3];
+        auto canBrew = [&]() -> bool {
+            if (!ingredient || ingredient->isEmpty()) return false;
+            if (!isPotionIngredient(ingredient->getItemId())) return false;
+            for (int i = 0; i < 3; ++i) {
+                if (!brew.slots[i] || brew.slots[i]->getItemId() != 373) continue;
+                int meta = brew.slots[i]->getDamage();
+                if (applyPotionIngredient(meta, ingredient->getItemId()) != meta) return true;
+            }
+            return false;
+        };
+        if (brew.brewTime > 0) {
+            --brew.brewTime;
+            if (brew.brewTime == 0) {
+                if (canBrew()) {
+                    for (int i = 0; i < 3; ++i) {
+                        if (!brew.slots[i] || brew.slots[i]->getItemId() != 373) continue;
+                        int meta = brew.slots[i]->getDamage();
+                        int newMeta = applyPotionIngredient(meta, ingredient->getItemId());
+                        if (newMeta != meta) brew.slots[i]->setDamage(newMeta);
+                    }
+                    ingredient->setStackSize(ingredient->getStackSize() - 1);
+                    if (ingredient->getStackSize() <= 0) ingredient.reset();
+                }
+            } else if (!canBrew()) {
+                brew.brewTime = 0;
+            } else if (ingredient && ingredient->getItemId() != brew.ingredientId) {
+                brew.brewTime = 0;
+            }
+        } else if (canBrew()) {
+            brew.brewTime = 400;
+            brew.ingredientId = ingredient ? ingredient->getItemId() : 0;
         }
     }
 }
