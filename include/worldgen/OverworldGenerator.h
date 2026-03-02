@@ -561,6 +561,50 @@ public:
             }
         }
 
+        // ── Step 9.12: Vine generation on trees ──
+        // Java ref: BiomeDecorator.generateVines + WorldGenVines
+        // 1/3 chance per chunk, attaches to log faces, grows 1-3 down
+        {
+            NoiseGeneratorImproved::RNG vineRng;
+            vineRng.setSeed(seed_ ^ (static_cast<int64_t>(chunkX) * 3579024681LL +
+                                      static_cast<int64_t>(chunkZ) * 9753102468LL));
+
+            if (vineRng.nextInt(3) == 0) {
+                int32_t attempts = 3 + vineRng.nextInt(4); // 3-6 vines per chunk
+                for (int32_t a = 0; a < attempts; ++a) {
+                    int32_t vx = vineRng.nextInt(16);
+                    int32_t vz = vineRng.nextInt(16);
+                    for (int32_t vy = 80; vy >= 40; --vy) {
+                        int32_t bl = blocks[(vx * 16 + vz) * 256 + vy];
+                        if (bl == 17 || bl == 162) { // Log or log2
+                            // Try each face: N,S,E,W
+                            // Vine (106) meta: 1=S, 2=W, 4=N, 8=E
+                            int32_t vineLen = vineRng.nextInt(3) + 1;
+                            int32_t dx = 0, dz = 0;
+                            uint8_t vineMeta = 0;
+                            int32_t face = vineRng.nextInt(4);
+                            if (face == 0) { dz = -1; vineMeta = 1; }
+                            else if (face == 1) { dz = 1; vineMeta = 4; }
+                            else if (face == 2) { dx = -1; vineMeta = 8; }
+                            else { dx = 1; vineMeta = 2; }
+
+                            int32_t nx = vx + dx, nz = vz + dz;
+                            if (nx >= 0 && nx < 16 && nz >= 0 && nz < 16) {
+                                for (int32_t vl = 0; vl < vineLen && vy - 1 - vl >= 0; ++vl) {
+                                    int32_t py = vy - 1 - vl;
+                                    if (blocks[(nx * 16 + nz) * 256 + py] == 0) {
+                                        blocks[(nx * 16 + nz) * 256 + py] = 106; // Vine
+                                        meta[(nx * 16 + nz) * 256 + py] = vineMeta;
+                                    } else break;
+                                }
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
         // ── Step 10: Fill chunk sections ──
         for (int x = 0; x < 16; ++x) {
             for (int z = 0; z < 16; ++z) {
