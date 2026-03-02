@@ -2008,28 +2008,7 @@ void MinecraftServer::tickRandomBlocks() {
                     int decayFactor = isWater ? 1 : 2; // Java: lava overworld decay=2
                     int maxLevel = 7; // Meta 0=source, 1-7=flow distance, 8+=falling
 
-                    // Helper: can liquid displace this block?
-                    auto canDisplace = [&](int x, int y, int z) -> bool {
-                        Block* b = world->getBlock(x, y, z);
-                        int bid = b ? Block::getIdFromBlock(b) : 0;
-                        if (bid == 0) return true; // Air
-                        // Can't displace same liquid type
-                        if (isWater && (bid == 8 || bid == 9)) return false;
-                        if (!isWater && (bid == 10 || bid == 11)) return false;
-                        // Can't displace solid/movement-blocking blocks
-                        // Simple check: avoid solid blocks (IDs that are typically solid)
-                        if (bid == 64 || bid == 71 || bid == 63 || bid == 68 || bid == 65 || bid == 83) return false; // doors/signs/ladders/reeds
-                        // Check if block is solid (most blocks) — simplified: flowers/grass/snow layer etc. can be displaced
-                        if (bid == 31 || bid == 32 || bid == 37 || bid == 38 || bid == 39 || bid == 40 ||
-                            bid == 6 || bid == 78 || bid == 106 || bid == 175) return true; // Tallgrass/deadbush/flowers/mushrooms/saplings/snow/vine/double plant
-                        // Default: block is solid if it's not air and not a liquid
-                        if (bid >= 1) {
-                            // Check some known non-solid blocks
-                            if (bid == 50 || bid == 51 || bid == 55 || bid == 75 || bid == 76) return true; // Torches/fire/redstone
-                            return false; // Otherwise solid
-                        }
-                        return true;
-                    };
+                    // [canDisplace lambda removed — blocksFlow covers the needed checks]
 
                     // Helper: is position blocksMovement (solid or liquid-blocking)?
                     auto blocksFlow = [&](int x, int y, int z) -> bool {
@@ -2104,6 +2083,34 @@ void MinecraftServer::tickRandomBlocks() {
                     // Source blocks (meta 0 or still source IDs 9/11) always try to spread
                     bool isSource = (liquidMeta == 0 || blockId == stillId);
                     int currentLevel = isSource ? 0 : (liquidMeta & 0x07);
+
+                    // ─── Infinite water source (Java: field_149815_a >= 2) ───
+                    // Water only: if 2+ adjacent source blocks AND solid below → become source
+                    if (isWater && !isSource && currentLevel > 0 && currentLevel < 8) {
+                        int adjacentSources = 0;
+                        static const int sdx[] = {-1, 1, 0, 0};
+                        static const int sdz[] = {0, 0, -1, 1};
+                        for (int d = 0; d < 4; ++d) {
+                            Block* ab = world->getBlock(bx + sdx[d], by, bz + sdz[d]);
+                            int aid = ab ? Block::getIdFromBlock(ab) : 0;
+                            if (aid == 9) { ++adjacentSources; continue; } // Still water source
+                            if (aid == 8 && world->getBlockMetadata(bx + sdx[d], by, bz + sdz[d]) == 0) ++adjacentSources;
+                        }
+                        if (adjacentSources >= 2) {
+                            // Check below is solid or water source
+                            Block* belowB = world->getBlock(bx, by - 1, bz);
+                            int belowBid = belowB ? Block::getIdFromBlock(belowB) : 0;
+                            bool solidBelow = blocksFlow(bx, by - 1, bz) ||
+                                              belowBid == 9 || (belowBid == 8 && world->getBlockMetadata(bx, by - 1, bz) == 0);
+                            if (solidBelow) {
+                                // Become a source!
+                                world->setBlockMetadata(bx, by, bz, 0);
+                                broadcastBlockChange(bx, by, bz, 8, 0);
+                                isSource = true;
+                                currentLevel = 0;
+                            }
+                        }
+                    }
 
                     // Step 1: Try to flow downward
                     if (by > 0) {
@@ -2194,6 +2201,98 @@ void MinecraftServer::tickRandomBlocks() {
                             } else {
                                 world->setBlockMetadata(bx, by, bz, newLevel);
                                 broadcastBlockChange(bx, by, bz, flowId, newLevel);
+                            }
+                        }
+                    }
+                }
+
+                // ─── Fire spread (51) — Java: BlockFire.updateTick ──────────────
+                // Fire burns adjacent flammable blocks and spreads
+                if (blockId == 51) {
+                    int fireMeta = world->getBlockMetadata(bx, by, bz);
+                    // Fire burns out: meta increments, at 15 it goes out (if not on netherrack)
+                    if (fireMeta < 15) {
+                        int newMeta = fireMeta + (rng() % 3 == 0 ? 1 : 0);
+                        if (newMeta > 15) newMeta = 15;
+                        world->setBlockMetadata(bx, by, bz, newMeta);
+                        broadcastBlockChange(bx, by, bz, 51, newMeta);
+                    }
+                    // Check if fire should go out (no fuel below and not netherrack)
+                    Block* below = world->getBlock(bx, by - 1, bz);
+                    int belowId = below ? Block::getIdFromBlock(below) : 0;
+                    bool hasNetherrack = (belowId == 87); // Netherrack: eternal fire
+                    bool hasFuel = false;
+                    // Check adjacent blocks for flammability
+                    static const int fdx[] = {-1, 1, 0, 0, 0, 0};
+                    static const int fdy[] = {0, 0, -1, 1, 0, 0};
+                    static const int fdz[] = {0, 0, 0, 0, -1, 1};
+                    // Flammable block IDs: wood(5,17,125,126,162), planks, wool(35), bookshelf(47),
+                    // leaves(18,161), fence(85,113), stairs(53,134-136,163-164), carpet(171), hay(170)
+                    auto isFlammable = [](int id) -> bool {
+                        return id == 5 || id == 17 || id == 18 || id == 35 || id == 47 ||
+                               id == 53 || id == 85 || id == 125 || id == 126 || id == 134 ||
+                               id == 135 || id == 136 || id == 161 || id == 162 || id == 163 ||
+                               id == 164 || id == 170 || id == 171 || id == 113 || id == 107 ||
+                               id == 31 || id == 32 || id == 37 || id == 38 || id == 175 || id == 106;
+                    };
+                    for (int d = 0; d < 6; ++d) {
+                        int fx = bx + fdx[d];
+                        int fy = by + fdy[d];
+                        int fz = bz + fdz[d];
+                        Block* fb = world->getBlock(fx, fy, fz);
+                        int fid = fb ? Block::getIdFromBlock(fb) : 0;
+                        if (isFlammable(fid)) {
+                            hasFuel = true;
+                            // Random chance to ignite/consume adjacent block
+                            if (rng() % 3 == 0) {
+                                // Consume the block, possibly replace with fire
+                                world->setBlock(fx, fy, fz, Block::getBlockById(0));
+                                broadcastBlockChange(fx, fy, fz, 0, 0);
+                                broadcastEffect(2001, fx, fy, fz, fid); // Break particles
+                                // Spread fire to the position
+                                if (rng() % 2 == 0) {
+                                    world->setBlock(fx, fy, fz, Block::getBlockById(51));
+                                    world->setBlockMetadata(fx, fy, fz, 0);
+                                    broadcastBlockChange(fx, fy, fz, 51, 0);
+                                }
+                            }
+                        }
+                    }
+                    // Fire goes out if no fuel and not netherrack
+                    if (!hasFuel && !hasNetherrack && fireMeta >= 3) {
+                        world->setBlock(bx, by, bz, Block::getBlockById(0));
+                        broadcastBlockChange(bx, by, bz, 0, 0);
+                    }
+                }
+
+                // ─── Ice melting (79) — Java: BlockIce.updateTick ────────────────
+                // Ice melts into water when in bright conditions (simplified: ~1/8 chance per tick)
+                if (blockId == 79) {
+                    // Simplified: ice melts with low probability (no light engine)
+                    if (rng() % 8 == 0) {
+                        world->setBlock(bx, by, bz, Block::getBlockById(8)); // Flowing water
+                        world->setBlockMetadata(bx, by, bz, 0);
+                        broadcastBlockChange(bx, by, bz, 8, 0);
+                    }
+                }
+
+                // ─── Mushroom spread (39/40) — Java: BlockMushroom.updateTick ────
+                if (blockId == 39 || blockId == 40) {
+                    if (rng() % 25 == 0) {
+                        // Spread to random adjacent position
+                        int mx = bx + (rng() % 3) - 1;
+                        int my = by + (rng() % 3) - 1;
+                        int mz = bz + (rng() % 3) - 1;
+                        Block* mb = world->getBlock(mx, my, mz);
+                        int mid = mb ? Block::getIdFromBlock(mb) : 0;
+                        if (mid == 0) { // Air
+                            Block* mbelow = world->getBlock(mx, my - 1, mz);
+                            int mbelowId = mbelow ? Block::getIdFromBlock(mbelow) : 0;
+                            // Mushrooms grow on opaque blocks
+                            if (mbelowId >= 1 && mbelowId != 8 && mbelowId != 9 &&
+                                mbelowId != 10 && mbelowId != 11 && mbelowId != 20) {
+                                world->setBlock(mx, my, mz, Block::getBlockById(blockId));
+                                broadcastBlockChange(mx, my, mz, blockId, 0);
                             }
                         }
                     }
