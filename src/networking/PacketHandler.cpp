@@ -5717,6 +5717,20 @@ void PlayHandler::tickFood(Connection& conn) {
                 }
             }
 
+            // ─── Cactus damage — Java: BlockCactus.onEntityCollidedWithBlock ───
+            // 1 damage when touching cactus (block 81)
+            if (feetBlockId == 81 || headBlockId == 81) {
+                health_ -= 1.0f;
+                if (health_ < 0.0f) health_ = 0.0f;
+                sendUpdateHealth(conn, health_, foodStats_.getFoodLevel(), foodStats_.getSaturationLevel());
+                server_.broadcastSound("game.player.hurt", playerX_, playerY_, playerZ_, 1.0f, 1.0f);
+                if (health_ <= 0.0f) {
+                    dead_ = true;
+                    server_.broadcastEntityEvent(entityId_, 3);
+                    server_.broadcastChatMessage(playerName_ + " was pricked to death");
+                }
+            }
+
             // ─── Burning damage — Java: Entity.onEntityUpdate → fire tick + 1 dmg/sec ───
             if (fireTicks_ > 0) {
                 --fireTicks_;
