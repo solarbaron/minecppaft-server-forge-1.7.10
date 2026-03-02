@@ -838,6 +838,272 @@ CraftingManager::CraftingManager() {
     addShapelessRecipe(I(351,2,1), {I(175,1,4)});    // rose bush → 2 red
     addShapelessRecipe(I(351,2,9), {I(175,1,5)});    // peony → 2 pink
 
+    // ═══════════════════════════════════════════════════════════════════
+    // RecipesFood.java — Food crafting recipes
+    // ═══════════════════════════════════════════════════════════════════
+
+    // Mushroom stew (bowl+brown_mushroom+red_mushroom → mushroom_stew)
+    addShapelessRecipe(I(282,1,0), {I(39,1,0), I(40,1,0), I(281,1,0)});
+
+    // Cookies (wheat+cocoa+wheat → 8 cookies)
+    // Item 357=cookie, 351:3=cocoa beans, 296=wheat
+    shaped13({I(296,1,0), I(351,1,3), I(296,1,0)}, I(357,8,0));
+
+    // Melon block (9 melon slices → melon block)
+    // Block 103=melon_block, Item 360=melon_slice
+    shaped3({I(360,1,0), I(360,1,0), I(360,1,0),
+             I(360,1,0), I(360,1,0), I(360,1,0),
+             I(360,1,0), I(360,1,0), I(360,1,0)}, I(103,1,0));
+
+    // Melon seeds (melon slice → melon seeds)
+    addShapelessRecipe(I(362,1,0), {I(360,1,0)});
+
+    // Pumpkin seeds (pumpkin → 4 pumpkin seeds)
+    addShapelessRecipe(I(361,4,0), {I(86,1,0)});
+
+    // Pumpkin pie (pumpkin+sugar+egg → pumpkin pie)
+    addShapelessRecipe(I(400,1,0), {I(86,1,0), I(353,1,0), I(344,1,0)});
+
+    // Fermented spider eye (spider_eye+brown_mushroom+sugar)
+    addShapelessRecipe(I(376,1,0), {I(375,1,0), I(39,1,0), I(353,1,0)});
+
+    // Blaze powder (blaze rod → 2)
+    addShapelessRecipe(I(377,2,0), {I(369,1,0)});
+
+    // Magma cream (blaze powder + slime ball)
+    addShapelessRecipe(I(378,1,0), {I(377,1,0), I(341,1,0)});
+
+    // Bread (3 wheat → bread)
+    shaped13({I(296,1,0), I(296,1,0), I(296,1,0)}, I(297,1,0));
+
+    // Sugar (sugar cane → sugar)
+    addShapelessRecipe(I(353,1,0), {I(338,1,0)});
+
+    // Cake (milk+sugar+egg+wheat → cake)
+    // 335=bucket_of_milk, 353=sugar, 344=egg, 296=wheat
+    shaped3({I(335,1,0), I(335,1,0), I(335,1,0),
+             I(353,1,0), I(344,1,0), I(353,1,0),
+             I(296,1,0), I(296,1,0), I(296,1,0)}, I(354,1,0));
+
+    // Golden apple (8 gold ingot + apple → golden apple)
+    shaped3({I(266,1,0), I(266,1,0), I(266,1,0),
+             I(266,1,0), I(260,1,0), I(266,1,0),
+             I(266,1,0), I(266,1,0), I(266,1,0)}, I(322,1,0));
+
+    // Golden carrot (8 gold nugget + carrot)
+    shaped3({I(371,1,0), I(371,1,0), I(371,1,0),
+             I(371,1,0), I(391,1,0), I(371,1,0),
+             I(371,1,0), I(371,1,0), I(371,1,0)}, I(396,1,0));
+
+    // Glistering melon (gold nugget + melon slice)
+    addShapelessRecipe(I(382,1,0), {I(371,1,0), I(360,1,0)});
+
+    // ═══════════════════════════════════════════════════════════════════
+    // RecipesCrafting.java — Utility blocks
+    // ═══════════════════════════════════════════════════════════════════
+
+    // Iron bars (6 iron → 16 bars)  Block 101
+    shaped32({I(265,1,0), I(265,1,0), I(265,1,0),
+              I(265,1,0), I(265,1,0), I(265,1,0)}, I(101,16,0));
+
+    // Glass pane (6 glass → 16 panes)  Block 102
+    shaped32({I(20,1,0), I(20,1,0), I(20,1,0),
+              I(20,1,0), I(20,1,0), I(20,1,0)}, I(102,16,0));
+
+    // Redstone lamp (4 redstone + glowstone)  Block 123
+    shaped3({N(),       I(331,1,0), N(),
+             I(331,1,0), I(89,1,0),  I(331,1,0),
+             N(),       I(331,1,0), N()}, I(123,1,0));
+
+    // Stone brick (4 stone → 4 stone brick)  Block 98
+    shaped22({I(1,1,0), I(1,1,0),
+              I(1,1,0), I(1,1,0)}, I(98,4,0));
+
+    // Nether brick block (4 nether brick items → 1 block)  Block 112, item 405
+    shaped22({I(405,1,0), I(405,1,0),
+              I(405,1,0), I(405,1,0)}, I(112,1,0));
+
+    // Sandstone smooth (4 sandstone → 4 smooth)
+    shaped22({I(24,1,0), I(24,1,0),
+              I(24,1,0), I(24,1,0)}, I(24,4,2));
+
+    // Quartz pillar (2 quartz → 2 pillar)
+    shaped12({I(155,1,0), I(155,1,0)}, I(155,2,2));
+
+    // ═══════════════════════════════════════════════════════════════════
+    // RecipesIngots.java — Block↔Ingot conversions (missing ones)
+    // ═══════════════════════════════════════════════════════════════════
+
+    // Hay block (9 wheat → hay block 170)
+    shaped3({I(296,1,0), I(296,1,0), I(296,1,0),
+             I(296,1,0), I(296,1,0), I(296,1,0),
+             I(296,1,0), I(296,1,0), I(296,1,0)}, I(170,1,0));
+
+    // Hay block → 9 wheat
+    addShapelessRecipe(I(296,9,0), {I(170,1,0)});
+
+    // Coal block (9 coal → coal block 173)
+    shaped3({I(263,1,0), I(263,1,0), I(263,1,0),
+             I(263,1,0), I(263,1,0), I(263,1,0),
+             I(263,1,0), I(263,1,0), I(263,1,0)}, I(173,1,0));
+
+    // Coal block → 9 coal
+    addShapelessRecipe(I(263,9,0), {I(173,1,0)});
+
+    // ═══════════════════════════════════════════════════════════════════
+    // Misc item recipes from CraftingManager.java
+    // ═══════════════════════════════════════════════════════════════════
+
+    // Paper (3 sugar cane → 3 paper)  Item 339, sugar_cane 338
+    shaped13({I(338,1,0), I(338,1,0), I(338,1,0)}, I(339,3,0));
+
+    // Book (3 paper + leather → book)  Item 340, paper 339, leather 334
+    addShapelessRecipe(I(340,1,0), {I(339,1,0), I(339,1,0), I(339,1,0), I(334,1,0)});
+
+    // Map (8 paper + compass → empty map)  Item 395, compass 345
+    shaped3({I(339,1,0), I(339,1,0), I(339,1,0),
+             I(339,1,0), I(345,1,0), I(339,1,0),
+             I(339,1,0), I(339,1,0), I(339,1,0)}, I(395,1,0));
+
+    // Compass (4 iron + redstone → compass)  Item 345
+    shaped3({N(),       I(265,1,0), N(),
+             I(265,1,0), I(331,1,0), I(265,1,0),
+             N(),       I(265,1,0), N()}, I(345,1,0));
+
+    // Clock (4 gold + redstone → clock)  Item 347
+    shaped3({N(),       I(266,1,0), N(),
+             I(266,1,0), I(331,1,0), I(266,1,0),
+             N(),       I(266,1,0), N()}, I(347,1,0));
+
+    // Piston (planks + cobble + iron + redstone)  Block 33
+    shaped3({I(5,1,W),  I(5,1,W),   I(5,1,W),
+             I(4,1,0),  I(265,1,0), I(4,1,0),
+             I(4,1,0),  I(331,1,0), I(4,1,0)}, I(33,1,0));
+
+    // Sticky piston (slime ball + piston)  Block 29
+    shaped12({I(341,1,0), I(33,1,0)}, I(29,1,0));
+
+    // TNT (5 gunpowder + 4 sand)  Block 46, gunpowder 289
+    shaped3({I(289,1,0), I(12,1,0), I(289,1,0),
+             I(12,1,0), I(289,1,0), I(12,1,0),
+             I(289,1,0), I(12,1,0), I(289,1,0)}, I(46,1,0));
+
+    // Ladder (7 sticks → 3 ladders)  Block 65
+    shaped3({I(280,1,0), N(),       I(280,1,0),
+             I(280,1,0), I(280,1,0), I(280,1,0),
+             I(280,1,0), N(),       I(280,1,0)}, I(65,3,0));
+
+    // Rail (6 iron + stick → 16 rails)  Block 66
+    shaped3({I(265,1,0), N(),       I(265,1,0),
+             I(265,1,0), I(280,1,0), I(265,1,0),
+             I(265,1,0), N(),       I(265,1,0)}, I(66,16,0));
+
+    // Powered rail (6 gold + stick + redstone → 6 rails)  Block 27
+    shaped3({I(266,1,0), N(),       I(266,1,0),
+             I(266,1,0), I(280,1,0), I(266,1,0),
+             I(266,1,0), I(331,1,0), I(266,1,0)}, I(27,6,0));
+
+    // Minecart (5 iron)  Item 328
+    shaped3({N(),       N(),       N(),
+             I(265,1,0), N(),       I(265,1,0),
+             I(265,1,0), I(265,1,0), I(265,1,0)}, I(328,1,0));
+
+    // Chest minecart
+    addShapelessRecipe(I(342,1,0), {I(328,1,0), I(54,1,0)});
+
+    // Furnace minecart
+    addShapelessRecipe(I(343,1,0), {I(328,1,0), I(61,1,0)});
+
+    // Boat (5 planks)  Item 333
+    shaped3({N(),       N(),       N(),
+             I(5,1,W),  N(),       I(5,1,W),
+             I(5,1,W),  I(5,1,W),  I(5,1,W)}, I(333,1,0));
+
+    // Fishing rod (3 sticks + 2 string)  Item 346
+    shaped3({N(),       N(),       I(280,1,0),
+             N(),       I(280,1,0), I(287,1,0),
+             I(280,1,0), N(),       I(287,1,0)}, I(346,1,0));
+
+    // Shears (2 iron)  Item 359
+    shaped22({N(),       I(265,1,0),
+              I(265,1,0), N()}, I(359,1,0));
+
+    // Flint and steel (iron + flint)  Item 259
+    addShapelessRecipe(I(259,1,0), {I(265,1,0), I(318,1,0)});
+
+    // Bowl (3 planks → 4 bowls)  Item 281
+    shaped3({N(),       N(),       N(),
+             I(5,1,W),  N(),       I(5,1,W),
+             N(),       I(5,1,W),  N()}, I(281,4,0));
+
+    // Eye of Ender (blaze powder + ender pearl)  Item 381
+    addShapelessRecipe(I(381,1,0), {I(377,1,0), I(368,1,0)});
+
+    // Fire charge (blaze powder + coal + gunpowder → 3)  Item 385
+    addShapelessRecipe(I(385,3,0), {I(377,1,0), I(263,1,0), I(289,1,0)});
+
+    // Flower pot (3 bricks)  Item 390
+    shaped3({N(),       N(),       N(),
+             I(336,1,0), N(),       I(336,1,0),
+             N(),       I(336,1,0), N()}, I(390,1,0));
+
+    // Item frame (8 sticks + leather)  Item 389
+    shaped3({I(280,1,0), I(280,1,0), I(280,1,0),
+             I(280,1,0), I(334,1,0), I(280,1,0),
+             I(280,1,0), I(280,1,0), I(280,1,0)}, I(389,1,0));
+
+    // Painting (8 sticks + wool)  Item 321
+    shaped3({I(280,1,0), I(280,1,0), I(280,1,0),
+             I(280,1,0), I(35,1,W),  I(280,1,0),
+             I(280,1,0), I(280,1,0), I(280,1,0)}, I(321,1,0));
+
+    // Lead (4 string + slime ball → 2 leads)  Item 420
+    shaped3({I(287,1,0), I(287,1,0), N(),
+             I(287,1,0), I(341,1,0), N(),
+             N(),       N(),       I(287,1,0)}, I(420,2,0));
+
+    // Acacia stairs (Block ID=163, acacia_planks=5:4)
+    shaped3({I(5,1,4), N(),      N(),
+             I(5,1,4), I(5,1,4), N(),
+             I(5,1,4), I(5,1,4), I(5,1,4)}, I(163,4,0));
+
+    // Dark oak stairs (Block ID=164, dark_oak_planks=5:5)
+    shaped3({I(5,1,5), N(),      N(),
+             I(5,1,5), I(5,1,5), N(),
+             I(5,1,5), I(5,1,5), I(5,1,5)}, I(164,4,0));
+
+    // Torch (charcoal/coal + stick → 4 torches)  Block 50
+    shaped12({I(263,1,0), I(280,1,0)}, I(50,4,0));
+
+    // Snow block (4 snowballs → snow block)  Block 80, snowball 332
+    shaped22({I(332,1,0), I(332,1,0),
+              I(332,1,0), I(332,1,0)}, I(80,1,0));
+
+    // Clay block (4 clay balls → clay block)  Block 82, clay_ball 337
+    shaped22({I(337,1,0), I(337,1,0),
+              I(337,1,0), I(337,1,0)}, I(82,1,0));
+
+    // Glowstone (4 glowstone dust → glowstone)  Block 89, dust 348
+    shaped22({I(348,1,0), I(348,1,0),
+              I(348,1,0), I(348,1,0)}, I(89,1,0));
+
+    // Bookshelf (6 planks + 3 books → bookshelf)  Block 47
+    shaped3({I(5,1,W),  I(5,1,W),  I(5,1,W),
+             I(340,1,0), I(340,1,0), I(340,1,0),
+             I(5,1,W),  I(5,1,W),  I(5,1,W)}, I(47,1,0));
+
+    // Jack o'Lantern (pumpkin + torch → jack o'lantern)  Block 91
+    addShapelessRecipe(I(91,1,0), {I(86,1,0), I(50,1,0)});
+
+    // Ender eye recipe (enderpearl + blaze_powder → ender eye)
+    // Already added above. Skip duplicate.
+
+    // Bed (3 wool + 3 planks)  Item 355
+    shaped32({I(35,1,W), I(35,1,W), I(35,1,W),
+              I(5,1,W),  I(5,1,W),  I(5,1,W)}, I(355,1,0));
+
+    // Armor stand — not in 1.7.10, skip
+
     // ─── Sort by recipe size (larger first) ─────────────────────────
     std::sort(recipes_.begin(), recipes_.end(),
         [](const std::unique_ptr<IRecipe>& a, const std::unique_ptr<IRecipe>& b) {
