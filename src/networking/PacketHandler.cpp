@@ -1866,7 +1866,20 @@ void PlayHandler::handlePlayerDigging(const uint8_t* data, size_t length, Connec
     // Java reference: Block.getItemDropped() — overridden per subclass
     // Returns: {itemId, quantity, metadata}. itemId=-1 means no drop.
     struct BlockDrop { int32_t itemId; int32_t quantity; int32_t metadata; };
-    auto getBlockDrop = [](int32_t blockId, int32_t blockMeta) -> BlockDrop {
+    auto getBlockDrop = [](int32_t blockId, int32_t blockMeta, int32_t heldItemId = -1) -> BlockDrop {
+        // ─── Shears silk-touch override — Java: Block.canSilkHarvest + ItemShears ──
+        // Shears (item 359) cause certain blocks to drop themselves instead of normal drops
+        if (heldItemId == 359) {
+            switch (blockId) {
+                case 18:  return {18, 1, blockMeta & 0x03};   // Leaves → leaf block (type preserved)
+                case 161: return {161, 1, blockMeta & 0x01};  // Leaves2 → leaf2 block
+                case 106: return {106, 1, 0};                  // Vines → vine item
+                case 31:  return {31, 1, blockMeta};           // Tallgrass → tallgrass (fern/grass)
+                case 32:  return {32, 1, 0};                   // Dead bush → dead bush
+                case 30:  return {30, 1, 0};                   // Cobweb → cobweb block (not string)
+                default: break; // Fall through to normal drops
+            }
+        }
         switch (blockId) {
             // Blocks that drop nothing
             case 0:   return {-1, 0, 0}; // air
@@ -1988,7 +2001,7 @@ void PlayHandler::handlePlayerDigging(const uint8_t* data, size_t length, Connec
             case 127: return {351, (blockMeta >= 8) ? 3 : 1, 3};
             // Lily pad → self
             case 111: return {111, 1, 0};
-            // Vines → nothing (shears needed)
+            // Vines → nothing (shears needed for silk-touch drop, handled above)
             case 106: return {-1, 0, 0};
             // Mycelium → dirt
             case 110: return {3, 1, 0};
@@ -2263,7 +2276,12 @@ void PlayHandler::handlePlayerDigging(const uint8_t* data, size_t length, Connec
             1.0f, 0.8f);
 
         // Spawn item drop — Java: block.harvestBlock → dropBlockAsItem → getItemDropped
-        auto drop = getBlockDrop(brokenBlockId, brokenMeta);
+        int32_t heldToolId = -1;
+        {
+            auto heldTool = inventory_.getCurrentItem();
+            if (heldTool.has_value()) heldToolId = heldTool->getItemId();
+        }
+        auto drop = getBlockDrop(brokenBlockId, brokenMeta, heldToolId);
         if (drop.itemId >= 0 && drop.quantity > 0) {
             server_.spawnItemDrop(
                 static_cast<double>(blockX),
@@ -2277,6 +2295,7 @@ void PlayHandler::handlePlayerDigging(const uint8_t* data, size_t length, Connec
 
         // Tool durability — Java: ItemStack.damageItem via onBlockDestroyed
         // Swords take 2 damage, other tools take 1, only for blocks with hardness > 0
+        // Shears take 1 damage on soft blocks (leaves, cobweb, tallgrass, vines, tripwire)
         if (hardness > 0.0f) {
             auto held = inventory_.getCurrentItem();
             if (held) {
@@ -2284,7 +2303,17 @@ void PlayHandler::handlePlayerDigging(const uint8_t* data, size_t length, Connec
                 // Swords: 2 durability per block (Java: ItemSword.onBlockDestroyed)
                 bool isSword = (heldId == 268 || heldId == 272 || heldId == 267 ||
                                 heldId == 276 || heldId == 283);
-                damageHeldItem(isSword ? 2 : 1);
+                // Shears: 1 durability on soft blocks (Java: ItemShears.onBlockDestroyed)
+                bool isShearsOnSoft = (heldId == 359 &&
+                    (brokenBlockId == 18 || brokenBlockId == 161 || brokenBlockId == 30 ||
+                     brokenBlockId == 31 || brokenBlockId == 106 || brokenBlockId == 132));
+                if (isSword) {
+                    damageHeldItem(2);
+                } else if (isShearsOnSoft) {
+                    damageHeldItem(1);
+                } else {
+                    damageHeldItem(1);
+                }
             }
         }
 
@@ -2401,6 +2430,58 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
                         sendWindowItems(conn);
                     }
                 }
+            }
+
+            // ─── Throwable item use — Java: ItemSnowball/ItemEgg/ItemEnderPearl/ItemExpBottle.onItemRightClick ──
+            // Consume 1 item (survival only), play random.bow sound, (projectile entity TODO)
+            bool isThrowable = (heldItemId == 332 || heldItemId == 344 ||  // snowball, egg
+                                heldItemId == 368 || heldItemId == 384);   // ender pearl, exp bottle
+            if (isThrowable) {
+                // Ender pearl does nothing in creative — Java: ItemEnderPearl.onItemRightClick
+                if (heldItemId == 368 && gameMode_ == 1) {
+                    // Creative: no action for ender pearl
+                } else {
+                    // Consume item in survival
+                    if (gameMode_ != 1) {
+                        auto throwHeld = inventory_.getCurrentItem();
+                        if (throwHeld.has_value() && !throwHeld->isEmpty()) {
+                            int32_t rem = throwHeld->getStackSize() - 1;
+                            if (rem <= 0) {
+                                inventory_.setInventorySlotContents(currentSlot_, std::nullopt);
+                            } else {
+                                ItemStack updated(heldItemId, rem, throwHeld->getDamage());
+                                inventory_.setInventorySlotContents(currentSlot_, updated);
+                            }
+                            int16_t containerSlot = static_cast<int16_t>(36 + currentSlot_);
+                            sendSetSlot(conn, 0, containerSlot, inventory_.getStackInSlot(currentSlot_));
+                        }
+                    }
+                    // Play throw sound — Java: world.playSoundAtEntity(player, "random.bow", 0.5, 0.4/(rand*0.4+0.8))
+                    float pitch = 0.4f / (static_cast<float>(rand() % 1000) / 1000.0f * 0.4f + 0.8f);
+                    server_.broadcastSound("random.bow", playerX_, playerY_, playerZ_, 0.5f, pitch);
+                    std::cout << "[Throw] " << playerName_ << " threw item " << heldItemId << "\n";
+                }
+            }
+
+            // ─── Eye of Ender use — Java: ItemEnderEye.onItemRightClick ──
+            // Consume 1 in survival, play random.bow sound (stronghold search not impl)
+            if (heldItemId == 381) {
+                if (gameMode_ != 1) {
+                    auto eyeHeld = inventory_.getCurrentItem();
+                    if (eyeHeld.has_value() && !eyeHeld->isEmpty()) {
+                        int32_t rem = eyeHeld->getStackSize() - 1;
+                        if (rem <= 0) {
+                            inventory_.setInventorySlotContents(currentSlot_, std::nullopt);
+                        } else {
+                            ItemStack updated(381, rem, eyeHeld->getDamage());
+                            inventory_.setInventorySlotContents(currentSlot_, updated);
+                        }
+                        int16_t containerSlot = static_cast<int16_t>(36 + currentSlot_);
+                        sendSetSlot(conn, 0, containerSlot, inventory_.getStackInSlot(currentSlot_));
+                    }
+                }
+                server_.broadcastSound("random.bow", playerX_, playerY_, playerZ_, 0.5f, 0.4f);
+                std::cout << "[EyeOfEnder] " << playerName_ << " used Eye of Ender\n";
             }
         }
         return;
