@@ -310,3 +310,5 @@
 61. **Seed planting** — ✅ Done (wheat/carrot/potato/melon/pumpkin seeds on farmland only, item→block mapping for 16 items > 255)
 62. **Random block tick** — ✅ Done (crop growth 0→7, sapling→tree, grass spread, farmland hydration/decay, melon/pumpkin fruit placement, leaf decay)
 63. **Crop harvest drops** — ✅ Done (wheat→wheat+seeds at meta 7, carrot/potato metadata-aware drops, melon/pumpkin stem→seeds)
+64. **Bed item placement** — ✅ Done (item 355→block 26, foot+head 2-block with yaw-facing, meta bit 8 for head part)
+65. **Sand/gravel gravity** — ✅ Done (blocks 12/13/145 instant-fall through air/water/lava to solid surface, dig.sand landing sound)
