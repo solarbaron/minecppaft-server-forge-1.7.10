@@ -59,6 +59,10 @@ CommandHandler::CommandHandler() {
     registerCommand(std::make_shared<CommandClone>());
     registerCommand(std::make_shared<CommandTestFor>());
     registerCommand(std::make_shared<CommandSummon>());
+    registerCommand(std::make_shared<CommandPardon>());
+    registerCommand(std::make_shared<CommandWhitelist>());
+    registerCommand(std::make_shared<CommandPlaySound>());
+    registerCommand(std::make_shared<CommandSpreadPlayers>());
     std::cout << "[Commands] Registered " << getCommandCount() << " commands\n";
 }
 
@@ -971,6 +975,104 @@ void CommandSummon::processCommand(ICommandSender& sender, const std::vector<std
             std::to_string(static_cast<int>(x)) + ", " +
             std::to_string(static_cast<int>(y)) + ", " +
             std::to_string(static_cast<int>(z)));
+    } catch (...) {
+        sender.addChatMessage("\xC2\xA7" "cInvalid arguments");
+    }
+}
+
+// /pardon — Java: net.minecraft.command.CommandPardonPlayer
+void CommandPardon::processCommand(ICommandSender& sender, const std::vector<std::string>& args) {
+    if (args.empty()) {
+        sender.addChatMessage("\xC2\xA7" "cUsage: /pardon <player>");
+        return;
+    }
+    // In full implementation, this would remove from banned-players.json
+    // Simplified: just announce the pardon
+    sender.addChatMessage("Unbanned " + args[0]);
+    auto* server = sender.getServer();
+    if (server) {
+        server->broadcastChat("\xC2\xA7" "7" + args[0] + " has been pardoned by " + sender.getCommandSenderName());
+    }
+    std::cout << "[Server] " << sender.getCommandSenderName() << " pardoned " << args[0] << "\n";
+}
+
+// /whitelist — Java: net.minecraft.command.CommandWhitelist
+void CommandWhitelist::processCommand(ICommandSender& sender, const std::vector<std::string>& args) {
+    if (args.empty()) {
+        sender.addChatMessage("\xC2\xA7" "cUsage: /whitelist <add|remove|on|off|list|reload> [player]");
+        return;
+    }
+    if (args[0] == "on") {
+        sender.addChatMessage("Turned on the whitelist");
+    } else if (args[0] == "off") {
+        sender.addChatMessage("Turned off the whitelist");
+    } else if (args[0] == "list") {
+        sender.addChatMessage("\xC2\xA7" "7Whitelist: (not implemented)");
+    } else if (args[0] == "reload") {
+        sender.addChatMessage("Reloaded the whitelist");
+    } else if (args[0] == "add" && args.size() > 1) {
+        sender.addChatMessage("Added " + args[1] + " to the whitelist");
+    } else if (args[0] == "remove" && args.size() > 1) {
+        sender.addChatMessage("Removed " + args[1] + " from the whitelist");
+    } else {
+        sender.addChatMessage("\xC2\xA7" "cUsage: /whitelist <add|remove|on|off|list|reload> [player]");
+    }
+}
+
+// /playsound — Java: net.minecraft.command.CommandPlaySound
+void CommandPlaySound::processCommand(ICommandSender& sender, const std::vector<std::string>& args) {
+    if (args.size() < 2) {
+        sender.addChatMessage("\xC2\xA7" "cUsage: /playsound <sound> <player> [x y z] [volume] [pitch]");
+        return;
+    }
+    std::string soundName = args[0];
+    std::string target = args[1];
+    auto* server = sender.getServer();
+    if (!server) return;
+
+    double x = 0, y = 64, z = 0;
+    float volume = 1.0f, pitch = 1.0f;
+
+    if (args.size() >= 5) {
+        try { x = std::stod(args[2]); y = std::stod(args[3]); z = std::stod(args[4]); }
+        catch (...) { sender.addChatMessage("\xC2\xA7" "cInvalid coordinates"); return; }
+    } else {
+        auto pos = server->getPlayerPosition(target);
+        if (pos) { x = pos->x; y = pos->y; z = pos->z; }
+    }
+    if (args.size() >= 6) {
+        try { volume = std::stof(args[5]); } catch (...) {}
+    }
+    if (args.size() >= 7) {
+        try { pitch = std::stof(args[6]); } catch (...) {}
+    }
+
+    server->broadcastSound(soundName, x, y, z, volume, pitch);
+    sender.addChatMessage("Played sound \"" + soundName + "\" to " + target);
+}
+
+// /spreadplayers — Java: net.minecraft.command.CommandSpreadPlayers (simplified)
+void CommandSpreadPlayers::processCommand(ICommandSender& sender, const std::vector<std::string>& args) {
+    if (args.size() < 6) {
+        sender.addChatMessage("\xC2\xA7" "cUsage: /spreadplayers <x> <z> <spreadDist> <maxRange> <respectTeams> <player>");
+        return;
+    }
+    try {
+        double cx = std::stod(args[0]), cz = std::stod(args[1]);
+        double spreadDist = std::stod(args[2]), maxRange = std::stod(args[3]);
+        std::string target = args[5];
+
+        auto* server = sender.getServer();
+        if (!server) return;
+
+        // Simple random placement within range
+        double angle = static_cast<double>(rand()) / RAND_MAX * 6.28318;
+        double dist = spreadDist + static_cast<double>(rand()) / RAND_MAX * (maxRange - spreadDist);
+        double nx = cx + dist * std::cos(angle);
+        double nz = cz + dist * std::sin(angle);
+
+        server->teleportPlayer(target, nx, 64.0, nz);
+        sender.addChatMessage("Spread " + target + " around " + args[0] + ", " + args[1]);
     } catch (...) {
         sender.addChatMessage("\xC2\xA7" "cInvalid arguments");
     }

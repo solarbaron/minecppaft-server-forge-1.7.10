@@ -487,4 +487,44 @@ public:
     void processCommand(ICommandSender& sender, const std::vector<std::string>& args) override;
 };
 
+// /pardon <player> — unban a player
+// Java: net.minecraft.command.CommandPardonPlayer
+class CommandPardon : public ICommand {
+public:
+    std::string getCommandName() const override { return "pardon"; }
+    std::string getCommandUsage() const override { return "/pardon <player>"; }
+    int32_t getRequiredPermissionLevel() const override { return 3; }
+    void processCommand(ICommandSender& sender, const std::vector<std::string>& args) override;
+};
+
+// /whitelist <add|remove|on|off|list|reload> [player]
+// Java: net.minecraft.command.CommandWhitelist
+class CommandWhitelist : public ICommand {
+public:
+    std::string getCommandName() const override { return "whitelist"; }
+    std::string getCommandUsage() const override { return "/whitelist <add|remove|on|off|list|reload> [player]"; }
+    int32_t getRequiredPermissionLevel() const override { return 3; }
+    void processCommand(ICommandSender& sender, const std::vector<std::string>& args) override;
+};
+
+// /playsound <sound> <player> [x y z] [volume] [pitch]
+// Java: net.minecraft.command.CommandPlaySound
+class CommandPlaySound : public ICommand {
+public:
+    std::string getCommandName() const override { return "playsound"; }
+    std::string getCommandUsage() const override { return "/playsound <sound> <player> [x y z] [volume] [pitch]"; }
+    int32_t getRequiredPermissionLevel() const override { return 2; }
+    void processCommand(ICommandSender& sender, const std::vector<std::string>& args) override;
+};
+
+// /spreadplayers <x> <z> <spreadDist> <maxRange> <respectTeams> <player...>
+// Java: net.minecraft.command.CommandSpreadPlayers (simplified)
+class CommandSpreadPlayers : public ICommand {
+public:
+    std::string getCommandName() const override { return "spreadplayers"; }
+    std::string getCommandUsage() const override { return "/spreadplayers <x> <z> <dist> <range> <respectTeams> <player>"; }
+    int32_t getRequiredPermissionLevel() const override { return 2; }
+    void processCommand(ICommandSender& sender, const std::vector<std::string>& args) override;
+};
+
 } // namespace mccpp
