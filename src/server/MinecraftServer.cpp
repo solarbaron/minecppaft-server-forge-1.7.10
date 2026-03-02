@@ -1833,6 +1833,13 @@ void MinecraftServer::givePlayerItem(const std::string& playerName, int32_t item
     }
 }
 
+bool MinecraftServer::isRaining() const {
+    for (auto& w : worlds_) {
+        if (w->isRaining()) return true;
+    }
+    return false;
+}
+
 void MinecraftServer::setWeather(int32_t mode, int32_t durationTicks) {
     // Java: CommandWeather.processCommand()
     // mode: 0=clear, 1=rain, 2=thunder

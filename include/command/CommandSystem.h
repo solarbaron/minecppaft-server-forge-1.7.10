@@ -365,4 +365,34 @@ public:
     }
 };
 
+// /toggledownfall — Toggle rain/clear weather
+// Java: net.minecraft.command.CommandToggleDownfall
+class CommandToggleDownfall : public ICommand {
+public:
+    std::string getCommandName() const override { return "toggledownfall"; }
+    std::string getCommandUsage() const override { return "/toggledownfall"; }
+    int32_t getRequiredPermissionLevel() const override { return 2; }
+    void processCommand(ICommandSender& sender, const std::vector<std::string>& args) override;
+};
+
+// /defaultgamemode <mode> — Set default game mode for new players
+// Java: net.minecraft.command.CommandDefaultGameMode
+class CommandDefaultGameMode : public ICommand {
+public:
+    std::string getCommandName() const override { return "defaultgamemode"; }
+    std::string getCommandUsage() const override { return "/defaultgamemode <mode>"; }
+    int32_t getRequiredPermissionLevel() const override { return 2; }
+    void processCommand(ICommandSender& sender, const std::vector<std::string>& args) override;
+};
+
+// /me <action> — Display action message
+// Java: net.minecraft.command.CommandMessage (partial)
+class CommandMe : public ICommand {
+public:
+    std::string getCommandName() const override { return "me"; }
+    std::string getCommandUsage() const override { return "/me <action>"; }
+    int32_t getRequiredPermissionLevel() const override { return 0; }
+    void processCommand(ICommandSender& sender, const std::vector<std::string>& args) override;
+};
+
 } // namespace mccpp

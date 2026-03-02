@@ -502,6 +502,16 @@ public:
      */
     void setWeather(int32_t mode, int32_t durationTicks);
 
+    /** Check if it's currently raining. */
+    bool isRaining() const;
+
+    /** Set the default game mode for new players. */
+    void setDefaultGameMode(int32_t mode) { defaultGameMode_ = mode; }
+    int32_t getDefaultGameMode() const { return defaultGameMode_; }
+
+    /** Broadcast chat message to all players. */
+    void broadcastChat(const std::string& message) { broadcastChatMessage(message); }
+
     /**
      * Apply a potion effect to a player by name.
      * Java reference: EntityLivingBase.addPotionEffect()
@@ -516,6 +526,8 @@ public:
     void clearPlayerPotionEffects(const std::string& playerName);
 
 private:
+    int32_t defaultGameMode_ = 0; // Java: MinecraftServer.defaultGameType (0=survival)
+
     /**
      * Execute a single server tick.
      * Java reference: MinecraftServer.u() — tick() method.

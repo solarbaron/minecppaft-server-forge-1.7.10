@@ -48,6 +48,9 @@ CommandHandler::CommandHandler() {
     registerCommand(std::make_shared<CommandEnchant>());
     registerCommand(std::make_shared<CommandClear>());
     registerCommand(std::make_shared<CommandSpawnpoint>());
+    registerCommand(std::make_shared<CommandToggleDownfall>());
+    registerCommand(std::make_shared<CommandDefaultGameMode>());
+    registerCommand(std::make_shared<CommandMe>());
     std::cout << "[Commands] Registered " << getCommandCount() << " commands\n";
 }
 
@@ -687,6 +690,61 @@ void CommandSpawnpoint::processCommand(ICommandSender& sender, const std::vector
         + std::to_string(x) + ", " + std::to_string(y) + ", " + std::to_string(z) + ")");
     std::cout << "[Server] " << sender.getCommandSenderName()
               << " set " << target << " spawnpoint to " << x << " " << y << " " << z << "\n";
+}
+
+// /toggledownfall — Java: net.minecraft.command.CommandToggleDownfall
+void CommandToggleDownfall::processCommand(ICommandSender& sender, const std::vector<std::string>& args) {
+    auto* server = sender.getServer();
+    if (!server) return;
+    // Toggle: if raining, set clear; if clear, set rain
+    bool isRaining = server->isRaining();
+    if (isRaining) {
+        server->setWeather(0, 6000 + (rand() % 6000)); // Clear for 5-10 min
+        sender.addChatMessage("Toggled downfall off");
+    } else {
+        server->setWeather(1, 6000 + (rand() % 6000)); // Rain for 5-10 min
+        sender.addChatMessage("Toggled downfall on");
+    }
+    std::cout << "[Server] " << sender.getCommandSenderName() << " toggled downfall\n";
+}
+
+// /defaultgamemode — Java: net.minecraft.command.CommandDefaultGameMode
+void CommandDefaultGameMode::processCommand(ICommandSender& sender, const std::vector<std::string>& args) {
+    if (args.empty()) {
+        sender.addChatMessage("§cUsage: /defaultgamemode <mode>");
+        return;
+    }
+    int32_t mode = -1;
+    std::string modeStr = args[0];
+    if (modeStr == "survival" || modeStr == "s" || modeStr == "0") mode = 0;
+    else if (modeStr == "creative" || modeStr == "c" || modeStr == "1") mode = 1;
+    else if (modeStr == "adventure" || modeStr == "a" || modeStr == "2") mode = 2;
+    else {
+        sender.addChatMessage("§cUnknown game mode: " + modeStr);
+        return;
+    }
+    auto* server = sender.getServer();
+    if (server) server->setDefaultGameMode(mode);
+    static const char* names[] = {"Survival", "Creative", "Adventure"};
+    sender.addChatMessage(std::string("Default game mode set to ") + names[mode]);
+    std::cout << "[Server] " << sender.getCommandSenderName() << " set default gamemode to " << mode << "\n";
+}
+
+// /me — Java: net.minecraft.command.CommandMe (partial)
+void CommandMe::processCommand(ICommandSender& sender, const std::vector<std::string>& args) {
+    if (args.empty()) {
+        sender.addChatMessage("§cUsage: /me <action>");
+        return;
+    }
+    std::string action;
+    for (size_t i = 0; i < args.size(); ++i) {
+        if (i > 0) action += " ";
+        action += args[i];
+    }
+    auto* server = sender.getServer();
+    if (server) {
+        server->broadcastChat("* " + sender.getCommandSenderName() + " " + action);
+    }
 }
 
 } // namespace mccpp
