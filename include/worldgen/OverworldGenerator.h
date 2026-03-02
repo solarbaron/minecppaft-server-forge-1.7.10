@@ -362,6 +362,89 @@ public:
             }
         }
 
+        // ── Step 9.6: Lake generation (water pools) ──
+        // Java reference: net.minecraft.world.gen.feature.WorldGenLakes
+        // Simplified: ellipsoid carving method — 1/4 chance per chunk
+        {
+            NoiseGeneratorImproved::RNG lakeRng;
+            lakeRng.setSeed(seed_ ^ (static_cast<int64_t>(chunkX) * 2345678901LL +
+                                      static_cast<int64_t>(chunkZ) * 987654321LL));
+
+            if (lakeRng.nextInt(4) == 0) {
+                int32_t lx = lakeRng.nextInt(16);
+                int32_t lz = lakeRng.nextInt(16);
+                // Find surface Y
+                int32_t ly = 0;
+                for (int32_t y = 80; y >= 10; --y) {
+                    if (blocks[(lx * 16 + lz) * 256 + y] != 0 &&
+                        blocks[(lx * 16 + lz) * 256 + y] != WATER) {
+                        ly = y;
+                        break;
+                    }
+                }
+                if (ly > 10 && ly < 80) {
+                    ly -= 4; // Dig below surface
+                    // Carve ellipsoid pool: 6×4×6 with water at bottom, air at top
+                    int32_t radiusX = lakeRng.nextInt(2) + 3; // 3-4
+                    int32_t radiusZ = lakeRng.nextInt(2) + 3; // 3-4
+                    int32_t depth = 3;
+                    // Check bounds
+                    if (lx - radiusX >= 0 && lx + radiusX < 16 &&
+                        lz - radiusZ >= 0 && lz + radiusZ < 16) {
+                        for (int32_t dx = -radiusX; dx <= radiusX; ++dx) {
+                            for (int32_t dz = -radiusZ; dz <= radiusZ; ++dz) {
+                                // Ellipsoid test
+                                double ex = static_cast<double>(dx) / radiusX;
+                                double ez = static_cast<double>(dz) / radiusZ;
+                                if (ex * ex + ez * ez > 1.0) continue;
+                                int32_t bx = lx + dx;
+                                int32_t bz = lz + dz;
+                                for (int32_t dy = 0; dy < depth; ++dy) {
+                                    int32_t by = ly + dy;
+                                    if (by < 1 || by > 254) continue;
+                                    if (dy < depth - 1) {
+                                        blocks[(bx * 16 + bz) * 256 + by] = 9; // Still water
+                                    } else {
+                                        blocks[(bx * 16 + bz) * 256 + by] = 0; // Air above
+                                    }
+                                }
+                                // Replace exposed dirt with grass
+                                int32_t topY = ly + depth;
+                                if (topY < 256 && blocks[(bx * 16 + bz) * 256 + topY] == DIRT) {
+                                    blocks[(bx * 16 + bz) * 256 + topY] = GRASS;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── Step 9.7: Pumpkin patches ──
+        // Java reference: net.minecraft.world.gen.feature.WorldGenPumpkin
+        // 1/32 chance per chunk, place up to 10 pumpkins on grass
+        {
+            NoiseGeneratorImproved::RNG pumpkinRng;
+            pumpkinRng.setSeed(seed_ ^ (static_cast<int64_t>(chunkX) * 123456789LL +
+                                         static_cast<int64_t>(chunkZ) * 987654321LL + 42));
+
+            if (pumpkinRng.nextInt(32) == 0) {
+                int32_t px = pumpkinRng.nextInt(16);
+                int32_t pz = pumpkinRng.nextInt(16);
+                // Find surface
+                for (int32_t py = 255; py >= 1; --py) {
+                    int32_t below = blocks[(px * 16 + pz) * 256 + py - 1];
+                    int32_t at = blocks[(px * 16 + pz) * 256 + py];
+                    if (at == 0 && below == GRASS) {
+                        blocks[(px * 16 + pz) * 256 + py] = 86; // Pumpkin
+                        meta[(px * 16 + pz) * 256 + py] =
+                            static_cast<uint8_t>(pumpkinRng.nextInt(4)); // Random facing
+                        break;
+                    }
+                }
+            }
+        }
+
         // ── Step 10: Fill chunk sections ──
         for (int x = 0; x < 16; ++x) {
             for (int z = 0; z < 16; ++z) {
