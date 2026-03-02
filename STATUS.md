@@ -44,7 +44,7 @@
 - **Materials** — Air, Rock, Wood, Cloth, Fire, Water, Lava, Plants, etc.
 
 ### Crafting
-- **Shaped/Shapeless Recipes** — 520+ crafting recipes registered (all 5 tool tiers, 5 sword tiers, 4 armor sets, building blocks, utility items, redstone components, food, storage blocks, dyes, slabs, fences, walls, doors, rails, pistons, minecarts, pressure plates, stairs, **16 wool/clay/glass/pane/carpet dye colors**, dye mixing, misc items)
+- **Shaped/Shapeless Recipes** — 550+ crafting recipes registered (all 5 tool tiers, 5 sword tiers, 4 armor sets, building blocks, utility items, redstone components, food, storage blocks, dyes, slabs, fences, walls, doors, rails, pistons, minecarts, pressure plates, stairs, **16 wool/clay/glass/pane/carpet dye colors**, dye mixing, **block↔ingot 9x conversions**, gold nuggets, food items, misc items)
 - **Smelting** — 22 smelting recipes with XP values
 - **Stack sizes** — per-item max stack sizes (tools/weapons/armor=1, eggs/snowballs/ender pearls=16, default=64)
 
@@ -438,3 +438,5 @@
 143. **/particle command** — ✅ Done (50th command, spawn particles)
 144. **Acacia tree worldgen** — ✅ Done (1/6 chance, Log2:0/Leaves2:0)
 145. **Dark oak tree worldgen** — ✅ Done (1/6 chance, Log2:1/Leaves2:1)
+146. **RecipesIngots crafting** — ✅ Done (18 recipes: 8 block↔ingot 9x conversions + gold nugget↔ingot)
+147. **RecipesFood crafting** — ✅ Done (9 recipes: mushroom stew, cookies, melon block/seeds, pumpkin pie, fermented spider eye, blaze powder, magma cream)
