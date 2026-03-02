@@ -2959,6 +2959,51 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
         return;
     }
 
+    // ─── Bed item placement (355) — 2-block wide structure ───────────
+    // Java: ItemBed.onItemUse() → foot + head blocks
+    if (placeBlockId == 26) {
+        if (direction != 1) return; // Must click top face
+        // facingDir: 0=south, 1=west, 2=north, 3=east
+        int32_t facingDir2 = (static_cast<int32_t>(std::floor(playerYaw_ * 4.0f / 360.0f + 0.5f)) & 3);
+        // Bed meta: 0=south, 1=west, 2=north, 3=east (matching player facing)
+        int headX = placeX, headZ = placeZ;
+        switch (facingDir2) {
+            case 0: ++headZ; break; // South → head at +Z
+            case 1: --headX; break; // West → head at -X
+            case 2: --headZ; break; // North → head at -Z
+            case 3: ++headX; break; // East → head at +X
+        }
+        // Check head position is air
+        Block* headBlock = world->getBlock(headX, placeY, headZ);
+        if (headBlock && Block::getIdFromBlock(headBlock) != 0) return;
+
+        // Foot: meta = facing dir
+        world->setBlock(placeX, placeY, placeZ, Block::getBlockById(26));
+        world->setBlockMetadata(placeX, placeY, placeZ, facingDir2);
+        server_.broadcastBlockChange(placeX, placeY, placeZ, 26, facingDir2);
+
+        // Head: meta = facing dir | 8 (head bit)
+        world->setBlock(headX, placeY, headZ, Block::getBlockById(26));
+        world->setBlockMetadata(headX, placeY, headZ, facingDir2 | 8);
+        server_.broadcastBlockChange(headX, placeY, headZ, 26, facingDir2 | 8);
+
+        server_.broadcastSound("dig.wood",
+            static_cast<double>(placeX) + 0.5, static_cast<double>(placeY) + 0.5,
+            static_cast<double>(placeZ) + 0.5, 1.0f, 0.8f);
+
+        if (gameMode_ != 1) {
+            auto held = inventory_.getCurrentItem();
+            if (held && held->getStackSize() > 1) {
+                ItemStack ns(held->getItemId(), held->getStackSize() - 1, held->getDamage());
+                inventory_.setInventorySlotContents(inventory_.getCurrentSlot(), ns);
+            } else {
+                inventory_.setInventorySlotContents(inventory_.getCurrentSlot(), std::nullopt);
+            }
+            sendWindowItems(conn);
+        }
+        return;
+    }
+
     // Place the block
     Block* newBlock = Block::getBlockById(placeBlockId);
     if (!newBlock) return;
@@ -3183,6 +3228,37 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
         static_cast<double>(placeY) + 0.5,
         static_cast<double>(placeZ) + 0.5,
         1.0f, 0.8f);
+
+    // ─── Sand/gravel/anvil gravity — Java: BlockFalling.onBlockAdded ─
+    // Simplified: instant fall instead of EntityFallingBlock
+    if (placeBlockId == 12 || placeBlockId == 13 || placeBlockId == 145) {
+        int fallY = placeY - 1;
+        while (fallY > 0) {
+            Block* below = world->getBlock(placeX, fallY, placeZ);
+            int belowId = below ? Block::getIdFromBlock(below) : 0;
+            if (belowId != 0 && belowId != 8 && belowId != 9 &&
+                belowId != 10 && belowId != 11 && belowId != 31 &&
+                belowId != 51) {
+                break;
+            }
+            --fallY;
+        }
+        ++fallY; // Land on top of the solid block
+
+        if (fallY < placeY) {
+            // Remove from original position
+            world->setBlock(placeX, placeY, placeZ, Block::getBlockById(0));
+            server_.broadcastBlockChange(placeX, placeY, placeZ, 0, 0);
+            // Place at landing position
+            world->setBlock(placeX, fallY, placeZ, Block::getBlockById(placeBlockId));
+            world->setBlockMetadata(placeX, fallY, placeZ, meta);
+            server_.broadcastBlockChange(placeX, fallY, placeZ, placeBlockId, meta);
+            // Fall sound
+            server_.broadcastSound("dig.sand",
+                static_cast<double>(placeX) + 0.5, static_cast<double>(fallY) + 0.5,
+                static_cast<double>(placeZ) + 0.5, 0.5f, 0.6f);
+        }
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
