@@ -7793,33 +7793,136 @@ void MinecraftServer::tickThrowables() {
             }
             if (t.isDead) continue;
 
-            // ─── Mob collision check (snowball → blaze damage) ──────
-            if (t.type == ThrowableType::Snowball || t.type == ThrowableType::Egg) {
-                std::lock_guard<std::mutex> mobLock(mobEntitiesMutex_);
-                for (auto& mob : mobEntities_) {
-                    if (mob.isDead) continue;
-                    double dx = mob.posX - newX;
-                    double dy = (mob.posY + 1.0) - newY;
-                    double dz = mob.posZ - newZ;
-                    if (dx * dx + dy * dy + dz * dz < 1.5) {
-                        t.isDead = true;
-                        deadIds.push_back(t.entityId);
-                        // Snowball does 3 damage to blazes — Java: EntitySnowball.onImpact
-                        if (t.type == ThrowableType::Snowball && mob.mobType == 61) { // Blaze
-                            mob.health -= 3.0f;
-                            broadcastEntityEvent(mob.entityId, 2); // Hurt
-                            broadcastSound("mob.blaze.hit", mob.posX, mob.posY, mob.posZ, 1.0f, 1.0f);
-                            if (mob.health <= 0.0f) {
-                                mob.isDead = true;
-                                deadIds.push_back(mob.entityId);
-                                broadcastEntityEvent(mob.entityId, 3);
-                                broadcastSound("mob.blaze.death", mob.posX, mob.posY, mob.posZ, 1.0f, 1.0f);
+            // ─── Mob collision check ─────────────────────────────────────
+        // Java: EntityThrowable.onUpdate() → onImpact(MovingObjectPosition)
+        // Snowball: 0 dmg to all, 3 dmg to Blaze (EntitySnowball.onImpact)
+        // Egg: 0 dmg (EntityEgg.onImpact), chicken spawn on any impact
+        // EnderPearl: teleport thrower to impact point
+        {
+            std::lock_guard<std::mutex> mobLock(mobEntitiesMutex_);
+            for (auto& mob : mobEntities_) {
+                if (mob.isDead) continue;
+                double dx = mob.posX - newX;
+                double dy = (mob.posY + 1.0) - newY;
+                double dz = mob.posZ - newZ;
+                if (dx * dx + dy * dy + dz * dz > 1.5) continue;
+
+                t.isDead = true;
+                deadIds.push_back(t.entityId);
+
+                switch (t.type) {
+                    case ThrowableType::Snowball: {
+                        // Java: EntitySnowball.onImpact — 0 dmg, 3 to Blaze
+                        int32_t dmg = (mob.mobType == 61) ? 3 : 0;
+                        mob.health -= static_cast<float>(dmg);
+
+                        // Hurt animation for all mobs (Java: attackEntityFrom triggers even at 0)
+                        broadcastEntityEvent(mob.entityId, 2);
+
+                        // Hurt sound
+                        const char* hurtSound = "game.hostile.hurt";
+                        switch (mob.mobType) {
+                            case 50: hurtSound = "mob.creeper.say"; break;
+                            case 51: hurtSound = "mob.skeleton.hurt"; break;
+                            case 52: hurtSound = "mob.spider.say"; break;
+                            case 54: hurtSound = "mob.zombie.hurt"; break;
+                            case 55: hurtSound = "mob.slime.small"; break;
+                            case 56: hurtSound = "mob.ghast.scream"; break;
+                            case 57: hurtSound = "mob.zombiepig.zpighurt"; break;
+                            case 59: hurtSound = "mob.spider.say"; break;
+                            case 60: hurtSound = "mob.silverfish.hit"; break;
+                            case 61: hurtSound = "mob.blaze.hit"; break;
+                            case 62: hurtSound = "mob.magmacube.small"; break;
+                            case 66: hurtSound = "mob.witch.hurt"; break;
+                            case 92: hurtSound = "mob.cow.hurt"; break;
+                            case 90: hurtSound = "mob.pig.say"; break;
+                            case 91: hurtSound = "mob.sheep.say"; break;
+                            case 93: hurtSound = "mob.chicken.hurt"; break;
+                            case 95: hurtSound = "mob.wolf.hurt"; break;
+                            case 98: hurtSound = "mob.cat.hitt"; break;
+                            case 99: hurtSound = "mob.irongolem.hit"; break;
+                            default: break;
+                        }
+                        broadcastSound(hurtSound, mob.posX, mob.posY, mob.posZ, 1.0f, 1.0f);
+
+                        // Blaze death check
+                        if (mob.health <= 0.0f && mob.mobType == 61) {
+                            mob.isDead = true;
+                            broadcastEntityEvent(mob.entityId, 3);
+                            broadcastSound("mob.blaze.death", mob.posX, mob.posY, mob.posZ, 1.0f, 1.0f);
+                            {
+                                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                                std::vector<int32_t> dead = {mob.entityId};
+                                for (auto& c : connections_) {
+                                    if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
+                                    auto h = c->getHandler();
+                                    auto* ph = dynamic_cast<PlayHandler*>(h.get());
+                                    if (ph) ph->sendDestroyEntities(*c, dead);
+                                }
+                            }
+                            // Blaze drops: blaze rod (369), XP 10
+                            int32_t lootingLevel = 0;
+                            if (t.throwerEntityId >= 0) {
+                                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                                for (auto& conn : connections_) {
+                                    if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                                    auto handler = conn->getHandler();
+                                    auto* ph2 = dynamic_cast<PlayHandler*>(handler.get());
+                                    if (ph2 && ph2->getEntityId() == t.throwerEntityId) {
+                                        auto held = ph2->getHeldItem();
+                                        if (held && held->hasEnchantments())
+                                            lootingLevel = held->getEnchantmentLevel(21);
+                                        break;
+                                    }
+                                }
+                            }
+                            int32_t rodCount = (rand() % 2) + lootingLevel;
+                            if (rodCount > 0) spawnItemDrop(mob.posX, mob.posY, mob.posZ, 369, 0, rodCount);
+                            spawnXPOrbs(mob.posX, mob.posY + 0.5, mob.posZ, 10);
+                        }
+                        break;
+                    }
+                    case ThrowableType::Egg: {
+                        // Java: EntityEgg.onImpact — 0 damage, triggers knockback
+                        broadcastEntityEvent(mob.entityId, 2);
+                        // Chicken spawn on any egg impact (not mob-specific)
+                        if ((rand() % 8) == 0) {
+                            int count = ((rand() % 32) == 0) ? 4 : 1;
+                            for (int i = 0; i < count; ++i) {
+                                summonMob(93, t.posX, t.posY + 1.0, t.posZ);
                             }
                         }
                         break;
                     }
+                    case ThrowableType::EnderPearl: {
+                        // Teleport thrower to mob hit position
+                        std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                        for (auto& conn : connections_) {
+                            if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                            auto handler = conn->getHandler();
+                            auto* thrower = dynamic_cast<PlayHandler*>(handler.get());
+                            if (!thrower) continue;
+                            if (thrower->getPlayerName() == t.throwerName) {
+                                thrower->setPlayerPosition(newX, newY, newZ);
+                                thrower->sendPlayerPosAndLook(*conn, newX, newY, newZ, thrower->getPlayerYaw(), thrower->getPlayerPitch());
+                                thrower->applyDamage(5.0f);
+                                thrower->sendUpdateHealth(*conn, thrower->getHealth(), thrower->getFood(), thrower->getSaturation());
+                                broadcastSound("mob.endermen.portal", newX, newY, newZ, 1.0f, 1.0f);
+                                if (thrower->getHealth() <= 0.0f) {
+                                    broadcastEntityEvent(thrower->getEntityId(), 3);
+                                    broadcastChatMessage(thrower->getPlayerName() + " hit the ground too hard");
+                                }
+                                break;
+                            }
+                        }
+                        break;
+                    }
+                    default:
+                        break;
                 }
+                break; // Only hit one mob
             }
+        }
             if (t.isDead) continue;
 
             // Update position
