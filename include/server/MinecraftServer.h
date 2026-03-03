@@ -628,6 +628,8 @@ private:
         // Sheep state — Java: EntitySheep dataWatcher(16)
         int32_t fleeceColor = 0;  // 0=white, 1=orange, ... 15=black
         bool isSheared = false;   // true = wool already sheared off
+        // Pig state — Java: EntityPig dataWatcher(16) bit 0x01
+        bool isSaddled = false;   // true = pig has saddle
     };
     mutable std::mutex mobEntitiesMutex_;
     std::vector<SpawnedMob> mobEntities_;

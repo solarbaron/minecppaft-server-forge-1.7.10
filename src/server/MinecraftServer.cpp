@@ -1842,7 +1842,12 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
                             break;
                         case 90: // Pig → raw porkchop (319) / cooked (320) if on fire
                             dropId = mob.isOnFire ? 320 : 319;
-                            baseCount = 1 + (rand() % 3); break;
+                            baseCount = 1 + (rand() % 3);
+                            // Java: EntityPig.dropFewItems — if saddled, drop saddle
+                            if (mob.isSaddled) {
+                                spawnItemDrop(mob.posX, mob.posY, mob.posZ, 329, 0, 1);
+                            }
+                            break;
                         case 91: // Sheep → wool (35) only if not sheared
                             // Java: EntitySheep.dropFewItems — only drops wool if !getSheared()
                             if (!mob.isSheared) {
@@ -2044,78 +2049,211 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
 
 void MinecraftServer::handleEntityInteract(PlayHandler& player, Connection& conn, int32_t targetEntityId) {
     // Java: EntityPlayer.interactWith(targetEntity)
-    // Currently handles: sheep shearing (item 359 on mob type 91)
+    // Handles: sheep shearing/dyeing, cow/mooshroom milking, mooshroom stew/shearing, pig saddling
     auto heldItem = player.getHeldItem();
-    if (!heldItem) return;
-    int32_t heldId = heldItem->getItemId();
+    int32_t heldId = heldItem ? heldItem->getItemId() : 0;
+    int32_t gameMode = player.getGameMode();
 
-    // ─── Sheep shearing — Java: EntitySheep.interact() ──────────────
-    if (heldId == 359) {  // Shears
-        std::lock_guard<std::mutex> lock(mobEntitiesMutex_);
-        for (auto& mob : mobEntities_) {
-            if (mob.entityId != targetEntityId) continue;
-            if (mob.isDead || mob.mobType != 91) break;  // Not a sheep
-            if (mob.isSheared) break;  // Already sheared
-
-            // Java: EntitySheep.interact() — set sheared, drop 1-3 wool
-            mob.isSheared = true;
-            int32_t woolCount = 1 + (rand() % 3);  // 1-3 wool blocks
-
-            for (int i = 0; i < woolCount; ++i) {
-                // Wool block = ID 35, metadata = fleece color
-                // Java: entityDropItem with slight random motion
-                double dropX = mob.posX + ((rand() % 100 - 50) / 500.0);
-                double dropZ = mob.posZ + ((rand() % 100 - 50) / 500.0);
-                spawnItemDrop(dropX, mob.posY + 1.0, dropZ, 35, mob.fleeceColor, 1);
-            }
-
-            // Damage shears by 1 — Java: ItemStack.damageItem(1, entity)
-            player.damageHeldItem(1);
-            player.sendWindowItems(conn);  // Sync inventory
-
-            // Play shear sound — Java: mob.sheep.shear
-            broadcastSound("mob.sheep.shear", mob.posX, mob.posY, mob.posZ, 1.0f, 1.0f);
-
-            // Send S1C EntityMetadata — update DataWatcher byte 16 (sheared bit 0x10)
-            {
-                uint8_t dw16 = static_cast<uint8_t>((mob.fleeceColor & 0x0F) | 0x10);
-                auto metaPkt = PacketBuilder::entityMetadataByte(mob.entityId, 16, dw16);
-                std::lock_guard<std::mutex> connLock(connectionsMutex_);
-                for (auto& c : connections_) {
-                    if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
-                    c->sendPacket(metaPkt);  // Copy to each client
-                }
-            }
-            break;
-        }
-    }
-
-    // ─── Cow/Mooshroom milking — Java: EntityCow.interact() ─────────
-    // Bucket (325) on cow (92) or mooshroom (96) → milk bucket (335)
-    if (heldId == 325) {  // Empty bucket
+    // ─── Shears interactions (item 359) ──────────────────────────────
+    // Java: EntitySheep.interact() + EntityMooshroom.interact()
+    if (heldId == 359) {
         std::lock_guard<std::mutex> lock(mobEntitiesMutex_);
         for (auto& mob : mobEntities_) {
             if (mob.entityId != targetEntityId) continue;
             if (mob.isDead) break;
-            if (mob.mobType != 92 && mob.mobType != 96) break;  // Not a cow/mooshroom
 
-            // Java: EntityCow.interact() — bucket milking
+            // ─── Sheep shearing — Java: EntitySheep.interact() ──────
+            if (mob.mobType == 91 && !mob.isSheared) {
+                mob.isSheared = true;
+                int32_t woolCount = 1 + (rand() % 3);  // 1-3 wool blocks
+
+                for (int i = 0; i < woolCount; ++i) {
+                    double dropX = mob.posX + ((rand() % 100 - 50) / 500.0);
+                    double dropZ = mob.posZ + ((rand() % 100 - 50) / 500.0);
+                    spawnItemDrop(dropX, mob.posY + 1.0, dropZ, 35, mob.fleeceColor, 1);
+                }
+
+                player.damageHeldItem(1);
+                player.sendWindowItems(conn);
+                broadcastSound("mob.sheep.shear", mob.posX, mob.posY, mob.posZ, 1.0f, 1.0f);
+
+                // S1C EntityMetadata — DataWatcher byte 16 (sheared bit 0x10)
+                {
+                    uint8_t dw16 = static_cast<uint8_t>((mob.fleeceColor & 0x0F) | 0x10);
+                    auto metaPkt = PacketBuilder::entityMetadataByte(mob.entityId, 16, dw16);
+                    std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                    for (auto& c : connections_) {
+                        if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
+                        c->sendPacket(metaPkt);
+                    }
+                }
+            }
+
+            // ─── Mooshroom shearing — Java: EntityMooshroom.interact() ──
+            // Shears on mooshroom → kill mooshroom, spawn cow, drop 5 red mushrooms
+            if (mob.mobType == 96) {
+                double mX = mob.posX, mY = mob.posY, mZ = mob.posZ;
+                int32_t oldEntityId = mob.entityId;
+
+                // Kill the mooshroom — Java: this.setDead()
+                mob.isDead = true;
+                mob.health = 0;
+
+                // Broadcast destroy mooshroom
+                {
+                    std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                    for (auto& c : connections_) {
+                        if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
+                        auto handler = c->getHandler();
+                        auto* h = dynamic_cast<PlayHandler*>(handler.get());
+                        if (h) h->sendDestroyEntities(
+                            *c, std::vector<int32_t>{oldEntityId});
+                    }
+                }
+
+                // Spawn a cow (92) at the same position — Java: new EntityCow
+                summonMob(92, mX, mY, mZ);
+
+                // Drop 5 red mushrooms (block 40) — Java: Blocks.red_mushroom
+                for (int i = 0; i < 5; ++i) {
+                    spawnItemDrop(mX, mY + 1.3, mZ, 40, 0, 1);
+                }
+
+                player.damageHeldItem(1);
+                player.sendWindowItems(conn);
+                broadcastSound("mob.sheep.shear", mX, mY, mZ, 1.0f, 1.0f);
+
+                // S2A largeexplode particle — Java: this.worldObj.spawnParticle
+                broadcastParticle("largeexplode",
+                    static_cast<float>(mX), static_cast<float>(mY + 0.65f),
+                    static_cast<float>(mZ), 0.0f, 0.0f, 0.0f, 0.0f, 1);
+            }
+            break;
+        }
+        return;  // Shears handled, skip other checks
+    }
+
+    // ─── Cow/Mooshroom milking — Java: EntityCow.interact() ─────────
+    // Bucket (325) on cow (92) or mooshroom (96) → milk bucket (335)
+    // Java: !entityPlayer.capabilities.isCreativeMode — skip in creative
+    if (heldId == 325 && gameMode != 1) {
+        std::lock_guard<std::mutex> lock(mobEntitiesMutex_);
+        for (auto& mob : mobEntities_) {
+            if (mob.entityId != targetEntityId) continue;
+            if (mob.isDead) break;
+            if (mob.mobType != 92 && mob.mobType != 96) break;
+
             if (heldItem->getStackSize() == 1) {
-                // Last bucket: replace with milk bucket
                 player.replaceHeldItem(ItemStack(335, 1, 0));
             } else {
-                // Multiple buckets: decrement and add milk bucket
                 player.decrHeldItem();
                 ItemStack milkBucket(335, 1, 0);
                 if (!player.addItemToInventory(milkBucket)) {
-                    // Inventory full: drop it — Java: dropPlayerItemWithRandomChoice
                     spawnItemDrop(player.getPlayerX(), player.getPlayerY() + 1.0,
                                   player.getPlayerZ(), 335, 0, 1);
                 }
             }
-            player.sendWindowItems(conn);  // Sync inventory
+            player.sendWindowItems(conn);
             break;
         }
+        return;
+    }
+
+    // ─── Mooshroom bowl stew — Java: EntityMooshroom.interact() ─────
+    // Bowl (281) on mooshroom (96) → mushroom stew (282)
+    if (heldId == 281) {
+        std::lock_guard<std::mutex> lock(mobEntitiesMutex_);
+        for (auto& mob : mobEntities_) {
+            if (mob.entityId != targetEntityId) continue;
+            if (mob.isDead || mob.mobType != 96) break;
+
+            // Java: if (itemStack.stackSize == 1) replace, else add + decrement
+            if (heldItem->getStackSize() == 1) {
+                player.replaceHeldItem(ItemStack(282, 1, 0));  // mushroom_stew
+            } else {
+                ItemStack stew(282, 1, 0);
+                if (player.addItemToInventory(stew) && gameMode != 1) {
+                    player.decrHeldItem();
+                }
+            }
+            player.sendWindowItems(conn);
+            break;
+        }
+        return;
+    }
+
+    // ─── Pig saddling — Java: EntityPig → EntityAnimal.interact() ───
+    // Saddle (329) on pig (90) → set saddled, consume saddle
+    if (heldId == 329) {
+        std::lock_guard<std::mutex> lock(mobEntitiesMutex_);
+        for (auto& mob : mobEntities_) {
+            if (mob.entityId != targetEntityId) continue;
+            if (mob.isDead || mob.mobType != 90) break;
+            if (mob.isSaddled) break;  // Already saddled
+
+            // Java: EntityAnimal.interact() via isBreedingItem check —
+            // but saddle is handled in net.minecraft.entity.passive.EntityPig parent EntityAnimal.interact()
+            // Actually: saddle check is in EntityLiving.interact() not EntityPig.interact()
+            mob.isSaddled = true;
+
+            // Consume saddle in survival — Java: --itemStack.stackSize
+            if (gameMode != 1) {
+                player.decrHeldItem();
+            }
+            player.sendWindowItems(conn);
+
+            // S1C EntityMetadata — DataWatcher byte 16 = 1 (saddled)
+            {
+                auto metaPkt = PacketBuilder::entityMetadataByte(mob.entityId, 16, 1);
+                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                for (auto& c : connections_) {
+                    if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
+                    c->sendPacket(metaPkt);
+                }
+            }
+            // Java: this.worldObj.playSoundAtEntity mob.horse.leather
+            broadcastSound("mob.horse.leather", mob.posX, mob.posY, mob.posZ, 0.5f, 1.0f);
+            break;
+        }
+        return;
+    }
+
+    // ─── Sheep dyeing — Java: EntitySheep.interact() via ItemDye ────
+    // Dye item (351) on sheep → change fleece color to 15-damage
+    // Java: Items.dye (id 351), meta = dye color, fleece color = 15 - dye color
+    if (heldId == 351) {
+        std::lock_guard<std::mutex> lock(mobEntitiesMutex_);
+        for (auto& mob : mobEntities_) {
+            if (mob.entityId != targetEntityId) continue;
+            if (mob.isDead || mob.mobType != 91) break;
+
+            int32_t dyeColor = heldItem->getDamage() & 0x0F;
+            int32_t newFleeceColor = 15 - dyeColor;  // Java: BlockColored.func_150032_b(damage)
+
+            if (mob.fleeceColor == newFleeceColor) break;  // Already this color
+
+            mob.fleeceColor = newFleeceColor;
+
+            // Consume dye in survival
+            if (gameMode != 1) {
+                player.decrHeldItem();
+            }
+            player.sendWindowItems(conn);
+
+            // S1C EntityMetadata — DataWatcher byte 16 (color in lower 4 bits, sheared in bit 4)
+            {
+                uint8_t dw16 = static_cast<uint8_t>(
+                    (mob.fleeceColor & 0x0F) | (mob.isSheared ? 0x10 : 0x00));
+                auto metaPkt = PacketBuilder::entityMetadataByte(mob.entityId, 16, dw16);
+                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                for (auto& c : connections_) {
+                    if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
+                    c->sendPacket(metaPkt);
+                }
+            }
+            break;
+        }
+        return;
     }
 }
 
