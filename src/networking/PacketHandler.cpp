@@ -2907,6 +2907,112 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
     if (worlds.empty()) return;
     WorldServer* world = worlds[0].get();
 
+    // ─── Bonemeal (dye 351:15) — Java: ItemDye.onItemUse → func_150919_a ─────
+    // Right-click on a growable block with bone meal to accelerate growth
+    {
+        auto heldStack = inventory_.getCurrentItem();
+        if (heldStack && heldStack->getItemId() == 351 && heldStack->getDamage() == 15) {
+            Block* targetBlock = world->getBlock(blockX, static_cast<int32_t>(blockY), blockZ);
+            int32_t targetId = targetBlock ? Block::getIdFromBlock(targetBlock) : 0;
+            int32_t targetMeta = world->getBlockMetadata(blockX, static_cast<int32_t>(blockY), blockZ);
+            int32_t by = static_cast<int32_t>(blockY);
+            bool consumed = false;
+
+            // ─── Crop growth (wheat=59, carrots=141, potatoes=142, nether wart=115) ──
+            // Java: BlockCrops/BlockCarrot/BlockPotato.fertilize → set meta to 7 (full growth)
+            if (targetId == 59 || targetId == 141 || targetId == 142) {
+                if (targetMeta < 7) {
+                    // Java: fertilize() adds 2-5 growth stages, clamped to 7
+                    int32_t growth = 2 + (rand() % 4);
+                    int32_t newMeta = std::min(targetMeta + growth, 7);
+                    world->setBlockMetadata(blockX, by, blockZ, newMeta);
+                    server_.broadcastBlockChange(blockX, by, blockZ, targetId, newMeta);
+                    consumed = true;
+                }
+            }
+            // Nether wart (115) — max meta 3
+            else if (targetId == 115) {
+                if (targetMeta < 3) {
+                    int32_t newMeta = std::min(targetMeta + 1, 3);
+                    world->setBlockMetadata(blockX, by, blockZ, newMeta);
+                    server_.broadcastBlockChange(blockX, by, blockZ, targetId, newMeta);
+                    consumed = true;
+                }
+            }
+            // ─── Melon/Pumpkin stems (104=melon, 105=pumpkin) ──
+            else if (targetId == 104 || targetId == 105) {
+                if (targetMeta < 7) {
+                    int32_t growth = 2 + (rand() % 4);
+                    int32_t newMeta = std::min(targetMeta + growth, 7);
+                    world->setBlockMetadata(blockX, by, blockZ, newMeta);
+                    server_.broadcastBlockChange(blockX, by, blockZ, targetId, newMeta);
+                    consumed = true;
+                }
+            }
+            // ─── Cocoa pods (127) — Java: BlockCocoa.fertilize ──
+            // Meta bits 2,3 are growth stage (0-2), max stage 2 → set to 8|existing-dir
+            else if (targetId == 127) {
+                int stage = (targetMeta >> 2) & 3;
+                if (stage < 2) {
+                    int32_t newMeta = (targetMeta & 3) | ((stage + 1) << 2);
+                    world->setBlockMetadata(blockX, by, blockZ, newMeta);
+                    server_.broadcastBlockChange(blockX, by, blockZ, targetId, newMeta);
+                    consumed = true;
+                }
+            }
+            // ─── Sapling growth (6) — Java: BlockSapling.fertilize ──
+            // Sets bit 0x08 (stage=1), which triggers tree growth on next tick
+            else if (targetId == 6) {
+                int32_t newMeta = targetMeta | 0x08; // Set stage bit
+                world->setBlockMetadata(blockX, by, blockZ, newMeta);
+                server_.broadcastBlockChange(blockX, by, blockZ, targetId, newMeta);
+                consumed = true;
+            }
+            // ─── Grass block (2) — Java: BlockGrass.fertilize ──
+            // Spawn 2-4 tall grass (31:1) and occasionally flowers on nearby grass blocks
+            else if (targetId == 2) {
+                int spawns = 2 + (rand() % 3);
+                for (int s = 0; s < spawns; ++s) {
+                    int sx = blockX + (rand() % 7) - 3;
+                    int sz = blockZ + (rand() % 7) - 3;
+                    // Find surface at this column
+                    for (int sy = by + 2; sy >= by - 2; --sy) {
+                        Block* abv = world->getBlock(sx, sy + 1, sz);
+                        Block* cur = world->getBlock(sx, sy, sz);
+                        int32_t abvId = abv ? Block::getIdFromBlock(abv) : 0;
+                        int32_t curId = cur ? Block::getIdFromBlock(cur) : 0;
+                        if (abvId == 0 && curId == 2) {
+                            // Spawn tall grass (31:1), rarely a flower
+                            int32_t growId = 31;
+                            int32_t growMeta = 1;  // Tall grass
+                            if (rand() % 8 == 0) {
+                                // Small chance of dandelion(37) or rose(38)
+                                growId = (rand() % 2 == 0) ? 37 : 38;
+                                growMeta = 0;
+                            }
+                            world->setBlock(sx, sy + 1, sz, Block::getBlockById(growId));
+                            world->setBlockMetadata(sx, sy + 1, sz, growMeta);
+                            server_.broadcastBlockChange(sx, sy + 1, sz, growId, growMeta);
+                            break;
+                        }
+                    }
+                }
+                consumed = true;
+            }
+
+            if (consumed) {
+                // Consume bone meal in survival — Java: --itemStack.stackSize
+                if (gameMode_ != 1) {
+                    decrHeldItem();
+                }
+                sendWindowItems(conn);
+                // Java: world.playAuxSFX(2005, ...) — green particle effect
+                server_.broadcastEffect(2005, blockX, by, blockZ, 0);
+                return;
+            }
+        }
+    }
+
     // ─── Block activation check ──────────────────────────────────────────
     // Java: onBlockActivated() — crafting table, chests, furnaces, etc.
     Block* clickedBlock = world->getBlock(blockX, static_cast<int32_t>(blockY), blockZ);
