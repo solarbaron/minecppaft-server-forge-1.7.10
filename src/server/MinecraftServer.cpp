@@ -1203,14 +1203,21 @@ void MinecraftServer::createExplosion(double x, double y, double z, float power,
             int32_t blockId = block ? Block::getIdFromBlock(block) : 0;
             if (blockId == 0) continue; // air
 
-            // TNT chain reaction: ignite nearby TNT
+            // TNT chain reaction — Java: BlockTNT.onBlockDestroyedByExplosion
+            // Spawn EntityTNTPrimed with shortened fuse; simplified: instant chain explosion
             if (blockId == 46) {
-                // Set air first, then create sub-explosion next tick
                 worlds_[0]->setBlock(bx, by, bz, nullptr);
                 broadcastBlockChange(bx, by, bz, 0, 0);
-                // Spawn item drop for TNT (1/power chance)
-                // In vanilla, TNT doesn't drop from explosions — it ignites
-                // For simplicity, just destroy it
+                // Java: fuse = rand.nextInt(fuse/4) + fuse/8 ≈ 10-30 ticks
+                // Simplified: immediate chain detonation with primed sound
+                broadcastSound("game.tnt.primed",
+                    static_cast<double>(bx) + 0.5, static_cast<double>(by) + 0.5,
+                    static_cast<double>(bz) + 0.5, 1.0f, 1.0f);
+                createExplosion(
+                    static_cast<double>(bx) + 0.5,
+                    static_cast<double>(by) + 0.5,
+                    static_cast<double>(bz) + 0.5,
+                    4.0f, true, true);
                 continue;
             }
 
@@ -2776,6 +2783,95 @@ void MinecraftServer::redstoneNotifyNeighbors(int32_t x, int32_t y, int32_t z) {
             dispenserFire(x, y, z, selfId);
         }
     }
+
+    // ─── TNT ignition — Java: BlockTNT.onNeighborBlockChange ────────────
+    // TNT ignites immediately when receiving redstone power
+    auto tntIgnitePowered = [this](int32_t tx, int32_t ty, int32_t tz) {
+        // Check if TNT block is receiving power from any adjacent source
+        bool powered = false;
+        for (int face = 0; face < 6; ++face) {
+            int32_t nx = tx + mccpp::FACING_OFFSETS[face].dx;
+            int32_t ny = ty + mccpp::FACING_OFFSETS[face].dy;
+            int32_t nz = tz + mccpp::FACING_OFFSETS[face].dz;
+            int32_t adjId = getBlockIdInWorld(nx, ny, nz);
+            int32_t adjMeta = getBlockMetaInWorld(nx, ny, nz);
+            if (adjId == mccpp::RedstoneBlocks::REDSTONE_WIRE && adjMeta > 0) { powered = true; break; }
+            if (adjId == mccpp::RedstoneBlocks::REDSTONE_TORCH_ON) { powered = true; break; }
+            if (adjId == mccpp::RedstoneBlocks::REDSTONE_BLOCK) { powered = true; break; }
+            if (adjId == mccpp::RedstoneBlocks::LEVER && mccpp::PowerSource::isLeverPowered(adjMeta)) {
+                powered = true; break;
+            }
+            if ((adjId == mccpp::RedstoneBlocks::STONE_BUTTON ||
+                 adjId == mccpp::RedstoneBlocks::WOODEN_BUTTON) && (adjMeta & 0x08)) {
+                powered = true; break;
+            }
+            if (adjId == mccpp::RedstoneBlocks::REDSTONE_REPEATER_ON) {
+                powered = true; break;
+            }
+        }
+        if (powered) {
+            // Java: onBlockDestroyedByPlayer(world, x,y,z, 1) → func_150114_a → spawn EntityTNTPrimed
+            setBlockInWorld(tx, ty, tz, 0, 0); // Remove TNT block
+            broadcastSound("game.tnt.primed",
+                static_cast<double>(tx) + 0.5, static_cast<double>(ty) + 0.5,
+                static_cast<double>(tz) + 0.5, 1.0f, 1.0f);
+            // Schedule explosion (80 tick fuse → instant for our simplified server)
+            createExplosion(
+                static_cast<double>(tx) + 0.5,
+                static_cast<double>(ty) + 0.5,
+                static_cast<double>(tz) + 0.5,
+                4.0f, true, true);
+        }
+    };
+
+    for (const auto& off : offsets) {
+        int32_t nx = x + off[0], ny = y + off[1], nz = z + off[2];
+        if (getBlockIdInWorld(nx, ny, nz) == mccpp::RedstoneBlocks::TNT) {
+            tntIgnitePowered(nx, ny, nz);
+        }
+    }
+    // Self-check: TNT placed next to power
+    if (getBlockIdInWorld(x, y, z) == mccpp::RedstoneBlocks::TNT) {
+        tntIgnitePowered(x, y, z);
+    }
+
+    // ─── Note block — Java: BlockNote.onNeighborBlockChange ─────────────
+    // Rising-edge: play note when receiving power
+    auto noteBlockCheckPowered = [this](int32_t nx, int32_t ny, int32_t nz) {
+        bool powered = false;
+        for (int face = 0; face < 6; ++face) {
+            int32_t ax = nx + mccpp::FACING_OFFSETS[face].dx;
+            int32_t ay = ny + mccpp::FACING_OFFSETS[face].dy;
+            int32_t az = nz + mccpp::FACING_OFFSETS[face].dz;
+            int32_t adjId = getBlockIdInWorld(ax, ay, az);
+            int32_t adjMeta = getBlockMetaInWorld(ax, ay, az);
+            if (adjId == mccpp::RedstoneBlocks::REDSTONE_WIRE && adjMeta > 0) { powered = true; break; }
+            if (adjId == mccpp::RedstoneBlocks::REDSTONE_TORCH_ON) { powered = true; break; }
+            if (adjId == mccpp::RedstoneBlocks::REDSTONE_BLOCK) { powered = true; break; }
+            if (adjId == mccpp::RedstoneBlocks::LEVER && mccpp::PowerSource::isLeverPowered(adjMeta)) {
+                powered = true; break;
+            }
+            if ((adjId == mccpp::RedstoneBlocks::STONE_BUTTON ||
+                 adjId == mccpp::RedstoneBlocks::WOODEN_BUTTON) && (adjMeta & 0x08)) {
+                powered = true; break;
+            }
+            if (adjId == mccpp::RedstoneBlocks::REDSTONE_REPEATER_ON) { powered = true; break; }
+        }
+        if (powered) {
+            playNoteBlock(nx, ny, nz);
+        }
+    };
+
+    for (const auto& off : offsets) {
+        int32_t nx = x + off[0], ny = y + off[1], nz = z + off[2];
+        if (getBlockIdInWorld(nx, ny, nz) == mccpp::RedstoneBlocks::NOTE_BLOCK) {
+            noteBlockCheckPowered(nx, ny, nz);
+        }
+    }
+    if (getBlockIdInWorld(x, y, z) == mccpp::RedstoneBlocks::NOTE_BLOCK) {
+        noteBlockCheckPowered(x, y, z);
+    }
+
     --recursionDepth;
 }
 
@@ -3194,6 +3290,67 @@ void MinecraftServer::dispenserFire(int32_t x, int32_t y, int32_t z, int32_t blo
         world->setBlockMetadata(x, y, z, meta & ~0x08);
         broadcastBlockChange(x, y, z, blockId, meta & ~0x08);
     }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Note block play — Java: TileEntityNote.triggerNote() + BlockNote.onBlockEventReceived()
+// Instrument detection from block below, pitch from metadata
+// ═══════════════════════════════════════════════════════════════════════════
+
+void MinecraftServer::playNoteBlock(int32_t x, int32_t y, int32_t z) {
+    if (worlds_.empty()) return;
+    auto& world = worlds_[0];
+
+    int32_t meta = getBlockMetaInWorld(x, y, z); // pitch 0-24
+
+    // Java: BlockNote.onBlockEventReceived — instrument from block below
+    // 0=harp (default), 1=bass drum (rock), 2=snare (sand), 3=hat (glass), 4=bass attack (wood)
+    int32_t belowId = getBlockIdInWorld(x, y - 1, z);
+    int instrument = 0; // harp
+    switch (belowId) {
+        // Rock-type blocks → bass drum
+        case 1: case 4: case 7: case 14: case 15: case 16: case 21:
+        case 22: case 23: case 24: case 42: case 43: case 44: case 45:
+        case 48: case 49: case 56: case 61: case 62: case 73: case 74:
+        case 87: case 98: case 109: case 112: case 113: case 116: case 121:
+        case 129: case 145: case 152: case 153: case 155:
+            instrument = 1; // bd (bass drum)
+            break;
+        // Sand-type blocks → snare drum
+        case 12: case 13: case 82: case 88: case 159: case 172: case 174:
+            instrument = 2; // snare
+            break;
+        // Glass blocks → hi-hat (sticks)
+        case 20: case 89: case 102: case 160:
+            instrument = 3; // hat
+            break;
+        // Wood-type blocks → bass attack
+        case 5: case 17: case 25: case 47: case 53: case 54: case 58:
+        case 84: case 85: case 96: case 107: case 126: case 134: case 135:
+        case 136: case 162: case 163: case 164:
+            instrument = 4; // bassattack
+            break;
+        default:
+            instrument = 0; // harp
+            break;
+    }
+
+    // Java: float f = (float)Math.pow(2.0, (n5 - 12) / 12.0);
+    float pitch = static_cast<float>(std::pow(2.0, (meta - 12.0) / 12.0));
+
+    const char* instrumentNames[] = { "harp", "bd", "snare", "hat", "bassattack" };
+    std::string soundName = std::string("note.") + instrumentNames[instrument];
+
+    // Java: volume=3.0f
+    broadcastSound(soundName,
+        static_cast<double>(x) + 0.5, static_cast<double>(y) + 0.5,
+        static_cast<double>(z) + 0.5, 3.0f, pitch);
+
+    // Java: spawnParticle("note", x+0.5, y+1.2, z+0.5, note/24.0, 0, 0)
+    broadcastParticle("note",
+        static_cast<float>(x) + 0.5f, static_cast<float>(y) + 1.2f,
+        static_cast<float>(z) + 0.5f,
+        static_cast<float>(meta) / 24.0f, 0.0f, 0.0f, 0.0f, 0);
 }
 
 // Java: SharedMonsterAttributes.maxHealth base values per entity type

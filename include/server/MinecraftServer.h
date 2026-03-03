@@ -544,6 +544,13 @@ public:
      */
     void dispenserFire(int32_t x, int32_t y, int32_t z, int32_t blockId);
 
+    /**
+     * Play note block at position — Java: TileEntityNote.triggerNote()
+     * Detects instrument from block below, plays sound and note particle.
+     * Used by right-click activation and redstone rising-edge trigger.
+     */
+    void playNoteBlock(int32_t x, int32_t y, int32_t z);
+
     /** Get block ID at position, returns 0 if unloaded. */
     int32_t getBlockIdInWorld(int32_t x, int32_t y, int32_t z) const;
 

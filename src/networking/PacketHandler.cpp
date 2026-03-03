@@ -3373,21 +3373,15 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
     }
 
     // ─── Note Block (block ID 25) — Java: BlockNote.onBlockActivated() ─
-    // Increment meta 0-24 (wraps), play note sound
+    // Increment meta 0-24 (wraps), play note sound via TileEntityNote.triggerNote
     if (clickedBlockId == 25 && !isSneaking_) {
         int32_t by = static_cast<int32_t>(blockY);
         int meta = world->getBlockMetadata(blockX, by, blockZ);
         meta = (meta + 1) % 25;
         world->setBlockMetadata(blockX, by, blockZ, meta);
         server_.broadcastBlockChange(blockX, by, blockZ, 25, meta);
-        // Play note — instrument depends on block below
-        // Simplified: always harp
-        float pitch = static_cast<float>(std::pow(2.0, (meta - 12.0) / 12.0));
-        server_.broadcastSound("note.harp",
-            static_cast<double>(blockX) + 0.5, static_cast<double>(by) + 0.5,
-            static_cast<double>(blockZ) + 0.5, 3.0f, pitch);
-        // Send S28 block event for note block particle
-        server_.broadcastEffect(2005, blockX, by, blockZ, meta);
+        // Play note with proper instrument detection
+        server_.playNoteBlock(blockX, by, blockZ);
         return;
     }
 
@@ -4368,25 +4362,10 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
         return;
     }
 
-    // Note block (block ID 25) — Java: BlockNote.onBlockActivated()
+    // Note block (block ID 25) — Java: BlockNote.onBlockClicked()
+    // Left-click plays the note without changing pitch
     if (clickedBlockId == 25 && !isSneaking_) {
-        if (!server_.getWorlds().empty()) {
-            auto& world = server_.getWorlds()[0];
-            int32_t by = static_cast<int32_t>(blockY);
-            int meta = world->getBlockMetadata(blockX, by, blockZ);
-            int newMeta = (meta + 1) % 25; // 0-24 pitch range
-            world->setBlockMetadata(blockX, by, blockZ, newMeta);
-            // Play note — S28 Block Action (noteblock event)
-            float pitch = std::pow(2.0f, static_cast<float>(newMeta - 12) / 12.0f);
-            server_.broadcastSound("note.harp",
-                static_cast<double>(blockX) + 0.5, static_cast<double>(by) + 0.5,
-                static_cast<double>(blockZ) + 0.5, 3.0f, pitch);
-            // Spawn note particle
-            server_.broadcastParticle("note",
-                static_cast<float>(blockX) + 0.5f, static_cast<float>(by) + 1.2f,
-                static_cast<float>(blockZ) + 0.5f,
-                static_cast<float>(newMeta) / 24.0f, 0.0f, 0.0f, 0.0f, 1);
-        }
+        server_.playNoteBlock(blockX, static_cast<int32_t>(blockY), blockZ);
         return;
     }
 
@@ -4811,6 +4790,61 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
         // ─── Planks — wood type from damage ──────────────────────────
         case 5: {
             meta = itemDamage & 0x07; // 0=oak, 1=spruce, 2=birch, 3=jungle, 4=acacia, 5=dark_oak
+            break;
+        }
+
+        // ─── Rails — auto-connect to adjacent rails ─────────────────
+        // Java: BlockRailBase$Rail.func_150655_a (refreshTrackShape)
+        // Meta: 0=NS, 1=EW, 2=asc-east, 3=asc-west, 4=asc-north, 5=asc-south
+        //       6=SE curve, 7=SW curve, 8=NW curve, 9=NE curve (normal rail only)
+        case 66: case 27: case 28: case 157: {
+            auto isRailAt = [&](int32_t rx, int32_t ry, int32_t rz) -> bool {
+                int32_t id = server_.getBlockIdInWorld(rx, ry, rz);
+                return id == 66 || id == 27 || id == 28 || id == 157;
+            };
+
+            // Check 4 cardinal directions for adjacent rails (same level or one above)
+            bool hasN = isRailAt(placeX, placeY, placeZ - 1) || isRailAt(placeX, placeY + 1, placeZ - 1);
+            bool hasS = isRailAt(placeX, placeY, placeZ + 1) || isRailAt(placeX, placeY + 1, placeZ + 1);
+            bool hasW = isRailAt(placeX - 1, placeY, placeZ) || isRailAt(placeX - 1, placeY + 1, placeZ);
+            bool hasE = isRailAt(placeX + 1, placeY, placeZ) || isRailAt(placeX + 1, placeY + 1, placeZ);
+
+            bool isNormalRail = (placeBlockId == 66);
+
+            // Determine orientation from adjacent rails
+            if ((hasN || hasS) && !hasW && !hasE) {
+                meta = 0; // NS straight
+            } else if ((hasW || hasE) && !hasN && !hasS) {
+                meta = 1; // EW straight
+            } else if (isNormalRail) {
+                // Curves — only normal rail (66) can curve
+                if (hasS && hasE && !hasN && !hasW) meta = 6;      // SE curve
+                else if (hasS && hasW && !hasN && !hasE) meta = 7;  // SW curve
+                else if (hasN && hasW && !hasS && !hasE) meta = 8;  // NW curve
+                else if (hasN && hasE && !hasS && !hasW) meta = 9;  // NE curve
+                else if (hasN && hasS) meta = 0;                     // Prefer NS if both axes
+                else if (hasW && hasE) meta = 1;
+                else if (hasN || hasS) meta = 0;
+                else if (hasW || hasE) meta = 1;
+                else meta = 0; // Default NS
+            } else {
+                // Powered/detector/activator rails — no curves
+                if (hasN || hasS) meta = 0;
+                else if (hasW || hasE) meta = 1;
+                else meta = 0;
+            }
+
+            // Check for ascending slopes — Java: BlockRailBase$Rail ascending detection
+            // If flat and a rail exists one level up in line direction
+            if (meta == 0) { // NS flat
+                if (isRailAt(placeX, placeY + 1, placeZ + 1)) meta = 5;      // ascending south
+                else if (isRailAt(placeX, placeY + 1, placeZ - 1)) meta = 4;  // ascending north
+            }
+            if (meta == 1) { // EW flat
+                if (isRailAt(placeX + 1, placeY + 1, placeZ)) meta = 2;      // ascending east
+                else if (isRailAt(placeX - 1, placeY + 1, placeZ)) meta = 3;  // ascending west
+            }
+
             break;
         }
     }
