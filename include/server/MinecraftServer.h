@@ -537,6 +537,13 @@ public:
      */
     void pistonUpdateState(int32_t x, int32_t y, int32_t z, int32_t blockId);
 
+    /**
+     * Dispenser/Dropper fire — Java: BlockDispenser.func_149941_e()
+     * Called from redstoneNotifyNeighbors when dispenser (23) or dropper (158) receives power.
+     * Picks random occupied slot, dispenses item: arrows shoot, droppers drop/inject.
+     */
+    void dispenserFire(int32_t x, int32_t y, int32_t z, int32_t blockId);
+
     /** Get block ID at position, returns 0 if unloaded. */
     int32_t getBlockIdInWorld(int32_t x, int32_t y, int32_t z) const;
 

@@ -2757,6 +2757,25 @@ void MinecraftServer::redstoneNotifyNeighbors(int32_t x, int32_t y, int32_t z) {
             pistonUpdateState(x, y, z, selfId);
         }
     }
+
+    // ─── Dispenser/Dropper firing — Java: BlockDispenser.onNeighborBlockChange ──
+    // Check if any adjacent dispenser/dropper should fire
+    for (const auto& off : offsets) {
+        int32_t nx = x + off[0], ny = y + off[1], nz = z + off[2];
+        int32_t nId = getBlockIdInWorld(nx, ny, nz);
+        if (nId == mccpp::RedstoneBlocks::DISPENSER ||
+            nId == mccpp::RedstoneBlocks::DROPPER) {
+            dispenserFire(nx, ny, nz, nId);
+        }
+    }
+    // Self-check for dispenser/dropper placed next to power
+    {
+        int32_t selfId = getBlockIdInWorld(x, y, z);
+        if (selfId == mccpp::RedstoneBlocks::DISPENSER ||
+            selfId == mccpp::RedstoneBlocks::DROPPER) {
+            dispenserFire(x, y, z, selfId);
+        }
+    }
     --recursionDepth;
 }
 
@@ -2891,6 +2910,289 @@ void MinecraftServer::pistonUpdateState(int32_t x, int32_t y, int32_t z, int32_t
 
         // Trigger redstone updates around piston
         redstoneNotifyNeighbors(headX, headY, headZ);
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Dispenser/Dropper fire — Java: BlockDispenser.func_149941_e()
+// Instant fire on redstone power (skips 4-tick schedule for simplicity)
+// ═══════════════════════════════════════════════════════════════════════════
+
+void MinecraftServer::dispenserFire(int32_t x, int32_t y, int32_t z, int32_t blockId) {
+    if (worlds_.empty()) return;
+    auto& world = worlds_[0];
+
+    int32_t meta = getBlockMetaInWorld(x, y, z);
+    int32_t direction = meta & 0x07; // facing: 0=down,1=up,2=N,3=S,4=W,5=E
+    bool wasTriggered = (meta & 0x08) != 0;
+
+    // Check if receiving power (same as piston check pattern)
+    bool powered = false;
+    for (int face = 0; face < 6; ++face) {
+        int32_t nx = x + mccpp::FACING_OFFSETS[face].dx;
+        int32_t ny = y + mccpp::FACING_OFFSETS[face].dy;
+        int32_t nz = z + mccpp::FACING_OFFSETS[face].dz;
+        int32_t adjId = getBlockIdInWorld(nx, ny, nz);
+        int32_t adjMeta = getBlockMetaInWorld(nx, ny, nz);
+        if (adjId == mccpp::RedstoneBlocks::REDSTONE_WIRE && adjMeta > 0) { powered = true; break; }
+        if (adjId == mccpp::RedstoneBlocks::REDSTONE_TORCH_ON) { powered = true; break; }
+        if (adjId == mccpp::RedstoneBlocks::REDSTONE_BLOCK) { powered = true; break; }
+        if (adjId == mccpp::RedstoneBlocks::LEVER && mccpp::PowerSource::isLeverPowered(adjMeta)) {
+            powered = true; break;
+        }
+        if ((adjId == mccpp::RedstoneBlocks::STONE_BUTTON ||
+             adjId == mccpp::RedstoneBlocks::WOODEN_BUTTON) && (adjMeta & 0x08)) {
+            powered = true; break;
+        }
+        if (adjId == mccpp::RedstoneBlocks::REDSTONE_REPEATER_ON) {
+            // Check repeater facing toward this block
+            int32_t repFacing = adjMeta & 0x3;
+            int32_t oppFace = mccpp::OPPOSITE_FACE[face];
+            int32_t repOutFace = -1;
+            switch (repFacing) {
+                case 0: repOutFace = 3; break;
+                case 1: repOutFace = 4; break;
+                case 2: repOutFace = 2; break;
+                case 3: repOutFace = 5; break;
+            }
+            if (repOutFace == oppFace) { powered = true; break; }
+        }
+    }
+    // Also check block above (Java: world.isBlockIndirectlyGettingPowered checks all + above)
+    {
+        int32_t aboveId = getBlockIdInWorld(x, y + 1, z);
+        int32_t aboveMeta = getBlockMetaInWorld(x, y + 1, z);
+        if (aboveId == mccpp::RedstoneBlocks::REDSTONE_WIRE && aboveMeta > 0) powered = true;
+        if (aboveId == mccpp::RedstoneBlocks::REDSTONE_TORCH_ON) powered = true;
+    }
+
+    // Java: triggered on rising edge only (powered && !wasTriggered)
+    if (powered && !wasTriggered) {
+        // Set triggered bit
+        world->setBlockMetadata(x, y, z, meta | 0x08);
+        broadcastBlockChange(x, y, z, blockId, meta | 0x08);
+
+        // Get dispenser inventory
+        int64_t posKey = packBlockPos(x, y, z);
+        auto& disp = getOrCreateDispenser(posKey);
+
+        // Pick random non-empty slot — Java: TileEntityDispenser.func_146017_i()
+        std::vector<int> occupiedSlots;
+        for (int i = 0; i < 9; ++i) {
+            if (disp.slots[i].has_value() && disp.slots[i]->getStackSize() > 0) {
+                occupiedSlots.push_back(i);
+            }
+        }
+
+        if (occupiedSlots.empty()) {
+            // Empty dispenser: click sound — Java: world.playAuxSFX(1001)
+            broadcastSound("random.click",
+                static_cast<double>(x) + 0.5, static_cast<double>(y) + 0.5,
+                static_cast<double>(z) + 0.5, 1.0f, 1.2f);
+            return;
+        }
+
+        // Random slot selection
+        int slotIdx = occupiedSlots[static_cast<int>(
+            std::chrono::steady_clock::now().time_since_epoch().count() % occupiedSlots.size())];
+        auto& stack = disp.slots[slotIdx];
+        int32_t itemId = stack->getItemId();
+        int32_t itemDamage = stack->getDamage();
+
+        // Face offset for dispensing position
+        int32_t dx = mccpp::FACING_OFFSETS[direction].dx;
+        int32_t dy = mccpp::FACING_OFFSETS[direction].dy;
+        int32_t dz = mccpp::FACING_OFFSETS[direction].dz;
+        double spawnX = static_cast<double>(x) + 0.5 + static_cast<double>(dx) * 0.7;
+        double spawnY = static_cast<double>(y) + 0.5 + static_cast<double>(dy) * 0.7;
+        double spawnZ = static_cast<double>(z) + 0.5 + static_cast<double>(dz) * 0.7;
+
+        bool isDropper = (blockId == mccpp::RedstoneBlocks::DROPPER);
+
+        if (isDropper) {
+            // Dropper: try to inject into adjacent inventory, else drop as entity
+            // Check if facing a container (chest, furnace, hopper, dispenser, dropper)
+            int32_t targetX = x + dx, targetY = y + dy, targetZ = z + dz;
+            int32_t targetBlock = getBlockIdInWorld(targetX, targetY, targetZ);
+
+            bool injected = false;
+            // Try injecting into chest
+            if (targetBlock == 54 || targetBlock == 146) { // chest, trapped chest
+                auto& chest = getOrCreateChest(targetX, targetY, targetZ);
+                for (int i = 0; i < 27; ++i) {
+                    if (!chest[i].has_value()) {
+                        chest[i] = ItemStack(itemId, 1, itemDamage);
+                        injected = true;
+                        break;
+                    } else if (chest[i]->getItemId() == itemId &&
+                               chest[i]->getDamage() == itemDamage &&
+                               chest[i]->getStackSize() < 64) {
+                        chest[i]->setStackSize(chest[i]->getStackSize() + 1);
+                        injected = true;
+                        break;
+                    }
+                }
+            }
+            // Try furnace
+            else if (targetBlock == 61 || targetBlock == 62) { // furnace
+                auto& furnace = getOrCreateFurnace(targetX, targetY, targetZ);
+                // Try input slot first (0), then fuel slot (1)
+                for (int slot : {0, 1}) {
+                    if (!furnace.slots[slot].has_value()) {
+                        furnace.slots[slot] = ItemStack(itemId, 1, itemDamage);
+                        injected = true;
+                        break;
+                    } else if (furnace.slots[slot]->getItemId() == itemId &&
+                               furnace.slots[slot]->getDamage() == itemDamage &&
+                               furnace.slots[slot]->getStackSize() < 64) {
+                        furnace.slots[slot]->setStackSize(furnace.slots[slot]->getStackSize() + 1);
+                        injected = true;
+                        break;
+                    }
+                }
+            }
+            // Try hopper
+            else if (targetBlock == 154) {
+                auto& hopper = getOrCreateHopper(packBlockPos(targetX, targetY, targetZ));
+                for (int i = 0; i < 5; ++i) {
+                    if (!hopper.slots[i].has_value()) {
+                        hopper.slots[i] = ItemStack(itemId, 1, itemDamage);
+                        injected = true;
+                        break;
+                    } else if (hopper.slots[i]->getItemId() == itemId &&
+                               hopper.slots[i]->getDamage() == itemDamage &&
+                               hopper.slots[i]->getStackSize() < 64) {
+                        hopper.slots[i]->setStackSize(hopper.slots[i]->getStackSize() + 1);
+                        injected = true;
+                        break;
+                    }
+                }
+            }
+            // Try dispenser/dropper
+            else if (targetBlock == 23 || targetBlock == 158) {
+                auto& targetDisp = getOrCreateDispenser(packBlockPos(targetX, targetY, targetZ));
+                for (int i = 0; i < 9; ++i) {
+                    if (!targetDisp.slots[i].has_value()) {
+                        targetDisp.slots[i] = ItemStack(itemId, 1, itemDamage);
+                        injected = true;
+                        break;
+                    } else if (targetDisp.slots[i]->getItemId() == itemId &&
+                               targetDisp.slots[i]->getDamage() == itemDamage &&
+                               targetDisp.slots[i]->getStackSize() < 64) {
+                        targetDisp.slots[i]->setStackSize(targetDisp.slots[i]->getStackSize() + 1);
+                        injected = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!injected) {
+                // Drop as entity
+                spawnItemDrop(spawnX, spawnY, spawnZ, itemId, itemDamage, 1);
+            }
+        } else {
+            // Dispenser: behavior depends on item type
+            // Java: BehaviorProjectileDispense for arrows, snowballs, eggs, etc.
+            switch (itemId) {
+                case 262: { // Arrow — spawn arrow projectile
+                    spawnArrow(spawnX, spawnY, spawnZ,
+                        static_cast<double>(dx), static_cast<double>(dy),
+                        static_cast<double>(dz),
+                        -1, 2.0, 0, false, 1.1f, 6.0f);
+                    break;
+                }
+                case 332: { // Snowball
+                    spawnThrowable(ThrowableType::Snowball, spawnX, spawnY, spawnZ,
+                        static_cast<double>(dx) * 1.1, static_cast<double>(dy) * 1.1,
+                        static_cast<double>(dz) * 1.1,
+                        -1, "");
+                    break;
+                }
+                case 344: { // Egg
+                    spawnThrowable(ThrowableType::Egg, spawnX, spawnY, spawnZ,
+                        static_cast<double>(dx) * 1.1, static_cast<double>(dy) * 1.1,
+                        static_cast<double>(dz) * 1.1,
+                        -1, "");
+                    break;
+                }
+                case 384: { // Exp bottle
+                    spawnThrowable(ThrowableType::ExpBottle, spawnX, spawnY, spawnZ,
+                        static_cast<double>(dx) * 1.1, static_cast<double>(dy) * 1.1,
+                        static_cast<double>(dz) * 1.1,
+                        -1, "");
+                    break;
+                }
+                case 385: { // Fire charge — set fire at target position
+                    int32_t fx = x + dx, fy = y + dy, fz = z + dz;
+                    if (getBlockIdInWorld(fx, fy, fz) == 0) {
+                        setBlockInWorld(fx, fy, fz, 51, 0); // fire block
+                    }
+                    broadcastSound("mob.ghast.fireball",
+                        static_cast<double>(x) + 0.5, static_cast<double>(y) + 0.5,
+                        static_cast<double>(z) + 0.5, 1.0f, 1.0f);
+                    break;
+                }
+                case 326: { // Water bucket — place water source
+                    int32_t wx = x + dx, wy = y + dy, wz = z + dz;
+                    if (getBlockIdInWorld(wx, wy, wz) == 0) {
+                        setBlockInWorld(wx, wy, wz, 9, 0); // still water
+                    }
+                    // Replace with empty bucket in slot
+                    stack = ItemStack(325, 1, 0); // empty bucket
+                    // Sound
+                    broadcastSound("random.splash",
+                        static_cast<double>(wx) + 0.5, static_cast<double>(wy) + 0.5,
+                        static_cast<double>(wz) + 0.5, 1.0f, 1.0f);
+                    return; // Don't consume — we replaced item
+                }
+                case 327: { // Lava bucket — place lava source
+                    int32_t lx = x + dx, ly = y + dy, lz = z + dz;
+                    if (getBlockIdInWorld(lx, ly, lz) == 0) {
+                        setBlockInWorld(lx, ly, lz, 11, 0); // still lava
+                    }
+                    stack = ItemStack(325, 1, 0); // empty bucket
+                    broadcastSound("random.splash",
+                        static_cast<double>(lx) + 0.5, static_cast<double>(ly) + 0.5,
+                        static_cast<double>(lz) + 0.5, 1.0f, 1.0f);
+                    return; // Don't consume  
+                }
+                case 46: { // TNT — ignite TNT
+                    // Place and immediately ignite at target
+                    createExplosion(
+                        static_cast<double>(x + dx) + 0.5,
+                        static_cast<double>(y + dy) + 0.5,
+                        static_cast<double>(z + dz) + 0.5,
+                        4.0f, true, true);
+                    break;
+                }
+                default: {
+                    // Default behavior: drop item as entity
+                    spawnItemDrop(spawnX, spawnY, spawnZ, itemId, itemDamage, 1);
+                    break;
+                }
+            }
+        }
+
+        // Consume 1 item from the slot
+        int32_t remaining = stack->getStackSize() - 1;
+        if (remaining <= 0) {
+            disp.slots[slotIdx] = std::nullopt;
+        } else {
+            stack->setStackSize(remaining);
+        }
+
+        // Sound effect — Java: random.click
+        broadcastSound("random.click",
+            static_cast<double>(x) + 0.5, static_cast<double>(y) + 0.5,
+            static_cast<double>(z) + 0.5, 1.0f, 1.0f);
+
+        // Smoke particle — Java: effect 2000 with data = direction
+        broadcastEffect(2000, x, y, z, direction);
+    }
+    else if (!powered && wasTriggered) {
+        // Clear triggered bit on power loss
+        world->setBlockMetadata(x, y, z, meta & ~0x08);
+        broadcastBlockChange(x, y, z, blockId, meta & ~0x08);
     }
 }
 
