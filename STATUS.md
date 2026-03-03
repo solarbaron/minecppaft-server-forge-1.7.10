@@ -143,8 +143,16 @@
 - ❌ No mob AI execution
 
 ### Redstone
-- 451 lines, signal propagation framework
-- ❌ Not connected to block updates
+- ✅ **Wire propagation** — signal strength 0-15, recursive neighbor updates, max power from sources
+- ✅ **Torch toggle** — inverts power from attached block, burnout protection (8 toggles in 60 ticks → OFF + smoke)
+- ✅ **Repeater delay** — 1-4 tick delay, scheduled tick system, repeater locking (side input freezes state)
+- ✅ **Comparator** — compare/subtract modes, rear + side signal levels, container input override (chest/furnace/hopper/dispenser/dropper/brewing stand/cauldron), through-block container reading
+- ✅ **Pistons** — normal/sticky extend+retract, 12-block push limit, unpushable blocks, head placement
+- ✅ **Dispensers/Droppers** — 9-slot storage, random slot selection, dropper inject-or-drop, item type behaviors
+- ✅ **Note blocks** — redstone activation, pitch cycle, instrument from block below
+- ✅ **Redstone lamps** — ON/OFF toggle from power state
+- ✅ **Power sources** — lever, button, pressure plate, redstone block, redstone torch, repeater, comparator
+- ❌ Tripwire / detector rail (need entity AABB detection)
 
 ### Tile Entities
 - 121 lines + 578-line header
@@ -287,7 +295,7 @@
 | command | 560 | ~1,600 | 21 commands, fully functional with game effects |
 | item | 426 | ~1,200 | Registry only |
 | forge | 440 | ~1,000 | JNI bridge skeleton |
-| redstone | 451 | ~800 | Framework only |
+| redstone | 1,500+ | ~800 | Wire + torch + repeater + comparator + piston + dispenser |
 | entity | 489 | ~8,000 | Constructors + position only |
 | crafting | 348 | ~300 | Basic recipes working |
 | biome | 355 | ~300 | Registry only |

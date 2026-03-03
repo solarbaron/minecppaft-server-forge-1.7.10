@@ -3489,6 +3489,64 @@ void MinecraftServer::dispenserFire(int32_t x, int32_t y, int32_t z, int32_t blo
                         4.0f, true, true);
                     break;
                 }
+                case 383: { // Spawn Egg — spawn mob of type from damage value
+                    // Java: BehaviorMobEggDispense
+                    int32_t mobType = itemDamage;
+                    if (mobType > 0) {
+                        summonMob(static_cast<uint8_t>(mobType),
+                            spawnX, spawnY, spawnZ);
+                    }
+                    break;
+                }
+                case 259: { // Flint and Steel — place fire or ignite TNT
+                    int32_t fx = x + dx, fy = y + dy, fz = z + dz;
+                    int32_t targetId = getBlockIdInWorld(fx, fy, fz);
+                    if (targetId == 0) {
+                        setBlockInWorld(fx, fy, fz, 51, 0); // fire block
+                    } else if (targetId == 46) {
+                        // TNT ignition
+                        setBlockInWorld(fx, fy, fz, 0, 0);
+                        createExplosion(
+                            static_cast<double>(fx) + 0.5,
+                            static_cast<double>(fy) + 0.5,
+                            static_cast<double>(fz) + 0.5,
+                            4.0f, true, true);
+                    }
+                    broadcastSound("fire.ignite",
+                        static_cast<double>(x) + 0.5, static_cast<double>(y) + 0.5,
+                        static_cast<double>(z) + 0.5, 1.0f, 1.0f);
+                    // Damage flint and steel instead of consuming
+                    if (stack->getDamage() + 1 >= 65) { // max durability 64
+                        disp.slots[slotIdx] = std::nullopt;
+                    } else {
+                        stack->setDamage(stack->getDamage() + 1);
+                    }
+                    return; // Don't consume normally
+                }
+                case 351: { // Dye — bonemeal (damage 15) grows crops at target
+                    if (itemDamage == 15) {
+                        int32_t tx = x + dx, ty = y + dy, tz = z + dz;
+                        int32_t targetId = getBlockIdInWorld(tx, ty, tz);
+                        int32_t targetMeta = getBlockMetaInWorld(tx, ty, tz);
+                        bool grew = false;
+                        // Wheat/carrot/potato
+                        if ((targetId == 59 || targetId == 141 || targetId == 142) && targetMeta < 7) {
+                            int32_t growth = targetMeta + 2 + (std::rand() % 4); // +2-5
+                            if (growth > 7) growth = 7;
+                            setBlockInWorld(tx, ty, tz, targetId, growth);
+                            grew = true;
+                        }
+                        // Sapling
+                        else if (targetId == 6 && !(targetMeta & 0x08)) {
+                            setBlockInWorld(tx, ty, tz, targetId, targetMeta | 0x08);
+                            grew = true;
+                        }
+                        if (grew) {
+                            broadcastEffect(2005, tx, ty, tz, 0); // green particles
+                        }
+                    }
+                    break;
+                }
                 default: {
                     // Default behavior: drop item as entity
                     spawnItemDrop(spawnX, spawnY, spawnZ, itemId, itemDamage, 1);
