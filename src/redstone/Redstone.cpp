@@ -440,6 +440,41 @@ bool PistonMechanics::isIndirectlyPowered(int32_t x, int32_t y, int32_t z,
             }
             if (repOutputFace == oppFace) return true;
         }
+
+        // Powered comparator facing this piston
+        if (blockId == RedstoneBlocks::REDSTONE_COMPARATOR_ON) {
+            int32_t compMeta = getMeta(nx, ny, nz);
+            int32_t compFacing = compMeta & 0x3;
+            int32_t oppFace = OPPOSITE_FACE[face];
+            int32_t compOutputFace = -1;
+            switch (compFacing) {
+                case 0: compOutputFace = 3; break;
+                case 1: compOutputFace = 4; break;
+                case 2: compOutputFace = 2; break;
+                case 3: compOutputFace = 5; break;
+            }
+            if (compOutputFace == oppFace) return true;
+        }
+
+        // Lever
+        if (blockId == RedstoneBlocks::LEVER) {
+            int32_t levMeta = getMeta(nx, ny, nz);
+            if (PowerSource::isLeverPowered(levMeta)) return true;
+        }
+
+        // Buttons
+        if (blockId == RedstoneBlocks::STONE_BUTTON || blockId == RedstoneBlocks::WOODEN_BUTTON) {
+            int32_t btnMeta = getMeta(nx, ny, nz);
+            if (btnMeta & 0x08) return true;
+        }
+
+        // Pressure plates
+        if (blockId == RedstoneBlocks::STONE_PRESSURE_PLATE ||
+            blockId == RedstoneBlocks::WOODEN_PRESSURE_PLATE ||
+            blockId == 147 || blockId == 148) {
+            int32_t pMeta = getMeta(nx, ny, nz);
+            if (pMeta & 0x01) return true;
+        }
     }
 
     // Special case: check block below for redstone (Java BUD-style)

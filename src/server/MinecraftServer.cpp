@@ -2645,6 +2645,21 @@ void MinecraftServer::redstoneNotifyNeighbors(int32_t x, int32_t y, int32_t z) {
                 else if ((adjId == mccpp::RedstoneBlocks::STONE_BUTTON ||
                           adjId == mccpp::RedstoneBlocks::WOODEN_BUTTON) &&
                          (adjMeta & 0x08)) powered = true;
+                // Comparator ON — directional output like repeater
+                else if (adjId == mccpp::RedstoneBlocks::REDSTONE_COMPARATOR_ON) {
+                    int32_t compFacing = adjMeta & 0x3;
+                    int32_t compOutFace;
+                    switch (compFacing) {
+                        case 0: compOutFace = 3; break;
+                        case 1: compOutFace = 4; break;
+                        case 2: compOutFace = 2; break;
+                        default: compOutFace = 5; break;
+                    }
+                    if (compOutFace == mccpp::OPPOSITE_FACE[f]) powered = true;
+                }
+                // Pressure plates — provides power when active
+                else if ((adjId == 70 || adjId == 72 || adjId == 147 || adjId == 148) &&
+                         (adjMeta & 0x01)) powered = true;
             }
             int32_t newLampId = powered ? mccpp::RedstoneBlocks::REDSTONE_LAMP_ON
                                         : mccpp::RedstoneBlocks::REDSTONE_LAMP_OFF;
@@ -2809,6 +2824,13 @@ void MinecraftServer::redstoneNotifyNeighbors(int32_t x, int32_t y, int32_t z) {
             if (adjId == mccpp::RedstoneBlocks::REDSTONE_REPEATER_ON) {
                 powered = true; break;
             }
+            if (adjId == mccpp::RedstoneBlocks::REDSTONE_COMPARATOR_ON) {
+                powered = true; break;
+            }
+            if ((adjId == 70 || adjId == 72 || adjId == 147 || adjId == 148) &&
+                (adjMeta & 0x01)) {
+                powered = true; break;
+            }
         }
         if (powered) {
             // Java: onBlockDestroyedByPlayer(world, x,y,z, 1) → func_150114_a → spawn EntityTNTPrimed
@@ -2857,6 +2879,9 @@ void MinecraftServer::redstoneNotifyNeighbors(int32_t x, int32_t y, int32_t z) {
                 powered = true; break;
             }
             if (adjId == mccpp::RedstoneBlocks::REDSTONE_REPEATER_ON) { powered = true; break; }
+            if (adjId == mccpp::RedstoneBlocks::REDSTONE_COMPARATOR_ON) { powered = true; break; }
+            if ((adjId == 70 || adjId == 72 || adjId == 147 || adjId == 148) &&
+                (adjMeta & 0x01)) { powered = true; break; }
         }
         if (powered) {
             playNoteBlock(nx, ny, nz);
