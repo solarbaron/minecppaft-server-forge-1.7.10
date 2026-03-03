@@ -421,6 +421,19 @@ namespace PacketBuilder {
         return w.toFramed();
     }
 
+    // ─── 0x1C Entity Metadata (arbitrary byte at index) ───
+    // Java: S1CPacketEntityMetadata — single DataWatcher byte entry
+    // Used for: sheep fleece color (index 16), wolf collar color, etc.
+    inline std::vector<uint8_t> entityMetadataByte(int32_t entityId, uint8_t index, uint8_t value) {
+        PacketWriter w(ClientboundPacket::EntityMetadata);
+        w.writeVarInt(entityId);
+        // DataWatcher entry: type<<5 | index, where type=0 (byte)
+        w.writeUByte((0 << 5) | (index & 0x1F));
+        w.writeUByte(value);
+        w.writeUByte(0x7F); // End of metadata
+        return w.toFramed();
+    }
+
     // ─── 0x3A Tab Complete ───
     // Java: S3APacketTabComplete
     inline std::vector<uint8_t> tabComplete(const std::vector<std::string>& completions) {

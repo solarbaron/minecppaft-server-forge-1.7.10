@@ -423,6 +423,7 @@ public:
      * Java reference: EntityPlayerMP.attackTargetEntityWithCurrentItem()
      */
     void handlePlayerAttack(PlayHandler& attacker, Connection& attackerConn, int32_t targetEntityId);
+    void handleEntityInteract(PlayHandler& player, Connection& conn, int32_t targetEntityId);
 
     /**
      * Teleport a player to a position. Sends S08 PlayerPosAndLook.
@@ -624,6 +625,9 @@ private:
         // Movement tracking — Java: EntityTrackerEntry last sent position
         int32_t lastSentPosX = 0, lastSentPosY = 0, lastSentPosZ = 0;
         int32_t ticksSinceLastTeleport = 0;
+        // Sheep state — Java: EntitySheep dataWatcher(16)
+        int32_t fleeceColor = 0;  // 0=white, 1=orange, ... 15=black
+        bool isSheared = false;   // true = wool already sheared off
     };
     mutable std::mutex mobEntitiesMutex_;
     std::vector<SpawnedMob> mobEntities_;

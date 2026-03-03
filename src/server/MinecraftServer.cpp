@@ -1843,8 +1843,13 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
                         case 90: // Pig → raw porkchop (319) / cooked (320) if on fire
                             dropId = mob.isOnFire ? 320 : 319;
                             baseCount = 1 + (rand() % 3); break;
-                        case 91: // Sheep → wool (35)
-                            dropId = 35; baseCount = 1; break;
+                        case 91: // Sheep → wool (35) only if not sheared
+                            // Java: EntitySheep.dropFewItems — only drops wool if !getSheared()
+                            if (!mob.isSheared) {
+                                dropId = 35; baseCount = 1;
+                                dropMeta = mob.fleeceColor;  // Wool color
+                            }
+                            break;
                         case 93: // Chicken → feather (288) + raw chicken (365) / cooked (366) if on fire
                             dropId = 288; baseCount = 1 + (rand() % 2);
                             spawnItemDrop(mob.posX, mob.posY, mob.posZ,
@@ -2034,6 +2039,55 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
 
         // Set player to dead state (will respawn on ClientStatus packet)
         // The client will show the death screen and send C16 ClientStatus(0)
+    }
+}
+
+void MinecraftServer::handleEntityInteract(PlayHandler& player, Connection& conn, int32_t targetEntityId) {
+    // Java: EntityPlayer.interactWith(targetEntity)
+    // Currently handles: sheep shearing (item 359 on mob type 91)
+    auto heldItem = player.getHeldItem();
+    if (!heldItem) return;
+    int32_t heldId = heldItem->getItemId();
+
+    // ─── Sheep shearing — Java: EntitySheep.interact() ──────────────
+    if (heldId == 359) {  // Shears
+        std::lock_guard<std::mutex> lock(mobEntitiesMutex_);
+        for (auto& mob : mobEntities_) {
+            if (mob.entityId != targetEntityId) continue;
+            if (mob.isDead || mob.mobType != 91) break;  // Not a sheep
+            if (mob.isSheared) break;  // Already sheared
+
+            // Java: EntitySheep.interact() — set sheared, drop 1-3 wool
+            mob.isSheared = true;
+            int32_t woolCount = 1 + (rand() % 3);  // 1-3 wool blocks
+
+            for (int i = 0; i < woolCount; ++i) {
+                // Wool block = ID 35, metadata = fleece color
+                // Java: entityDropItem with slight random motion
+                double dropX = mob.posX + ((rand() % 100 - 50) / 500.0);
+                double dropZ = mob.posZ + ((rand() % 100 - 50) / 500.0);
+                spawnItemDrop(dropX, mob.posY + 1.0, dropZ, 35, mob.fleeceColor, 1);
+            }
+
+            // Damage shears by 1 — Java: ItemStack.damageItem(1, entity)
+            player.damageHeldItem(1);
+            player.sendWindowItems(conn);  // Sync inventory
+
+            // Play shear sound — Java: mob.sheep.shear
+            broadcastSound("mob.sheep.shear", mob.posX, mob.posY, mob.posZ, 1.0f, 1.0f);
+
+            // Send S1C EntityMetadata — update DataWatcher byte 16 (sheared bit 0x10)
+            {
+                uint8_t dw16 = static_cast<uint8_t>((mob.fleeceColor & 0x0F) | 0x10);
+                auto metaPkt = PacketBuilder::entityMetadataByte(mob.entityId, 16, dw16);
+                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                for (auto& c : connections_) {
+                    if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
+                    c->sendPacket(metaPkt);  // Copy to each client
+                }
+            }
+            break;
+        }
     }
 }
 
@@ -2699,6 +2753,17 @@ void MinecraftServer::spawnPassiveMobs() {
     mob.lastSentPosY = static_cast<int32_t>(std::floor(spawnY * 32.0));
     mob.lastSentPosZ = static_cast<int32_t>(std::floor(spawnZ * 32.0));
 
+    // Java: EntitySheep.getRandomFleeceColor() — random sheep color
+    if (mobType == 91) {
+        int r = rng() % 100;
+        if (r < 5)       mob.fleeceColor = 15; // Black (5%)
+        else if (r < 10) mob.fleeceColor = 7;  // Light gray (5%)
+        else if (r < 15) mob.fleeceColor = 8;  // Gray (5%)
+        else if (r < 18) mob.fleeceColor = 12; // Brown (3%)
+        else if (rng() % 500 == 0) mob.fleeceColor = 6; // Pink (rare)
+        else             mob.fleeceColor = 0;  // White (most common)
+    }
+
     // Broadcast S0F SpawnMob to all players
     {
         std::lock_guard<std::mutex> lock(connectionsMutex_);
@@ -2709,6 +2774,12 @@ void MinecraftServer::spawnPassiveMobs() {
             if (ph) {
                 ph->sendSpawnMob(*conn, eid, mobType, spawnX, spawnY, spawnZ,
                                   yaw, 0.0f, yaw);
+                // Sheep: send DataWatcher byte 16 (fleeceColor)
+                if (mobType == 91) {
+                    uint8_t dw16 = static_cast<uint8_t>(mob.fleeceColor & 0x0F);
+                    auto metaPkt = PacketBuilder::entityMetadataByte(eid, 16, dw16);
+                    conn->sendPacket(std::move(metaPkt));
+                }
             }
         }
     }

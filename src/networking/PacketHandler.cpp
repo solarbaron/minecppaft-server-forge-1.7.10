@@ -5791,8 +5791,12 @@ void PlayHandler::handleUseEntity(const uint8_t* data, size_t length, Connection
     if (action == 1) {
         // ATTACK — Java: EntityPlayer.attackTargetEntityWithCurrentItem()
         server_.handlePlayerAttack(*this, conn, targetEntityId);
+    } else if (action == 0) {
+        // INTERACT — Java: EntityPlayer.interactWith(entity)
+        // Used for: shearing sheep, feeding animals, trading with villagers, etc.
+        server_.handleEntityInteract(*this, conn, targetEntityId);
     }
-    // action 0 (interact) and 2 (interact_at) not implemented yet
+    // action 2 (interact_at) not implemented yet
 }
 
 void PlayHandler::handleClientStatus(const uint8_t* data, size_t length, Connection& conn) {
