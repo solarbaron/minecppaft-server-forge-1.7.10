@@ -20,6 +20,7 @@
 #include "networking/TcpListener.h"
 #include "mechanics/FoodStats.h"
 #include "world/World.h"
+#include "redstone/Redstone.h"
 
 #include <algorithm>
 #include <cstring>
@@ -2573,6 +2574,324 @@ int32_t MinecraftServer::getBlockIdInWorld(int32_t x, int32_t y, int32_t z) cons
 int32_t MinecraftServer::getBlockMetaInWorld(int32_t x, int32_t y, int32_t z) const {
     if (worlds_.empty()) return 0;
     return worlds_[0]->getBlockMetadata(x, y, z);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Redstone signal propagation — Java: World.notifyBlocksOfNeighborChange()
+// Called when a redstone-relevant block changes (lever toggle, wire place/break,
+// torch state change, repeater state change, etc.)
+// ═══════════════════════════════════════════════════════════════════════════
+
+void MinecraftServer::redstoneNotifyNeighbors(int32_t x, int32_t y, int32_t z) {
+    // Recursion guard — prevent infinite loops from torch↔wire cascades
+    // Java doesn't have this exact guard but torch burnout (8 toggles in 60 ticks) limits it
+    static thread_local int32_t recursionDepth = 0;
+    if (recursionDepth >= 64) return; // Max propagation depth
+    ++recursionDepth;
+
+    if (worlds_.empty()) { --recursionDepth; return; }
+    auto& world = worlds_[0];
+
+    // Build callbacks for the RedstoneSignal engine
+    auto getBlockFn = [this](int32_t bx, int32_t by, int32_t bz) -> int32_t {
+        return getBlockIdInWorld(bx, by, bz);
+    };
+    auto getMetaFn = [this](int32_t bx, int32_t by, int32_t bz) -> int32_t {
+        return getBlockMetaInWorld(bx, by, bz);
+    };
+    auto setMetaFn = [this, &world](int32_t bx, int32_t by, int32_t bz, int32_t meta) {
+        world->setBlockMetadata(bx, by, bz, meta);
+        // Wire block ID stays 55; broadcast new power level (meta = signal 0-15)
+        broadcastBlockChange(bx, by, bz, mccpp::RedstoneBlocks::REDSTONE_WIRE, meta);
+    };
+    auto notifyFn = [this](int32_t bx, int32_t by, int32_t bz) {
+        // Check if a redstone lamp (123/124) needs to toggle
+        int32_t nId = getBlockIdInWorld(bx, by, bz);
+        if (nId == mccpp::RedstoneBlocks::REDSTONE_LAMP_OFF ||
+            nId == mccpp::RedstoneBlocks::REDSTONE_LAMP_ON) {
+            // Check if any adjacent block provides power to this lamp
+            bool powered = false;
+            for (int f = 0; f < 6 && !powered; ++f) {
+                int32_t ax = bx + mccpp::FACING_OFFSETS[f].dx;
+                int32_t ay = by + mccpp::FACING_OFFSETS[f].dy;
+                int32_t az = bz + mccpp::FACING_OFFSETS[f].dz;
+                int32_t adjId = getBlockIdInWorld(ax, ay, az);
+                int32_t adjMeta = getBlockMetaInWorld(ax, ay, az);
+                // Direct power sources
+                if (adjId == mccpp::RedstoneBlocks::REDSTONE_BLOCK) powered = true;
+                else if (adjId == mccpp::RedstoneBlocks::REDSTONE_TORCH_ON) powered = true;
+                else if (adjId == mccpp::RedstoneBlocks::REDSTONE_WIRE && adjMeta > 0) powered = true;
+                else if (adjId == mccpp::RedstoneBlocks::LEVER && mccpp::PowerSource::isLeverPowered(adjMeta)) powered = true;
+                else if (adjId == mccpp::RedstoneBlocks::REDSTONE_REPEATER_ON) {
+                    // Check if repeater faces toward this lamp
+                    int32_t repFacing = adjMeta & 0x3;
+                    int32_t repOutFace;
+                    switch (repFacing) {
+                        case 0: repOutFace = 3; break; // S
+                        case 1: repOutFace = 4; break; // W
+                        case 2: repOutFace = 2; break; // N
+                        default: repOutFace = 5; break; // E
+                    }
+                    if (repOutFace == mccpp::OPPOSITE_FACE[f]) powered = true;
+                }
+                else if ((adjId == mccpp::RedstoneBlocks::STONE_BUTTON ||
+                          adjId == mccpp::RedstoneBlocks::WOODEN_BUTTON) &&
+                         (adjMeta & 0x08)) powered = true;
+            }
+            int32_t newLampId = powered ? mccpp::RedstoneBlocks::REDSTONE_LAMP_ON
+                                        : mccpp::RedstoneBlocks::REDSTONE_LAMP_OFF;
+            if (newLampId != nId) {
+                setBlockInWorld(bx, by, bz, newLampId, 0);
+            }
+        }
+    };
+    auto isSolidFn = [this](int32_t bx, int32_t by, int32_t bz) -> bool {
+        int32_t id = getBlockIdInWorld(bx, by, bz);
+        // Java: Block.isNormalCube() — simplified for common solid blocks
+        if (id == 0) return false; // air
+        // Non-solid: wire, torch, repeater, comparator, rail, flower, glass pane,
+        // slab (lower), fence, ladder, sign, chest, snow layer, button, pressure plate, etc.
+        switch (id) {
+            case 6: case 18: case 20: case 26: case 27: case 28: case 30: case 31:
+            case 32: case 34: case 36: case 37: case 38: case 39: case 40: case 44:
+            case 50: case 51: case 55: case 59: case 63: case 64: case 65: case 66:
+            case 68: case 69: case 70: case 71: case 72: case 75: case 76: case 77:
+            case 78: case 83: case 85: case 90: case 92: case 93: case 94: case 96:
+            case 101: case 102: case 104: case 105: case 106: case 107: case 111:
+            case 113: case 115: case 117: case 119: case 126: case 127: case 131:
+            case 132: case 139: case 140: case 141: case 142: case 143: case 144:
+            case 145: case 147: case 148: case 149: case 150: case 151: case 154:
+            case 157: case 160: case 161: case 167: case 171: case 175:
+                return false;
+            default:
+                return true; // Most blocks are solid
+        }
+    };
+
+    // ─── Update adjacent redstone wire ────────────────────────────────
+    // Check all 6 neighbors + diagonals for wire and update it
+    constexpr int32_t offsets[6][3] = {{-1,0,0},{1,0,0},{0,-1,0},{0,1,0},{0,0,-1},{0,0,1}};
+    for (const auto& off : offsets) {
+        int32_t nx = x + off[0], ny = y + off[1], nz = z + off[2];
+        int32_t nId = getBlockIdInWorld(nx, ny, nz);
+        if (nId == mccpp::RedstoneBlocks::REDSTONE_WIRE) {
+            mccpp::RedstoneSignal::updateSurroundingRedstone(
+                nx, ny, nz, getBlockFn, getMetaFn, setMetaFn, notifyFn, isSolidFn);
+        }
+    }
+
+    // ─── Also check for wire at this exact position ──────────────────
+    if (getBlockIdInWorld(x, y, z) == mccpp::RedstoneBlocks::REDSTONE_WIRE) {
+        mccpp::RedstoneSignal::updateSurroundingRedstone(
+            x, y, z, getBlockFn, getMetaFn, setMetaFn, notifyFn, isSolidFn);
+    }
+
+    // ─── Update redstone lamps at this position ──────────────────────
+    notifyFn(x, y, z);
+    for (const auto& off : offsets) {
+        notifyFn(x + off[0], y + off[1], z + off[2]);
+    }
+
+    // ─── Redstone torch state changes — Java: BlockRedstoneTorch.updateTick ─
+    // Check if any adjacent redstone torch needs to toggle based on block power
+    for (const auto& off : offsets) {
+        int32_t nx = x + off[0], ny = y + off[1], nz = z + off[2];
+        int32_t nId = getBlockIdInWorld(nx, ny, nz);
+        if (nId == mccpp::RedstoneBlocks::REDSTONE_TORCH_ON ||
+            nId == mccpp::RedstoneBlocks::REDSTONE_TORCH_OFF) {
+            int32_t torchMeta = getBlockMetaInWorld(nx, ny, nz);
+            // Determine attached block position from metadata
+            int32_t attachX = nx, attachY = ny, attachZ = nz;
+            switch (torchMeta) {
+                case 1: attachX = nx - 1; break; // east wall → attached to west block
+                case 2: attachX = nx + 1; break; // west wall → attached to east block
+                case 3: attachZ = nz - 1; break; // south wall → attached to north block
+                case 4: attachZ = nz + 1; break; // north wall → attached to south block
+                case 5: attachY = ny - 1; break; // floor → attached to block below
+                default: continue;
+            }
+            // Check if the attached block is receiving power
+            bool attachedPowered = false;
+            for (const auto& off2 : offsets) {
+                int32_t ax = attachX + off2[0], ay = attachY + off2[1], az = attachZ + off2[2];
+                if (ax == nx && ay == ny && az == nz) continue; // Don't check the torch itself
+                int32_t adjId = getBlockIdInWorld(ax, ay, az);
+                int32_t adjMeta = getBlockMetaInWorld(ax, ay, az);
+                if (adjId == mccpp::RedstoneBlocks::REDSTONE_WIRE && adjMeta > 0) {
+                    attachedPowered = true; break;
+                }
+                if (adjId == mccpp::RedstoneBlocks::LEVER && mccpp::PowerSource::isLeverPowered(adjMeta)) {
+                    attachedPowered = true; break;
+                }
+                if (adjId == mccpp::RedstoneBlocks::REDSTONE_REPEATER_ON) {
+                    attachedPowered = true; break;
+                }
+            }
+            // Toggle torch: powered input → torch OFF; no power → torch ON
+            int32_t expectedTorchId = attachedPowered
+                ? mccpp::RedstoneBlocks::REDSTONE_TORCH_OFF
+                : mccpp::RedstoneBlocks::REDSTONE_TORCH_ON;
+            if (expectedTorchId != nId) {
+                setBlockInWorld(nx, ny, nz, expectedTorchId, torchMeta);
+                // Torch state change → propagate further
+                redstoneNotifyNeighbors(nx, ny, nz);
+            }
+        }
+    }
+
+    // ─── Piston state update — Java: BlockPistonBase.onNeighborBlockChange ──
+    // Check if any adjacent piston needs to extend or retract
+    for (const auto& off : offsets) {
+        int32_t nx = x + off[0], ny = y + off[1], nz = z + off[2];
+        int32_t nId = getBlockIdInWorld(nx, ny, nz);
+        if (nId == mccpp::RedstoneBlocks::PISTON ||
+            nId == mccpp::RedstoneBlocks::STICKY_PISTON) {
+            pistonUpdateState(nx, ny, nz, nId);
+        }
+    }
+    // Also check the block itself (e.g. piston that was just placed)
+    {
+        int32_t selfId = getBlockIdInWorld(x, y, z);
+        if (selfId == mccpp::RedstoneBlocks::PISTON ||
+            selfId == mccpp::RedstoneBlocks::STICKY_PISTON) {
+            pistonUpdateState(x, y, z, selfId);
+        }
+    }
+    --recursionDepth;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Piston extend/retract — Java: BlockPistonBase.updatePistonState()
+// Instant server-side push/pull (no TileEntityPiston animation)
+// ═══════════════════════════════════════════════════════════════════════════
+
+void MinecraftServer::pistonUpdateState(int32_t x, int32_t y, int32_t z, int32_t blockId) {
+    if (worlds_.empty()) return;
+    auto& world = worlds_[0];
+
+    bool isSticky = (blockId == mccpp::RedstoneBlocks::STICKY_PISTON);
+    int32_t meta = getBlockMetaInWorld(x, y, z);
+    int32_t direction = mccpp::PistonMechanics::getOrientation(meta);
+    bool isExtended = mccpp::PistonMechanics::isExtended(meta);
+
+    if (direction == 7) return; // Invalid orientation
+
+    // Build callbacks for PistonMechanics::isIndirectlyPowered
+    auto getBlockFn = [this](int32_t bx, int32_t by, int32_t bz) -> int32_t {
+        return getBlockIdInWorld(bx, by, bz);
+    };
+    auto getMetaFn = [this](int32_t bx, int32_t by, int32_t bz) -> int32_t {
+        return getBlockMetaInWorld(bx, by, bz);
+    };
+
+    bool powered = mccpp::PistonMechanics::isIndirectlyPowered(
+        x, y, z, direction, getBlockFn, getMetaFn);
+
+    // Also check lever directly attached to the piston block
+    for (int face = 0; face < 6; ++face) {
+        if (face == direction) continue;
+        int32_t nx = x + mccpp::FACING_OFFSETS[face].dx;
+        int32_t ny = y + mccpp::FACING_OFFSETS[face].dy;
+        int32_t nz = z + mccpp::FACING_OFFSETS[face].dz;
+        int32_t adjId = getBlockIdInWorld(nx, ny, nz);
+        int32_t adjMeta = getBlockMetaInWorld(nx, ny, nz);
+        if (adjId == mccpp::RedstoneBlocks::LEVER && mccpp::PowerSource::isLeverPowered(adjMeta))
+            powered = true;
+        if ((adjId == mccpp::RedstoneBlocks::STONE_BUTTON ||
+             adjId == mccpp::RedstoneBlocks::WOODEN_BUTTON) && (adjMeta & 0x08))
+            powered = true;
+    }
+
+    int32_t dx = mccpp::FACING_OFFSETS[direction].dx;
+    int32_t dy = mccpp::FACING_OFFSETS[direction].dy;
+    int32_t dz = mccpp::FACING_OFFSETS[direction].dz;
+
+    // ─── EXTEND ──────────────────────────────────────────────────────
+    if (powered && !isExtended) {
+        // Check canExtend — walk forward up to 12 blocks
+        bool canPush = true;
+        int32_t pushCount = 0;
+        for (int32_t i = 1; i <= mccpp::PistonMechanics::MAX_PUSH_DISTANCE + 1; ++i) {
+            int32_t bx = x + dx * i, by = y + dy * i, bz = z + dz * i;
+            int32_t bid = getBlockIdInWorld(bx, by, bz);
+            if (by < 0 || by > 255) { canPush = false; break; }
+            if (bid == 0) { pushCount = i - 1; break; } // Air = end of chain
+            if (mccpp::PistonMechanics::isUnpushable(bid)) { canPush = false; break; }
+            if (!mccpp::PistonMechanics::canPushBlock(bid, true)) { canPush = false; break; }
+            if (i > mccpp::PistonMechanics::MAX_PUSH_DISTANCE) { canPush = false; break; }
+            pushCount = i;
+        }
+
+        if (!canPush) return;
+
+        // Move blocks from farthest to nearest (to avoid overwriting)
+        for (int32_t i = pushCount; i >= 1; --i) {
+            int32_t srcX = x + dx * i, srcY = y + dy * i, srcZ = z + dz * i;
+            int32_t dstX = x + dx * (i + 1), dstY = y + dy * (i + 1), dstZ = z + dz * (i + 1);
+            int32_t srcId = getBlockIdInWorld(srcX, srcY, srcZ);
+            int32_t srcMeta = getBlockMetaInWorld(srcX, srcY, srcZ);
+            setBlockInWorld(dstX, dstY, dstZ, srcId, srcMeta);
+        }
+
+        // Place piston head (34) at extend position
+        int32_t headX = x + dx, headY = y + dy, headZ = z + dz;
+        // Piston head meta: direction | (isSticky ? 0x08 : 0x00)
+        int32_t headMeta = direction | (isSticky ? 0x08 : 0x00);
+        setBlockInWorld(headX, headY, headZ, mccpp::RedstoneBlocks::PISTON_HEAD, headMeta);
+
+        // Mark piston base as extended (meta bit 0x08)
+        world->setBlockMetadata(x, y, z, direction | 0x08);
+        broadcastBlockChange(x, y, z, blockId, direction | 0x08);
+
+        // Sound — Java: tile.piston.out
+        broadcastSound("tile.piston.out",
+            static_cast<double>(x) + 0.5, static_cast<double>(y) + 0.5,
+            static_cast<double>(z) + 0.5, 0.5f, 0.7f);
+
+        // Trigger redstone updates for moved blocks
+        for (int32_t i = 0; i <= pushCount + 1; ++i) {
+            redstoneNotifyNeighbors(x + dx * i, y + dy * i, z + dz * i);
+        }
+    }
+    // ─── RETRACT ─────────────────────────────────────────────────────
+    else if (!powered && isExtended) {
+        // Remove piston head
+        int32_t headX = x + dx, headY = y + dy, headZ = z + dz;
+        int32_t headId = getBlockIdInWorld(headX, headY, headZ);
+        if (headId == mccpp::RedstoneBlocks::PISTON_HEAD) {
+            // Sticky piston: pull block from position after head
+            if (isSticky) {
+                int32_t pullX = x + dx * 2, pullY = y + dy * 2, pullZ = z + dz * 2;
+                int32_t pullId = getBlockIdInWorld(pullX, pullY, pullZ);
+                int32_t pullMeta = getBlockMetaInWorld(pullX, pullY, pullZ);
+                if (pullId != 0 && !mccpp::PistonMechanics::isUnpushable(pullId) &&
+                    mccpp::PistonMechanics::canPushBlock(pullId, false)) {
+                    // Move pulled block to head position
+                    setBlockInWorld(headX, headY, headZ, pullId, pullMeta);
+                    // Clear pulled position
+                    setBlockInWorld(pullX, pullY, pullZ, 0, 0);
+                } else {
+                    // Nothing to pull, just clear head
+                    setBlockInWorld(headX, headY, headZ, 0, 0);
+                }
+            } else {
+                // Normal piston: just remove head
+                setBlockInWorld(headX, headY, headZ, 0, 0);
+            }
+        }
+
+        // Mark piston base as retracted (clear bit 0x08)
+        world->setBlockMetadata(x, y, z, direction);
+        broadcastBlockChange(x, y, z, blockId, direction);
+
+        // Sound — Java: tile.piston.in
+        broadcastSound("tile.piston.in",
+            static_cast<double>(x) + 0.5, static_cast<double>(y) + 0.5,
+            static_cast<double>(z) + 0.5, 0.5f, 0.7f);
+
+        // Trigger redstone updates around piston
+        redstoneNotifyNeighbors(headX, headY, headZ);
+    }
 }
 
 // Java: SharedMonsterAttributes.maxHealth base values per entity type

@@ -522,6 +522,21 @@ public:
     /** Set a block in the world and broadcast the change to all players. */
     void setBlockInWorld(int32_t x, int32_t y, int32_t z, int32_t blockId, int32_t meta = 0);
 
+    /**
+     * Trigger redstone signal propagation around a block position.
+     * Java reference: World.notifyBlocksOfNeighborChange() → BlockRedstoneWire.func_150177_e
+     * Called after lever toggle, wire placement/break, torch/repeater state changes.
+     * Updates wire power levels, toggles redstone lamps, and schedules torch/repeater ticks.
+     */
+    void redstoneNotifyNeighbors(int32_t x, int32_t y, int32_t z);
+
+    /**
+     * Piston extend/retract — Java: BlockPistonBase.updatePistonState()
+     * Called from redstoneNotifyNeighbors when a piston (33/29) detects power change.
+     * Handles up to 12/block push limit, sticky piston pull, and piston head placement.
+     */
+    void pistonUpdateState(int32_t x, int32_t y, int32_t z, int32_t blockId);
+
     /** Get block ID at position, returns 0 if unloaded. */
     int32_t getBlockIdInWorld(int32_t x, int32_t y, int32_t z) const;
 

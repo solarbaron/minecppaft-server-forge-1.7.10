@@ -2454,6 +2454,11 @@ void PlayHandler::handlePlayerDigging(const uint8_t* data, size_t length, Connec
         server_.broadcastBlockChange(blockX, blockY, blockZ, 0, 0);
         server_.broadcastEffect(2001, blockX, blockY, blockZ, brokenBlockId);
 
+        // ─── Redstone signal propagation on block break ───────────────
+        // Java: World.notifyBlocksOfNeighborChange after block removal
+        // When any block is broken near redstone components, signal may need update
+        server_.redstoneNotifyNeighbors(blockX, blockY, blockZ);
+
         // ─── Multi-block break propagation ───────────────────────────
         // Door (64/71): remove other half
         if (brokenBlockId == 64 || brokenBlockId == 71) {
@@ -3290,6 +3295,8 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
         server_.broadcastSound("random.click",
             static_cast<double>(blockX) + 0.5, static_cast<double>(by) + 0.5,
             static_cast<double>(blockZ) + 0.5, 0.3f, (meta & 0x08) ? 0.6f : 0.5f);
+        // Trigger redstone propagation — Java: World.notifyBlocksOfNeighborChange
+        server_.redstoneNotifyNeighbors(blockX, by, blockZ);
         return;
     }
 
@@ -3305,6 +3312,8 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
             server_.broadcastSound("random.click",
                 static_cast<double>(blockX) + 0.5, static_cast<double>(by) + 0.5,
                 static_cast<double>(blockZ) + 0.5, 0.3f, 0.6f);
+            // Trigger redstone propagation — Java: World.notifyBlocksOfNeighborChange
+            server_.redstoneNotifyNeighbors(blockX, by, blockZ);
         }
         return;
     }
@@ -3418,6 +3427,8 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
         server_.broadcastSound("random.click",
             static_cast<double>(blockX) + 0.5, static_cast<double>(by) + 0.5,
             static_cast<double>(blockZ) + 0.5, 0.3f, 0.5f);
+        // Trigger redstone propagation — Java: World.notifyBlocksOfNeighborChange
+        server_.redstoneNotifyNeighbors(blockX, by, blockZ);
         return;
     }
 
@@ -3432,6 +3443,8 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
         server_.broadcastSound("random.click",
             static_cast<double>(blockX) + 0.5, static_cast<double>(by) + 0.5,
             static_cast<double>(blockZ) + 0.5, 0.3f, 0.5f);
+        // Trigger redstone propagation — Java: World.notifyBlocksOfNeighborChange
+        server_.redstoneNotifyNeighbors(blockX, by, blockZ);
         return;
     }
 
@@ -4832,6 +4845,21 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
 
     // Broadcast block change to all players
     server_.broadcastBlockChange(placeX, placeY, placeZ, placeBlockId, meta);
+
+    // ─── Redstone signal propagation on placement ─────────────────────
+    // Java: World.notifyBlocksOfNeighborChange after block placement
+    // Notify when placing any redstone component, or any block near existing wire
+    if (placeBlockId == 55 || placeBlockId == 75 || placeBlockId == 76 ||
+        placeBlockId == 93 || placeBlockId == 94 || placeBlockId == 149 ||
+        placeBlockId == 150 || placeBlockId == 152 || placeBlockId == 123 ||
+        placeBlockId == 124 || placeBlockId == 69 || placeBlockId == 77 ||
+        placeBlockId == 143) {
+        server_.redstoneNotifyNeighbors(placeX, placeY, placeZ);
+    } else {
+        // For any other block, check if adjacent to existing redstone wire/torch
+        // (e.g., placing a solid block can connect/disconnect wire paths)
+        server_.redstoneNotifyNeighbors(placeX, placeY, placeZ);
+    }
 
     // Play place sound — Java: block.stepSound.getPlaceSound()
     // Reuse material→sound mapping based on the PLACED block
@@ -6707,6 +6735,8 @@ void PlayHandler::tickFood(Connection& conn) {
                     world->setBlockMetadata(plateX, plateY, plateZ, meta | 0x01);
                     server_.broadcastBlockChange(plateX, plateY, plateZ, plateBlockId, meta | 0x01);
                     server_.broadcastSound("random.click", plateX + 0.5, plateY + 0.5, plateZ + 0.5, 0.3f, 0.6f);
+                    // Trigger redstone propagation — Java: World.notifyBlocksOfNeighborChange
+                    server_.redstoneNotifyNeighbors(plateX, plateY, plateZ);
                 }
                 // Track current plate position
                 pressurePlateX_ = plateX;
@@ -6727,6 +6757,8 @@ void PlayHandler::tickFood(Connection& conn) {
                                                          prevPlateId, meta & ~0x01);
                             server_.broadcastSound("random.click",
                                 pressurePlateX_ + 0.5, pressurePlateY_ + 0.5, pressurePlateZ_ + 0.5, 0.3f, 0.5f);
+                            // Trigger redstone propagation — Java: World.notifyBlocksOfNeighborChange
+                            server_.redstoneNotifyNeighbors(pressurePlateX_, pressurePlateY_, pressurePlateZ_);
                         }
                     }
                     pressurePlateX_ = INT_MIN;
