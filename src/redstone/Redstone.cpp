@@ -92,6 +92,15 @@ int32_t RedstoneSignal::calculateSignal(int32_t x, int32_t y, int32_t z,
                 maxPower = MAX_POWER;
             }
         }
+        // Pressure plates — provides power when active (meta & 0x01)
+        if (blockId == RedstoneBlocks::STONE_PRESSURE_PLATE ||
+            blockId == RedstoneBlocks::WOODEN_PRESSURE_PLATE ||
+            blockId == 147 || blockId == 148) { // Light/heavy weighted plates
+            int32_t pMeta = getMeta(nx, y, nz);
+            if (pMeta & 0x01) {
+                maxPower = MAX_POWER;
+            }
+        }
 
         // Wire going up through adjacent block
         if (isSolid(nx, y, nz)) {
