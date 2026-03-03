@@ -1218,8 +1218,16 @@ void PlayHandler::closeOpenWindow(Connection& conn) {
                 static_cast<double>(openChestZ_) + 0.5,
                 0.5f, 1.0f);
         }
+        // Trapped chest — remove redstone signal on close
+        // Java: TileEntityChest.closeInventory → World.notifyBlocksOfNeighborChange
+        if (isTrappedChest_) {
+            server_.redstoneNotifyNeighbors(openChestX_, openChestY_, openChestZ_);
+            // Also notify block below (Java: trapped chest powers block beneath)
+            server_.redstoneNotifyNeighbors(openChestX_, openChestY_ - 1, openChestZ_);
+        }
         chestInventory_ = nullptr;
         isEnderChest_ = false;
+        isTrappedChest_ = false;
     }
 
     // Furnace: clear pointer (items stay in furnace)
@@ -3037,9 +3045,13 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
     }
 
     // Trapped Chest (block ID 146) — Java: BlockChest.onBlockActivated()
-    // Functions same as chest for opening; redstone output on open (not implemented yet)
+    // Functions same as chest + emits redstone signal when open
     if (clickedBlockId == 146 && !isSneaking_) {
         openChest(conn, blockX, static_cast<int32_t>(blockY), blockZ);
+        isTrappedChest_ = true;
+        // Emit redstone signal — Java: TileEntityChest.openInventory
+        server_.redstoneNotifyNeighbors(blockX, static_cast<int32_t>(blockY), blockZ);
+        server_.redstoneNotifyNeighbors(blockX, static_cast<int32_t>(blockY) - 1, blockZ);
         return;
     }
 
@@ -3301,7 +3313,7 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
     }
 
     // ─── Buttons (block ID 77/143) — Java: BlockButton.onBlockActivated() ───
-    // Set bit 3 (0x08) on — auto-resets after 20 ticks (simplified: instant toggle)
+    // Set bit 3 (0x08) on — auto-resets after 20 ticks (stone) or 30 ticks (wooden)
     if ((clickedBlockId == 77 || clickedBlockId == 143) && !isSneaking_) {
         int32_t by = static_cast<int32_t>(blockY);
         int meta = world->getBlockMetadata(blockX, by, blockZ);
@@ -3314,6 +3326,9 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
                 static_cast<double>(blockZ) + 0.5, 0.3f, 0.6f);
             // Trigger redstone propagation — Java: World.notifyBlocksOfNeighborChange
             server_.redstoneNotifyNeighbors(blockX, by, blockZ);
+            // Schedule auto-reset — Java: 20 ticks stone, 30 ticks wooden
+            int32_t resetDelay = (clickedBlockId == 77) ? 20 : 30;
+            server_.scheduleBlockTick(blockX, by, blockZ, clickedBlockId, resetDelay);
         }
         return;
     }
@@ -4179,9 +4194,12 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
     }
 
     // Trapped Chest (block ID 146) — same as normal chest but sends redstone signal
-    // Java: BlockChest.onBlockActivated() — same behavior
+    // Java: BlockChest.onBlockActivated() — emits redstone when open
     if (clickedBlockId == 146 && !isSneaking_) {
         openChest(conn, blockX, static_cast<int32_t>(blockY), blockZ);
+        isTrappedChest_ = true;
+        server_.redstoneNotifyNeighbors(blockX, static_cast<int32_t>(blockY), blockZ);
+        server_.redstoneNotifyNeighbors(blockX, static_cast<int32_t>(blockY) - 1, blockZ);
         return;
     }
 

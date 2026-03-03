@@ -914,6 +914,7 @@ private:
     std::array<std::optional<ItemStack>, 27>* chestInventory_ = nullptr;
     int32_t openChestX_ = 0, openChestY_ = 0, openChestZ_ = 0;
     bool isEnderChest_ = false; // true when chestInventory_ points to enderChestInventory_
+    bool isTrappedChest_ = false; // true when chest is a trapped chest (redstone output)
 
     // ─── Ender chest (per-player, 27 slots) ───
     std::array<std::optional<ItemStack>, 27> enderChestInventory_;

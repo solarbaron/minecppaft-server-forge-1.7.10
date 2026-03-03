@@ -245,6 +245,7 @@ void MinecraftServer::tick() {
     tickFurnaces();
     tickHoppers();
     tickBrewingStands();
+    tickScheduledBlocks();
 
     // Tick world time — Java: WorldServer.tick()
     tickCounter_.fetch_add(1);
@@ -3351,6 +3352,58 @@ void MinecraftServer::playNoteBlock(int32_t x, int32_t y, int32_t z) {
         static_cast<float>(x) + 0.5f, static_cast<float>(y) + 1.2f,
         static_cast<float>(z) + 0.5f,
         static_cast<float>(meta) / 24.0f, 0.0f, 0.0f, 0.0f, 0);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Scheduled block ticks — Java: WorldServer.scheduleBlockUpdateWithPriority
+// Used for button auto-reset (20/30 ticks), repeater delay, etc.
+// ═══════════════════════════════════════════════════════════════════════════
+
+void MinecraftServer::scheduleBlockTick(int32_t x, int32_t y, int32_t z,
+                                         int32_t blockId, int32_t delay) {
+    std::lock_guard<std::mutex> lock(scheduledTicksMutex_);
+    int64_t fireTick = tickCounter_.load() + delay;
+    scheduledTicks_.push_back({x, y, z, blockId, fireTick});
+}
+
+void MinecraftServer::tickScheduledBlocks() {
+    std::vector<ScheduledBlockTick> expired;
+    {
+        std::lock_guard<std::mutex> lock(scheduledTicksMutex_);
+        int64_t now = tickCounter_.load();
+        auto it = scheduledTicks_.begin();
+        while (it != scheduledTicks_.end()) {
+            if (it->fireTick <= now) {
+                expired.push_back(*it);
+                it = scheduledTicks_.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
+    for (auto& tick : expired) {
+        int32_t currentId = getBlockIdInWorld(tick.x, tick.y, tick.z);
+        if (currentId != tick.blockId) continue; // Block changed, skip
+
+        // Java: BlockButton.updateTick — depress the button
+        if (tick.blockId == 77 || tick.blockId == 143) { // Stone/wooden button
+            if (worlds_.empty()) continue;
+            auto& world = worlds_[0];
+            int32_t meta = world->getBlockMetadata(tick.x, tick.y, tick.z);
+            if (meta & 0x08) { // Still pressed
+                meta &= ~0x08;
+                world->setBlockMetadata(tick.x, tick.y, tick.z, meta);
+                broadcastBlockChange(tick.x, tick.y, tick.z, tick.blockId, meta);
+                broadcastSound("random.click",
+                    static_cast<double>(tick.x) + 0.5,
+                    static_cast<double>(tick.y) + 0.5,
+                    static_cast<double>(tick.z) + 0.5,
+                    0.3f, 0.5f); // Lower pitch for depress
+                redstoneNotifyNeighbors(tick.x, tick.y, tick.z);
+            }
+        }
+    }
 }
 
 // Java: SharedMonsterAttributes.maxHealth base values per entity type

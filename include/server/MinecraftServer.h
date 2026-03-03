@@ -776,6 +776,24 @@ private:
     // ─── Furnace storage (in-memory tile entities) ───────────────────
     mutable std::mutex furnaceMutex_;
     std::map<int64_t, FurnaceData> furnaceStorage_;
+
+    // ─── Scheduled block ticks ──────────────────────────────────────
+    // Java: WorldServer.scheduleBlockUpdateWithPriority / tickUpdates
+    // Used for button auto-reset, repeater delay, etc.
+    struct ScheduledBlockTick {
+        int32_t x, y, z;
+        int32_t blockId;      // Expected block ID at fire time
+        int64_t fireTick;     // Server tick when this should fire
+    };
+    mutable std::mutex scheduledTicksMutex_;
+    std::vector<ScheduledBlockTick> scheduledTicks_;
+
+public:
+    /** Schedule a block tick (e.g. button reset after N ticks). */
+    void scheduleBlockTick(int32_t x, int32_t y, int32_t z, int32_t blockId, int32_t delay);
+
+    /** Process expired scheduled ticks — called from main tick(). */
+    void tickScheduledBlocks();
 };
 
 } // namespace mccpp
