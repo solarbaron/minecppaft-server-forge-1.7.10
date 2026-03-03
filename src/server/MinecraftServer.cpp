@@ -2584,6 +2584,85 @@ int32_t MinecraftServer::getBlockMetaInWorld(int32_t x, int32_t y, int32_t z) co
     return worlds_[0]->getBlockMetadata(x, y, z);
 }
 
+// Java: Block.getComparatorInputOverride() + Container.calcRedstoneFromInventory()
+// Returns 0-15 for containers, or -1 if block has no comparator input override
+int32_t MinecraftServer::getComparatorContainerSignal(int32_t x, int32_t y, int32_t z) const {
+    int32_t blockId = getBlockIdInWorld(x, y, z);
+    int64_t posKey = packBlockPos(x, y, z);
+
+    // Helper: calculate redstone signal from container slots
+    // Java: Container.calcRedstoneFromInventory(IInventory)
+    auto calcSignal = [](int32_t totalItems, int32_t maxCapacity, int32_t slotCount) -> int32_t {
+        if (slotCount == 0) return 0;
+        if (totalItems == 0) return 0;
+        float fillRatio = static_cast<float>(totalItems) / static_cast<float>(maxCapacity);
+        return static_cast<int32_t>(fillRatio * 14.0f) + 1;
+    };
+
+    // Chest / Trapped Chest — 27 slots × 64 max
+    if (blockId == 54 || blockId == 146) {
+        auto it = chestStorage_.find(posKey);
+        if (it == chestStorage_.end()) return 0;
+        int32_t totalItems = 0;
+        for (const auto& slot : it->second) {
+            if (slot.has_value()) totalItems += slot->getStackSize();
+        }
+        return calcSignal(totalItems, 27 * 64, 27);
+    }
+
+    // Furnace — 3 slots × 64 max
+    if (blockId == 61 || blockId == 62) {
+        auto it = furnaceStorage_.find(posKey);
+        if (it == furnaceStorage_.end()) return 0;
+        int32_t totalItems = 0;
+        for (int i = 0; i < 3; ++i) {
+            if (it->second.slots[i].has_value()) totalItems += it->second.slots[i]->getStackSize();
+        }
+        return calcSignal(totalItems, 3 * 64, 3);
+    }
+
+    // Hopper — 5 slots × 64 max
+    if (blockId == 154) {
+        auto it = hopperStorage_.find(posKey);
+        if (it == hopperStorage_.end()) return 0;
+        int32_t totalItems = 0;
+        for (const auto& slot : it->second.slots) {
+            if (slot.has_value()) totalItems += slot->getStackSize();
+        }
+        return calcSignal(totalItems, 5 * 64, 5);
+    }
+
+    // Dispenser / Dropper — 9 slots × 64 max
+    if (blockId == 23 || blockId == 158) {
+        auto it = dispenserStorage_.find(posKey);
+        if (it == dispenserStorage_.end()) return 0;
+        int32_t totalItems = 0;
+        for (const auto& slot : it->second.slots) {
+            if (slot.has_value()) totalItems += slot->getStackSize();
+        }
+        return calcSignal(totalItems, 9 * 64, 9);
+    }
+
+    // Brewing Stand — 4 slots (3 potions × 1, 1 ingredient × 64)
+    if (blockId == 117) {
+        auto it = brewingStandStorage_.find(posKey);
+        if (it == brewingStandStorage_.end()) return 0;
+        int32_t totalItems = 0;
+        for (const auto& slot : it->second.slots) {
+            if (slot.has_value()) totalItems += slot->getStackSize();
+        }
+        // Java: 3 potion slots (max 1 each) + 1 ingredient slot (max 64)
+        return calcSignal(totalItems, 3 * 1 + 64, 4);
+    }
+
+    // Cauldron — signal = water level meta (0-3)
+    if (blockId == 118) {
+        return getBlockMetaInWorld(x, y, z); // 0=empty, 1-3=water level
+    }
+
+    return -1; // No comparator override for this block
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Redstone signal propagation — Java: World.notifyBlocksOfNeighborChange()
 // Called when a redstone-relevant block changes (lever toggle, wire place/break,
@@ -3616,39 +3695,125 @@ void MinecraftServer::tickScheduledBlocks() {
             }
         }
 
-        // Java: BlockRedstoneComparator.updateTick — toggle comparator ON/OFF
+        // Java: BlockRedstoneComparator.updateTick — full signal-level logic
         // Comparator OFF (149) → ON (150) or ON (150) → OFF (149)
+        // Uses signal levels (0-15), compare/subtract modes, and container input
         if (tick.blockId == mccpp::RedstoneBlocks::REDSTONE_COMPARATOR_OFF ||
             tick.blockId == mccpp::RedstoneBlocks::REDSTONE_COMPARATOR_ON) {
             if (worlds_.empty()) continue;
             auto& world = worlds_[0];
             int32_t meta = world->getBlockMetadata(tick.x, tick.y, tick.z);
             int32_t facing = meta & 3;
+            bool isSubtractMode = (meta & 0x4) != 0;
 
-            // Re-check input power at the time of the tick
+            // Java: Direction.offsetX/Z — input direction (behind comparator)
+            // facing: 0=S(+Z), 1=W(-X), 2=N(-Z), 3=E(+X)
             static const int cInputDx[] = { 0, -1,  0,  1};
             static const int cInputDz[] = { 1,  0, -1,  0};
             int32_t ix = tick.x + cInputDx[facing];
             int32_t iz = tick.z + cInputDz[facing];
-            int32_t inputId = getBlockIdInWorld(ix, tick.y, iz);
-            int32_t inputMeta = getBlockMetaInWorld(ix, tick.y, iz);
 
-            bool inputPowered = false;
-            if (inputId == mccpp::RedstoneBlocks::REDSTONE_WIRE && inputMeta > 0) inputPowered = true;
-            else if (inputId == mccpp::RedstoneBlocks::REDSTONE_TORCH_ON) inputPowered = true;
-            else if (inputId == mccpp::RedstoneBlocks::REDSTONE_BLOCK) inputPowered = true;
-            else if (inputId == mccpp::RedstoneBlocks::LEVER && mccpp::PowerSource::isLeverPowered(inputMeta)) inputPowered = true;
-            else if ((inputId == mccpp::RedstoneBlocks::STONE_BUTTON || inputId == mccpp::RedstoneBlocks::WOODEN_BUTTON) && (inputMeta & 0x08)) inputPowered = true;
-            else if (inputId == mccpp::RedstoneBlocks::REDSTONE_REPEATER_ON) {
-                int32_t otherFacing = inputMeta & 3;
-                int32_t outDx = -cInputDx[otherFacing];
-                int32_t outDz = -cInputDz[otherFacing];
-                if (ix + outDx == tick.x && iz + outDz == tick.z) inputPowered = true;
+            // ─── getInputStrength — Java: BlockRedstoneComparator.getInputStrength ───
+            // Step 1: Get normal redstone input strength
+            int32_t rearSignal = 0;
+            {
+                int32_t inputId = getBlockIdInWorld(ix, tick.y, iz);
+                int32_t inputMeta = getBlockMetaInWorld(ix, tick.y, iz);
+                if (inputId == mccpp::RedstoneBlocks::REDSTONE_WIRE) {
+                    rearSignal = inputMeta; // Wire power level 0-15
+                } else if (inputId == mccpp::RedstoneBlocks::REDSTONE_TORCH_ON) {
+                    rearSignal = 15;
+                } else if (inputId == mccpp::RedstoneBlocks::REDSTONE_BLOCK) {
+                    rearSignal = 15;
+                } else if (inputId == mccpp::RedstoneBlocks::LEVER && mccpp::PowerSource::isLeverPowered(inputMeta)) {
+                    rearSignal = 15;
+                } else if ((inputId == mccpp::RedstoneBlocks::STONE_BUTTON || inputId == mccpp::RedstoneBlocks::WOODEN_BUTTON) && (inputMeta & 0x08)) {
+                    rearSignal = 15;
+                } else if (inputId == mccpp::RedstoneBlocks::REDSTONE_REPEATER_ON) {
+                    int32_t otherFacing = inputMeta & 3;
+                    int32_t outDx = -cInputDx[otherFacing];
+                    int32_t outDz = -cInputDz[otherFacing];
+                    if (ix + outDx == tick.x && iz + outDz == tick.z) rearSignal = 15;
+                } else if (inputId == mccpp::RedstoneBlocks::REDSTONE_COMPARATOR_ON) {
+                    rearSignal = 15; // Comparator output is always 15 when ON (simplified)
+                }
             }
 
+            // Step 2: Check for container input override — Java: hasComparatorInputOverride
+            {
+                int32_t containerSignal = getComparatorContainerSignal(ix, tick.y, iz);
+                if (containerSignal >= 0) {
+                    rearSignal = containerSignal; // Container signal overrides redstone
+                } else if (rearSignal < 15) {
+                    // Java: check through solid block for container 2 blocks behind
+                    int32_t behindId = getBlockIdInWorld(ix, tick.y, iz);
+                    // If input block is a normal solid cube, check one more block behind
+                    bool isSolid = (behindId != 0 && behindId != mccpp::RedstoneBlocks::REDSTONE_WIRE &&
+                                    behindId != mccpp::RedstoneBlocks::REDSTONE_TORCH_ON &&
+                                    behindId != mccpp::RedstoneBlocks::REDSTONE_TORCH_OFF &&
+                                    behindId != mccpp::RedstoneBlocks::REDSTONE_REPEATER_OFF &&
+                                    behindId != mccpp::RedstoneBlocks::REDSTONE_REPEATER_ON &&
+                                    behindId != mccpp::RedstoneBlocks::REDSTONE_COMPARATOR_OFF &&
+                                    behindId != mccpp::RedstoneBlocks::REDSTONE_COMPARATOR_ON &&
+                                    behindId != 20 && behindId != 102); // not glass/glass_pane
+                    if (isSolid) {
+                        int32_t ix2 = ix + cInputDx[facing];
+                        int32_t iz2 = iz + cInputDz[facing];
+                        int32_t behindContainer = getComparatorContainerSignal(ix2, tick.y, iz2);
+                        if (behindContainer >= 0) {
+                            rearSignal = behindContainer;
+                        }
+                    }
+                }
+            }
+
+            // ─── Side input strength — Java: getMaxInputStrengthFromSides ───
+            // Check side signals (perpendicular to facing)
+            int32_t sideSignal = 0;
+            {
+                // Side offsets perpendicular to facing
+                static const int cSideDx1[] = { -1,  0,  1,  0}; // left
+                static const int cSideDz1[] = {  0, -1,  0,  1};
+                static const int cSideDx2[] = {  1,  0, -1,  0}; // right
+                static const int cSideDz2[] = {  0,  1,  0, -1};
+
+                for (int s = 0; s < 2; ++s) {
+                    int32_t sx = tick.x + (s == 0 ? cSideDx1[facing] : cSideDx2[facing]);
+                    int32_t sz = tick.z + (s == 0 ? cSideDz1[facing] : cSideDz2[facing]);
+                    int32_t sId = getBlockIdInWorld(sx, tick.y, sz);
+                    int32_t sMeta = getBlockMetaInWorld(sx, tick.y, sz);
+
+                    int32_t sidePower = 0;
+                    if (sId == mccpp::RedstoneBlocks::REDSTONE_WIRE) {
+                        sidePower = sMeta;
+                    } else if (sId == mccpp::RedstoneBlocks::REDSTONE_REPEATER_ON) {
+                        // Only counts if repeater output faces this comparator
+                        int32_t repFacing = sMeta & 3;
+                        int32_t repOutDx = -cInputDx[repFacing];
+                        int32_t repOutDz = -cInputDz[repFacing];
+                        if (sx + repOutDx == tick.x && sz + repOutDz == tick.z) {
+                            sidePower = 15;
+                        }
+                    } else if (sId == mccpp::RedstoneBlocks::REDSTONE_COMPARATOR_ON) {
+                        sidePower = 15;
+                    }
+                    sideSignal = std::max(sideSignal, sidePower);
+                }
+            }
+
+            // ─── getOutputStrength — Java: BlockRedstoneComparator.getOutputStrength ───
+            int32_t outputStrength = 0;
+            if (isSubtractMode) {
+                outputStrength = std::max(0, rearSignal - sideSignal);
+            } else {
+                // Compare mode: output = rear if rear >= side
+                outputStrength = (rearSignal >= sideSignal) ? rearSignal : 0;
+            }
+
+            bool shouldBeOn = (outputStrength > 0);
             bool isOn = (tick.blockId == mccpp::RedstoneBlocks::REDSTONE_COMPARATOR_ON);
 
-            if (isOn && !inputPowered) {
+            if (isOn && !shouldBeOn) {
                 // Turn OFF: switch 150 → 149, preserve metadata
                 world->setBlock(tick.x, tick.y, tick.z, Block::getBlockById(mccpp::RedstoneBlocks::REDSTONE_COMPARATOR_OFF));
                 world->setBlockMetadata(tick.x, tick.y, tick.z, meta);
@@ -3657,7 +3822,7 @@ void MinecraftServer::tickScheduledBlocks() {
                     static_cast<double>(tick.x) + 0.5, static_cast<double>(tick.y) + 0.5,
                     static_cast<double>(tick.z) + 0.5, 0.3f, 0.5f);
                 redstoneNotifyNeighbors(tick.x, tick.y, tick.z);
-            } else if (!isOn && inputPowered) {
+            } else if (!isOn && shouldBeOn) {
                 // Turn ON: switch 149 → 150, preserve metadata
                 world->setBlock(tick.x, tick.y, tick.z, Block::getBlockById(mccpp::RedstoneBlocks::REDSTONE_COMPARATOR_ON));
                 world->setBlockMetadata(tick.x, tick.y, tick.z, meta);

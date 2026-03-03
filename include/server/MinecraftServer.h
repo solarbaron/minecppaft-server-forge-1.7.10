@@ -557,6 +557,13 @@ public:
     /** Get block metadata at position. */
     int32_t getBlockMetaInWorld(int32_t x, int32_t y, int32_t z) const;
 
+    /**
+     * Get comparator signal strength from a container at position.
+     * Java reference: Block.getComparatorInputOverride() + Container.calcRedstoneFromInventory()
+     * Returns 0-15 based on fill ratio, or -1 if block has no comparator override.
+     */
+    int32_t getComparatorContainerSignal(int32_t x, int32_t y, int32_t z) const;
+
     /** Summon a mob at position. Returns entity ID or -1 on failure. */
     int32_t summonMob(uint8_t mobType, double x, double y, double z);
 
