@@ -564,6 +564,13 @@ public:
      */
     int32_t getComparatorContainerSignal(int32_t x, int32_t y, int32_t z) const;
 
+    /**
+     * Compute daylight sensor power level (0-15) from world time.
+     * Java reference: BlockDaylightDetector.func_149957_e()
+     * Normal sensor (151) emits signal during day, Inverted (178) emits at night.
+     */
+    int32_t getDaylightSensorPower(bool inverted) const;
+
     /** Summon a mob at position. Returns entity ID or -1 on failure. */
     int32_t summonMob(uint8_t mobType, double x, double y, double z);
 

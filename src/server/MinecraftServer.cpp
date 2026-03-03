@@ -2663,6 +2663,56 @@ int32_t MinecraftServer::getComparatorContainerSignal(int32_t x, int32_t y, int3
     return -1; // No comparator override for this block
 }
 
+// Java: BlockDaylightDetector.func_149957_e() + TileEntityDaylightDetector.updateEntity()
+// Computes power level (0-15) from world time + celestial angle
+// Normal sensor (151) emits during daytime, Inverted (178) emits at night
+int32_t MinecraftServer::getDaylightSensorPower(bool inverted) const {
+    if (worlds_.empty()) return 0;
+
+    int64_t worldTime = worlds_[0]->getWorldTime();
+
+    // Java: World.getCelestialAngle(1.0f) — angle based on time of day
+    // worldTime % 24000: 0 = sunrise, 6000 = noon, 12000 = sunset, 18000 = midnight
+    float timeOfDay = static_cast<float>(worldTime % 24000) / 24000.0f;
+
+    // Java: World.getCelestialAngle computes angle 0.0-1.0
+    float angle = timeOfDay;
+    if (angle > 1.0f) angle -= 1.0f;
+    // Adjust: shift so noon is at 0 radians
+    angle = angle + (angle * (1.0f - angle) * 0.2f - 0.25f);
+    if (angle < 0.0f) angle += 1.0f;
+    if (angle > 1.0f) angle -= 1.0f;
+
+    // Convert to radians
+    float radians = angle * 2.0f * 3.14159265f;
+
+    // Java: skylightSubtracted (0=clear, up to 11 during storms)
+    // Simplified: clear weather = 0, rain = 3, thunder = 5
+    int32_t skylightSubtracted = 0;
+    if (!worlds_.empty()) {
+        auto* world = worlds_[0].get();
+        if (world->getThunderingStrength() > 0.0f) skylightSubtracted = 5;
+        else if (world->isRaining() && world->getRainingStrength() > 0.0f) skylightSubtracted = 3;
+    }
+
+    // Assume sky light at sensor = 15 (exposed to sky — typical for daylight sensors)
+    int32_t skyLight = 15 - skylightSubtracted;
+
+    // Java: n5 = Math.round((float)n5 * MathHelper.cos(f))
+    int32_t signal = static_cast<int32_t>(std::round(static_cast<float>(skyLight) * std::cos(radians)));
+
+    // Clamp 0-15
+    if (signal < 0) signal = 0;
+    if (signal > 15) signal = 15;
+
+    if (inverted) {
+        signal = 15 - signal;
+        if (signal < 0) signal = 0;
+    }
+
+    return signal;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Redstone signal propagation — Java: World.notifyBlocksOfNeighborChange()
 // Called when a redstone-relevant block changes (lever toggle, wire place/break,
@@ -2739,6 +2789,8 @@ void MinecraftServer::redstoneNotifyNeighbors(int32_t x, int32_t y, int32_t z) {
                 // Pressure plates — provides power when active
                 else if ((adjId == 70 || adjId == 72 || adjId == 147 || adjId == 148) &&
                          (adjMeta & 0x01)) powered = true;
+                // Daylight sensor — provides power based on world time
+                else if ((adjId == 151 || adjId == 178) && getDaylightSensorPower(adjId == 178) > 0) powered = true;
             }
             int32_t newLampId = powered ? mccpp::RedstoneBlocks::REDSTONE_LAMP_ON
                                         : mccpp::RedstoneBlocks::REDSTONE_LAMP_OFF;
@@ -2947,6 +2999,9 @@ void MinecraftServer::redstoneNotifyNeighbors(int32_t x, int32_t y, int32_t z) {
                 (adjMeta & 0x01)) {
                 powered = true; break;
             }
+            if ((adjId == 151 || adjId == 178) && getDaylightSensorPower(adjId == 178) > 0) {
+                powered = true; break;
+            }
         }
         if (powered) {
             // Java: onBlockDestroyedByPlayer(world, x,y,z, 1) → func_150114_a → spawn EntityTNTPrimed
@@ -2998,6 +3053,7 @@ void MinecraftServer::redstoneNotifyNeighbors(int32_t x, int32_t y, int32_t z) {
             if (adjId == mccpp::RedstoneBlocks::REDSTONE_COMPARATOR_ON) { powered = true; break; }
             if ((adjId == 70 || adjId == 72 || adjId == 147 || adjId == 148) &&
                 (adjMeta & 0x01)) { powered = true; break; }
+            if ((adjId == 151 || adjId == 178) && getDaylightSensorPower(adjId == 178) > 0) { powered = true; break; }
         }
         if (powered) {
             playNoteBlock(nx, ny, nz);
@@ -3036,6 +3092,7 @@ void MinecraftServer::redstoneNotifyNeighbors(int32_t x, int32_t y, int32_t z) {
         if (inputId == mccpp::RedstoneBlocks::LEVER && mccpp::PowerSource::isLeverPowered(inputMeta)) return true;
         if ((inputId == mccpp::RedstoneBlocks::STONE_BUTTON || inputId == mccpp::RedstoneBlocks::WOODEN_BUTTON)
             && (inputMeta & 0x08)) return true;
+        if ((inputId == 151 || inputId == 178) && getDaylightSensorPower(inputId == 178) > 0) return true;
         // Another repeater powering into this repeater's input
         if (inputId == mccpp::RedstoneBlocks::REDSTONE_REPEATER_ON) {
             int32_t otherFacing = inputMeta & 3;
@@ -3288,6 +3345,7 @@ void MinecraftServer::dispenserFire(int32_t x, int32_t y, int32_t z, int32_t blo
         int32_t aboveMeta = getBlockMetaInWorld(x, y + 1, z);
         if (aboveId == mccpp::RedstoneBlocks::REDSTONE_WIRE && aboveMeta > 0) powered = true;
         if (aboveId == mccpp::RedstoneBlocks::REDSTONE_TORCH_ON) powered = true;
+        if ((aboveId == 151 || aboveId == 178) && getDaylightSensorPower(aboveId == 178) > 0) powered = true;
     }
 
     // Java: triggered on rising edge only (powered && !wasTriggered)
@@ -3718,6 +3776,7 @@ void MinecraftServer::tickScheduledBlocks() {
                 int32_t outDz = -rInputDz[otherFacing];
                 if (ix + outDx == tick.x && iz + outDz == tick.z) inputPowered = true;
             }
+            else if ((inputId == 151 || inputId == 178) && getDaylightSensorPower(inputId == 178) > 0) inputPowered = true;
 
             bool isOn = (tick.blockId == mccpp::RedstoneBlocks::REDSTONE_REPEATER_ON);
 
@@ -3794,6 +3853,8 @@ void MinecraftServer::tickScheduledBlocks() {
                     if (ix + outDx == tick.x && iz + outDz == tick.z) rearSignal = 15;
                 } else if (inputId == mccpp::RedstoneBlocks::REDSTONE_COMPARATOR_ON) {
                     rearSignal = 15; // Comparator output is always 15 when ON (simplified)
+                } else if (inputId == 151 || inputId == 178) {
+                    rearSignal = getDaylightSensorPower(inputId == 178);
                 }
             }
 
