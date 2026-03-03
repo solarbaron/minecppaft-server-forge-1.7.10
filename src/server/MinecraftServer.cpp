@@ -2755,9 +2755,46 @@ void MinecraftServer::redstoneNotifyNeighbors(int32_t x, int32_t y, int32_t z) {
                 ? mccpp::RedstoneBlocks::REDSTONE_TORCH_OFF
                 : mccpp::RedstoneBlocks::REDSTONE_TORCH_ON;
             if (expectedTorchId != nId) {
-                setBlockInWorld(nx, ny, nz, expectedTorchId, torchMeta);
-                // Torch state change → propagate further
-                redstoneNotifyNeighbors(nx, ny, nz);
+                // ─── Burnout protection — Java: BlockRedstoneTorch.updateTick ───
+                // Track this toggle event; 8+ toggles in 60 ticks = burnout
+                int64_t currentTick = tickCounter_.load();
+
+                // Clean up old toggles outside the 60-tick window
+                torchToggleList_.erase(
+                    std::remove_if(torchToggleList_.begin(), torchToggleList_.end(),
+                        [currentTick](const auto& t) {
+                            return currentTick - std::get<3>(t) > 60;
+                        }),
+                    torchToggleList_.end());
+
+                // Count recent toggles at this position
+                int32_t toggleCount = 0;
+                for (const auto& t : torchToggleList_) {
+                    if (std::get<0>(t) == nx && std::get<1>(t) == ny && std::get<2>(t) == nz) {
+                        ++toggleCount;
+                    }
+                }
+
+                // Record this toggle
+                torchToggleList_.emplace_back(nx, ny, nz, currentTick);
+
+                if (toggleCount >= 8) {
+                    // Burned out! Force torch OFF with smoke particles
+                    // Java: world.setBlock → unlit + smoke particles + fire.fizz
+                    setBlockInWorld(nx, ny, nz, mccpp::RedstoneBlocks::REDSTONE_TORCH_OFF, torchMeta);
+                    broadcastSound("random.fizz",
+                        static_cast<double>(nx) + 0.5, static_cast<double>(ny) + 0.5,
+                        static_cast<double>(nz) + 0.5, 0.5f, 2.6f);
+                    // Smoke particles — Java: spawnParticle("smoke", ...)
+                    broadcastParticle("smoke",
+                        static_cast<float>(nx) + 0.5f, static_cast<float>(ny) + 0.5f,
+                        static_cast<float>(nz) + 0.5f,
+                        0.0f, 0.0f, 0.0f, 0.02f, 5);
+                } else {
+                    setBlockInWorld(nx, ny, nz, expectedTorchId, torchMeta);
+                    // Torch state change → propagate further
+                    redstoneNotifyNeighbors(nx, ny, nz);
+                }
             }
         }
     }

@@ -788,6 +788,11 @@ private:
     mutable std::mutex scheduledTicksMutex_;
     std::vector<ScheduledBlockTick> scheduledTicks_;
 
+    // ─── Redstone torch burnout tracking ─────────────────────────────
+    // Java: BlockRedstoneTorch.field_150112_b — list of recent toggles
+    // 8 toggles within 60 ticks = burnout (torch stays OFF)
+    std::vector<std::tuple<int32_t,int32_t,int32_t,int64_t>> torchToggleList_;
+
 public:
     /** Schedule a block tick (e.g. button reset after N ticks). */
     void scheduleBlockTick(int32_t x, int32_t y, int32_t z, int32_t blockId, int32_t delay);
