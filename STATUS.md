@@ -528,3 +528,4 @@
 226. **UseEntity interact handler** — ✅ Done (C02PacketUseEntity action=0 wired to handleEntityInteract, enabling right-click interactions with mobs; added PacketBuilder::entityMetadataByte for arbitrary DataWatcher byte entries)
 227. **Sheep shearing** — ✅ Done (Java EntitySheep.interact: shears item 359 on unsheared sheep → isSheared=true, drop 1-3 wool blocks ID 35 with fleeceColor metadata, damageHeldItem(1), mob.sheep.shear sound, S1C DataWatcher byte 16 with 0x10 sheared bit; death drops skip wool if already sheared)
 228. **Sheep fleece color** — ✅ Done (Java EntitySheep.getRandomFleeceColor: 81% white, 5% black, 5% light gray, 5% gray, 3% brown, 0.2% pink; S1C DataWatcher byte 16 sent at spawn; fleeceColor stored in SpawnedMob for wool drop metadata)
+229. **Sheep wool regrowth** — ✅ Done (Java EntitySheep.eatGrassBonus: setSheared(false) when sheep eats grass; S1C DataWatcher byte 16 update removes 0x10 sheared bit, clients see wool model restored)

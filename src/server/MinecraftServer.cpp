@@ -2885,6 +2885,18 @@ void MinecraftServer::tickMobs() {
                     if (blockBelow == 2) { // Grass block
                         setBlockInWorld(bx, by, bz, 3, 0); // Convert to dirt
                         broadcastSound("mob.sheep.shear", mob.posX, mob.posY, mob.posZ, 1.0f, 1.0f);
+                        // Java: EntitySheep.eatGrassBonus() → setSheared(false)
+                        // Wool regrows when sheep eats grass
+                        if (mob.isSheared) {
+                            mob.isSheared = false;
+                            uint8_t dw16 = static_cast<uint8_t>(mob.fleeceColor & 0x0F);
+                            auto metaPkt = PacketBuilder::entityMetadataByte(mob.entityId, 16, dw16);
+                            std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                            for (auto& c : connections_) {
+                                if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
+                                c->sendPacket(metaPkt);
+                            }
+                        }
                     }
                 }
             }
