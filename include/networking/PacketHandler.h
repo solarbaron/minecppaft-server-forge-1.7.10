@@ -778,6 +778,33 @@ public:
         }
     }
 
+    // Replace the held item entirely (e.g. bucket → milk bucket).
+    // Java: EntityPlayer.inventory.setInventorySlotContents(currentItem, stack)
+    void replaceHeldItem(const std::optional<ItemStack>& stack) {
+        inventory_.setInventorySlotContents(inventory_.getCurrentSlot(), stack);
+    }
+
+    // Decrement held item stack size by 1. If stack becomes empty, removes item.
+    // Java: ItemStack.stackSize-- (used by bucket milking, etc.)
+    void decrHeldItem() {
+        auto held = inventory_.getCurrentItem();
+        if (!held) return;
+        int32_t newCount = held->getStackSize() - 1;
+        if (newCount <= 0) {
+            inventory_.setInventorySlotContents(inventory_.getCurrentSlot(), std::nullopt);
+        } else {
+            held->setStackSize(newCount);
+            inventory_.setInventorySlotContents(inventory_.getCurrentSlot(), held);
+        }
+    }
+
+    // Try to add an item to the player's inventory.
+    // Returns true if added successfully, false if inventory full.
+    // Java: InventoryPlayer.addItemStackToInventory(ItemStack)
+    bool addItemToInventory(ItemStack stack) {
+        return inventory_.addItemStackToInventory(stack);
+    }
+
     // Java: InventoryPlayer.damageArmor(float f)
     // Damage all worn armor pieces by (incomingDamage / 4, min 1)
     void damageArmor(float incomingDamage) {

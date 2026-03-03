@@ -2089,6 +2089,34 @@ void MinecraftServer::handleEntityInteract(PlayHandler& player, Connection& conn
             break;
         }
     }
+
+    // ─── Cow/Mooshroom milking — Java: EntityCow.interact() ─────────
+    // Bucket (325) on cow (92) or mooshroom (96) → milk bucket (335)
+    if (heldId == 325) {  // Empty bucket
+        std::lock_guard<std::mutex> lock(mobEntitiesMutex_);
+        for (auto& mob : mobEntities_) {
+            if (mob.entityId != targetEntityId) continue;
+            if (mob.isDead) break;
+            if (mob.mobType != 92 && mob.mobType != 96) break;  // Not a cow/mooshroom
+
+            // Java: EntityCow.interact() — bucket milking
+            if (heldItem->getStackSize() == 1) {
+                // Last bucket: replace with milk bucket
+                player.replaceHeldItem(ItemStack(335, 1, 0));
+            } else {
+                // Multiple buckets: decrement and add milk bucket
+                player.decrHeldItem();
+                ItemStack milkBucket(335, 1, 0);
+                if (!player.addItemToInventory(milkBucket)) {
+                    // Inventory full: drop it — Java: dropPlayerItemWithRandomChoice
+                    spawnItemDrop(player.getPlayerX(), player.getPlayerY() + 1.0,
+                                  player.getPlayerZ(), 335, 0, 1);
+                }
+            }
+            player.sendWindowItems(conn);  // Sync inventory
+            break;
+        }
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
