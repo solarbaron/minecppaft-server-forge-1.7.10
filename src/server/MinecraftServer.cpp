@@ -2984,6 +2984,17 @@ void MinecraftServer::redstoneNotifyNeighbors(int32_t x, int32_t y, int32_t z) {
             int32_t delaySetting = (meta & 0x0C) >> 2;
             delayTicks = repeaterDelays[delaySetting];
             isOn = (blockId == mccpp::RedstoneBlocks::REDSTONE_REPEATER_ON);
+
+            // Java: BlockRedstoneDiode.func_149910_g — locked repeaters skip updates
+            auto getBlockFn = [this](int32_t bx, int32_t by, int32_t bz) -> int32_t {
+                return getBlockIdInWorld(bx, by, bz);
+            };
+            auto getMetaFn = [this](int32_t bx, int32_t by, int32_t bz) -> int32_t {
+                return getBlockMetaInWorld(bx, by, bz);
+            };
+            if (mccpp::RedstoneRepeater::isLocked(rx, ry, rz, meta, getBlockFn, getMetaFn)) {
+                return; // Locked — do not schedule any state change
+            }
         } else if (blockId == mccpp::RedstoneBlocks::REDSTONE_COMPARATOR_OFF ||
                    blockId == mccpp::RedstoneBlocks::REDSTONE_COMPARATOR_ON) {
             delayTicks = 2; // Java: BlockRedstoneComparator.func_149901_b always returns 2
@@ -3572,6 +3583,17 @@ void MinecraftServer::tickScheduledBlocks() {
             }
 
             bool isOn = (tick.blockId == mccpp::RedstoneBlocks::REDSTONE_REPEATER_ON);
+
+            // Java: BlockRedstoneDiode.func_149910_g — skip toggle if locked
+            auto getBlockFn = [this](int32_t bx, int32_t by, int32_t bz) -> int32_t {
+                return getBlockIdInWorld(bx, by, bz);
+            };
+            auto getMetaFn = [this](int32_t bx, int32_t by, int32_t bz) -> int32_t {
+                return getBlockMetaInWorld(bx, by, bz);
+            };
+            if (mccpp::RedstoneRepeater::isLocked(tick.x, tick.y, tick.z, meta, getBlockFn, getMetaFn)) {
+                continue; // Locked — state frozen, skip toggle
+            }
 
             if (isOn && !inputPowered) {
                 // Turn OFF: switch block 94 → 93, preserve metadata
