@@ -6319,12 +6319,32 @@ void PlayHandler::handleClientStatus(const uint8_t* data, size_t length, Connect
         health_ = 20.0f;
         foodStats_ = FoodStats();  // Reset to defaults (20 food, 5.0 sat)
         dead_ = false;
+        fireTicks_ = 0;
+        airSupply_ = 300;
+        fallDistance_ = 0.0f;
 
-        // Get spawn coordinates
+        // Get spawn coordinates from world — Java: WorldInfo.getSpawnX/Y/Z
         auto* overworld = server_.getWorlds().empty() ? nullptr : server_.getWorlds()[0].get();
-        double spawnX = 0.0, spawnY = 80.0, spawnZ = 0.0;
+        double spawnX = 0.5, spawnY = 80.0, spawnZ = 0.5;
         if (overworld) {
-            spawnY = static_cast<double>(overworld->getSpawnY());
+            spawnX = static_cast<double>(overworld->getSpawnX()) + 0.5;
+            spawnZ = static_cast<double>(overworld->getSpawnZ()) + 0.5;
+            // Find safe Y — scan upward from spawn Y to find first non-solid position
+            // where both feet and head block are air/non-solid
+            int baseY = overworld->getSpawnY();
+            int safeY = baseY;
+            for (int y = baseY; y < 256; ++y) {
+                Block* feetB = overworld->getBlock(overworld->getSpawnX(), y, overworld->getSpawnZ());
+                Block* headB = overworld->getBlock(overworld->getSpawnX(), y + 1, overworld->getSpawnZ());
+                int feetId = feetB ? Block::getIdFromBlock(feetB) : 0;
+                int headId = headB ? Block::getIdFromBlock(headB) : 0;
+                if (feetId == 0 && headId == 0) {
+                    safeY = y;
+                    break;
+                }
+                safeY = y + 1; // keep going up
+            }
+            spawnY = static_cast<double>(safeY);
         }
 
         playerX_ = spawnX;
@@ -6333,14 +6353,13 @@ void PlayHandler::handleClientStatus(const uint8_t* data, size_t length, Connect
         playerYaw_ = 0.0f;
         playerPitch_ = 0.0f;
 
-        // Send S07 Respawn packet
-        // Java reference: S07PacketRespawn
+        // Send S07 Respawn packet — Java: S07PacketRespawn
         {
             std::vector<uint8_t> pkt;
             writeVarInt(pkt, ClientboundPacket::Respawn);
             writeInt(pkt, 0);          // Dimension: 0 = Overworld
             writeUByte(pkt, 1);        // Difficulty: 1 = Easy
-            writeUByte(pkt, 0);        // Gamemode: 0 = Survival
+            writeUByte(pkt, static_cast<uint8_t>(gameMode_)); // Actual gamemode
             writeString(pkt, "flat");  // Level type
             conn.sendPacket(std::move(pkt));
         }
@@ -6376,7 +6395,7 @@ void PlayHandler::handleClientStatus(const uint8_t* data, size_t length, Connect
         // Re-broadcast spawn to other players
         server_.onPlayerJoined(conn, *this);
 
-        std::cout << "[Combat] " << playerName_ << " respawned at spawn\n";
+        std::cout << "[Combat] " << playerName_ << " respawned at (" << playerX_ << ", " << playerY_ << ", " << playerZ_ << ")\n";
     }
 }
 
@@ -6911,7 +6930,8 @@ void PlayHandler::tickFood(Connection& conn) {
         }
 
         // Remaining env damage only in survival/adventure
-        if (gameMode_ != 1) {
+        // Guard: skip all further damage if already dead (prevents cascade)
+        if (gameMode_ != 1 && !dead_) {
             int32_t headBlockX = static_cast<int32_t>(std::floor(playerX_));
             int32_t headBlockY = static_cast<int32_t>(std::floor(playerY_ + 1.62)); // eye height
             int32_t headBlockZ = static_cast<int32_t>(std::floor(playerZ_));
@@ -6961,6 +6981,7 @@ void PlayHandler::tickFood(Connection& conn) {
                         }
                     }
                 }
+                if (dead_) goto envDamageEnd;
                 // Water extinguishes fire
                 if (fireTicks_ > 0) fireTicks_ = 0;
             } else {
@@ -6985,6 +7006,7 @@ void PlayHandler::tickFood(Connection& conn) {
                     server_.broadcastEntityEvent(entityId_, 3);
                     server_.broadcastChatMessage(playerName_ + " tried to swim in lava");
                 }
+                if (dead_) goto envDamageEnd;
             }
 
             // ─── Fire block damage — Java: Entity.dealFireDamage(1) ───
@@ -7006,6 +7028,7 @@ void PlayHandler::tickFood(Connection& conn) {
                     server_.broadcastEntityEvent(entityId_, 3);
                     server_.broadcastChatMessage(playerName_ + " went up in flames");
                 }
+                if (dead_) goto envDamageEnd;
             }
 
             // ─── Cactus damage — Java: BlockCactus.onEntityCollidedWithBlock ───
@@ -7020,6 +7043,7 @@ void PlayHandler::tickFood(Connection& conn) {
                     server_.broadcastEntityEvent(entityId_, 3);
                     server_.broadcastChatMessage(playerName_ + " was pricked to death");
                 }
+                if (dead_) goto envDamageEnd;
             }
 
             // ─── Burning damage — Java: Entity.onEntityUpdate → fire tick + 1 dmg/sec ───
@@ -7080,6 +7104,7 @@ void PlayHandler::tickFood(Connection& conn) {
                     }
                 }
             }
+            envDamageEnd:;
         }
     }
 
