@@ -2873,6 +2873,71 @@ void MinecraftServer::redstoneNotifyNeighbors(int32_t x, int32_t y, int32_t z) {
         noteBlockCheckPowered(x, y, z);
     }
 
+    // ─── Repeater state toggle — Java: BlockRedstoneDiode.onNeighborBlockChange ──
+    // Facing (meta & 3): 0=south, 1=west, 2=north, 3=east
+    // Input comes from behind the repeater (opposite of facing direction)
+    // Delay: repeaterState[(meta & 0xC) >> 2] * 2 = {2,4,6,8} ticks
+    static const int repeaterInputDx[] = { 0, -1,  0,  1}; // input offset X for facing 0,1,2,3
+    static const int repeaterInputDz[] = { 1,  0, -1,  0}; // input offset Z for facing 0,1,2,3
+    static const int repeaterDelays[] = {2, 4, 6, 8}; // delay ticks for settings 0-3
+
+    auto checkRepeaterInput = [this](int32_t rx, int32_t ry, int32_t rz, int32_t facing) -> bool {
+        // Check if the block behind the repeater provides power
+        int32_t ix = rx + repeaterInputDx[facing];
+        int32_t iz = rz + repeaterInputDz[facing];
+        int32_t inputId = getBlockIdInWorld(ix, ry, iz);
+        int32_t inputMeta = getBlockMetaInWorld(ix, ry, iz);
+
+        // Power sources that can power a repeater input:
+        if (inputId == mccpp::RedstoneBlocks::REDSTONE_WIRE && inputMeta > 0) return true;
+        if (inputId == mccpp::RedstoneBlocks::REDSTONE_TORCH_ON) return true;
+        if (inputId == mccpp::RedstoneBlocks::REDSTONE_BLOCK) return true;
+        if (inputId == mccpp::RedstoneBlocks::LEVER && mccpp::PowerSource::isLeverPowered(inputMeta)) return true;
+        if ((inputId == mccpp::RedstoneBlocks::STONE_BUTTON || inputId == mccpp::RedstoneBlocks::WOODEN_BUTTON)
+            && (inputMeta & 0x08)) return true;
+        // Another repeater powering into this repeater's input
+        if (inputId == mccpp::RedstoneBlocks::REDSTONE_REPEATER_ON) {
+            int32_t otherFacing = inputMeta & 3;
+            // The other repeater's output direction
+            // Output is in the facing direction (opposite of input)
+            int32_t outDx = -repeaterInputDx[otherFacing];
+            int32_t outDz = -repeaterInputDz[otherFacing];
+            // It powers this repeater if its output points at us
+            if (ix + outDx == rx && iz + outDz == rz) return true;
+        }
+        // Strong power from solid blocks: check if the input block is solid and powered
+        // (e.g., a block receiving power from a torch underneath)
+        // Simplified: skip for now
+        return false;
+    };
+
+    auto scheduleRepeaterUpdate = [this, &checkRepeaterInput](int32_t rx, int32_t ry, int32_t rz) {
+        int32_t blockId = getBlockIdInWorld(rx, ry, rz);
+        if (blockId != mccpp::RedstoneBlocks::REDSTONE_REPEATER_OFF &&
+            blockId != mccpp::RedstoneBlocks::REDSTONE_REPEATER_ON) return;
+
+        int32_t meta = getBlockMetaInWorld(rx, ry, rz);
+        int32_t facing = meta & 3;
+        int32_t delaySetting = (meta & 0x0C) >> 2;
+        int32_t delayTicks = repeaterDelays[delaySetting];
+
+        bool inputPowered = checkRepeaterInput(rx, ry, rz, facing);
+        bool isOn = (blockId == mccpp::RedstoneBlocks::REDSTONE_REPEATER_ON);
+
+        // Schedule update if state needs to change
+        if (isOn && !inputPowered) {
+            scheduleBlockTick(rx, ry, rz, blockId, delayTicks);
+        } else if (!isOn && inputPowered) {
+            scheduleBlockTick(rx, ry, rz, blockId, delayTicks);
+        }
+    };
+
+    for (const auto& off : offsets) {
+        int32_t nx = x + off[0], ny = y + off[1], nz = z + off[2];
+        scheduleRepeaterUpdate(nx, ny, nz);
+    }
+    scheduleRepeaterUpdate(x, y, z);
+
     --recursionDepth;
 }
 
@@ -3400,6 +3465,59 @@ void MinecraftServer::tickScheduledBlocks() {
                     static_cast<double>(tick.y) + 0.5,
                     static_cast<double>(tick.z) + 0.5,
                     0.3f, 0.5f); // Lower pitch for depress
+                redstoneNotifyNeighbors(tick.x, tick.y, tick.z);
+            }
+        }
+
+        // Java: BlockRedstoneDiode.updateTick — toggle repeater ON/OFF
+        // Repeater OFF (93) → ON (94) or ON (94) → OFF (93)
+        if (tick.blockId == mccpp::RedstoneBlocks::REDSTONE_REPEATER_OFF ||
+            tick.blockId == mccpp::RedstoneBlocks::REDSTONE_REPEATER_ON) {
+            if (worlds_.empty()) continue;
+            auto& world = worlds_[0];
+            int32_t meta = world->getBlockMetadata(tick.x, tick.y, tick.z);
+            int32_t facing = meta & 3;
+
+            // Re-check input power at the time of the tick
+            static const int rInputDx[] = { 0, -1,  0,  1};
+            static const int rInputDz[] = { 1,  0, -1,  0};
+            int32_t ix = tick.x + rInputDx[facing];
+            int32_t iz = tick.z + rInputDz[facing];
+            int32_t inputId = getBlockIdInWorld(ix, tick.y, iz);
+            int32_t inputMeta = getBlockMetaInWorld(ix, tick.y, iz);
+
+            bool inputPowered = false;
+            if (inputId == mccpp::RedstoneBlocks::REDSTONE_WIRE && inputMeta > 0) inputPowered = true;
+            else if (inputId == mccpp::RedstoneBlocks::REDSTONE_TORCH_ON) inputPowered = true;
+            else if (inputId == mccpp::RedstoneBlocks::REDSTONE_BLOCK) inputPowered = true;
+            else if (inputId == mccpp::RedstoneBlocks::LEVER && mccpp::PowerSource::isLeverPowered(inputMeta)) inputPowered = true;
+            else if ((inputId == mccpp::RedstoneBlocks::STONE_BUTTON || inputId == mccpp::RedstoneBlocks::WOODEN_BUTTON) && (inputMeta & 0x08)) inputPowered = true;
+            else if (inputId == mccpp::RedstoneBlocks::REDSTONE_REPEATER_ON) {
+                int32_t otherFacing = inputMeta & 3;
+                int32_t outDx = -rInputDx[otherFacing];
+                int32_t outDz = -rInputDz[otherFacing];
+                if (ix + outDx == tick.x && iz + outDz == tick.z) inputPowered = true;
+            }
+
+            bool isOn = (tick.blockId == mccpp::RedstoneBlocks::REDSTONE_REPEATER_ON);
+
+            if (isOn && !inputPowered) {
+                // Turn OFF: switch block 94 → 93, preserve metadata
+                world->setBlock(tick.x, tick.y, tick.z, Block::getBlockById(mccpp::RedstoneBlocks::REDSTONE_REPEATER_OFF));
+                world->setBlockMetadata(tick.x, tick.y, tick.z, meta);
+                broadcastBlockChange(tick.x, tick.y, tick.z, mccpp::RedstoneBlocks::REDSTONE_REPEATER_OFF, meta);
+                broadcastSound("random.click",
+                    static_cast<double>(tick.x) + 0.5, static_cast<double>(tick.y) + 0.5,
+                    static_cast<double>(tick.z) + 0.5, 0.3f, 0.5f);
+                redstoneNotifyNeighbors(tick.x, tick.y, tick.z);
+            } else if (!isOn && inputPowered) {
+                // Turn ON: switch block 93 → 94, preserve metadata
+                world->setBlock(tick.x, tick.y, tick.z, Block::getBlockById(mccpp::RedstoneBlocks::REDSTONE_REPEATER_ON));
+                world->setBlockMetadata(tick.x, tick.y, tick.z, meta);
+                broadcastBlockChange(tick.x, tick.y, tick.z, mccpp::RedstoneBlocks::REDSTONE_REPEATER_ON, meta);
+                broadcastSound("random.click",
+                    static_cast<double>(tick.x) + 0.5, static_cast<double>(tick.y) + 0.5,
+                    static_cast<double>(tick.z) + 0.5, 0.3f, 0.6f);
                 redstoneNotifyNeighbors(tick.x, tick.y, tick.z);
             }
         }
