@@ -630,6 +630,11 @@ private:
         bool isSheared = false;   // true = wool already sheared off
         // Pig state — Java: EntityPig dataWatcher(16) bit 0x01
         bool isSaddled = false;   // true = pig has saddle
+        // Breeding state — Java: EntityAnimal.inLove + EntityAIMate
+        int32_t inLoveTicks = 0;    // 600 ticks (30s) when fed breeding item
+        int32_t breedCooldown = 0;  // 6000 ticks (5 min) after breeding
+        int32_t breedingCounter = 0; // Proximity mating countdown (60 ticks)
+        int32_t mateEntityId = -1;  // Entity ID of the mate being approached
     };
     mutable std::mutex mobEntitiesMutex_;
     std::vector<SpawnedMob> mobEntities_;

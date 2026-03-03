@@ -2255,6 +2255,54 @@ void MinecraftServer::handleEntityInteract(PlayHandler& player, Connection& conn
         }
         return;
     }
+
+    // ─── Animal feeding (breeding) — Java: EntityAnimal.interact() ───
+    // Feeding the breeding item to a passive mob puts it in love mode (600 ticks)
+    // Per-mob breeding items: cow/mooshroom/sheep → wheat (296), pig → carrot (391), chicken → seeds
+    if (heldItem && heldId != 0) {
+        std::lock_guard<std::mutex> lock(mobEntitiesMutex_);
+        for (auto& mob : mobEntities_) {
+            if (mob.entityId != targetEntityId) continue;
+            if (mob.isDead || !mob.isPassive) break;
+
+            // Check if this is the correct breeding item for this mob type
+            bool isBreedingItem = false;
+            switch (mob.mobType) {
+                case 92:  // Cow → wheat (296)
+                case 96:  // Mooshroom → wheat (296)
+                case 91:  // Sheep → wheat (296)
+                    isBreedingItem = (heldId == 296);
+                    break;
+                case 90:  // Pig → carrot (391)
+                    isBreedingItem = (heldId == 391);
+                    break;
+                case 93:  // Chicken → any seeds (ItemSeeds: wheat 295, melon 362, pumpkin 361)
+                    isBreedingItem = (heldId == 295 || heldId == 361 || heldId == 362);
+                    break;
+                default:
+                    break;
+            }
+
+            if (!isBreedingItem) break;
+            // Java: this.getGrowingAge() == 0 && this.inLove <= 0
+            if (mob.inLoveTicks > 0 || mob.breedCooldown > 0) break;
+
+            // Set in love — Java: EntityAnimal.setInLove()
+            mob.inLoveTicks = 600;  // 30 seconds
+            mob.breedingCounter = 0;
+            mob.mateEntityId = -1;
+
+            // Consume item in survival — Java: --itemStack.stackSize
+            if (gameMode != 1) {
+                player.decrHeldItem();
+            }
+            player.sendWindowItems(conn);
+
+            // S1A EntityStatus byte 18 — love hearts particle
+            broadcastEntityEvent(mob.entityId, 18);
+            break;
+        }
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -3064,6 +3112,130 @@ void MinecraftServer::tickMobs() {
                             }
                         }
                     }
+                }
+
+                // ─── Breeding timer tick — Java: EntityAnimal.onLivingUpdate() ──
+                if (mob.breedCooldown > 0) --mob.breedCooldown;
+
+                if (mob.inLoveTicks > 0) {
+                    --mob.inLoveTicks;
+
+                    // Heart particles every 10 ticks — Java: inLove % 10 == 0
+                    if (mob.inLoveTicks > 0 && mob.inLoveTicks % 10 == 0) {
+                        broadcastParticle("heart",
+                            static_cast<float>(mob.posX + ((rand() % 100 - 50) / 100.0)),
+                            static_cast<float>(mob.posY + 0.5 + ((rand() % 50) / 100.0)),
+                            static_cast<float>(mob.posZ + ((rand() % 100 - 50) / 100.0)),
+                            0.0f, 0.0f, 0.0f, 0.0f, 1);
+                    }
+
+                    // ─── Mate search — Java: EntityAIMate.getNearbyMate() ──
+                    // Find nearest same-type, in-love mob within 8 blocks
+                    if (mob.mateEntityId == -1) {
+                        double nearestDist = 64.0;  // 8 blocks squared
+                        int32_t nearestId = -1;
+                        for (auto& other : mobEntities_) {
+                            if (other.entityId == mob.entityId) continue;
+                            if (other.isDead || other.mobType != mob.mobType) continue;
+                            if (other.inLoveTicks <= 0 || other.breedCooldown > 0) continue;
+                            double dx = other.posX - mob.posX;
+                            double dz = other.posZ - mob.posZ;
+                            double distSq = dx * dx + dz * dz;
+                            if (distSq < nearestDist) {
+                                nearestDist = distSq;
+                                nearestId = other.entityId;
+                            }
+                        }
+                        if (nearestId != -1) {
+                            mob.mateEntityId = nearestId;
+                            mob.breedingCounter = 0;
+                        }
+                    }
+
+                    // ─── Proximity mating — Java: EntityAIMate.updateTask() ──
+                    if (mob.mateEntityId != -1) {
+                        // Check mate still valid
+                        bool mateValid = false;
+                        SpawnedMob* mate = nullptr;
+                        for (auto& other : mobEntities_) {
+                            if (other.entityId == mob.mateEntityId && !other.isDead &&
+                                other.inLoveTicks > 0) {
+                                mate = &other;
+                                mateValid = true;
+                                break;
+                            }
+                        }
+
+                        if (!mateValid) {
+                            mob.mateEntityId = -1;
+                            mob.breedingCounter = 0;
+                        } else {
+                            // Check distance — Java: getDistanceSqToEntity < 9.0
+                            double dx = mate->posX - mob.posX;
+                            double dz = mate->posZ - mob.posZ;
+                            double distSq = dx * dx + dz * dz;
+
+                            if (distSq < 9.0) {
+                                ++mob.breedingCounter;
+                            }
+
+                            // Java: spawnBabyDelay >= 60 && distance < 9
+                            if (mob.breedingCounter >= 60 && distSq < 9.0) {
+                                // ─── Spawn baby — Java: EntityAIMate.spawnBaby() ──
+                                double babyX = (mob.posX + mate->posX) / 2.0;
+                                double babyY = mob.posY;
+                                double babyZ = (mob.posZ + mate->posZ) / 2.0;
+
+                                summonMob(mob.mobType, babyX, babyY, babyZ);
+
+                                // Both parents enter cooldown — Java: setGrowingAge(6000)
+                                mob.inLoveTicks = 0;
+                                mob.breedCooldown = 6000;
+                                mob.breedingCounter = 0;
+                                mob.mateEntityId = -1;
+
+                                mate->inLoveTicks = 0;
+                                mate->breedCooldown = 6000;
+                                mate->breedingCounter = 0;
+                                mate->mateEntityId = -1;
+
+                                // 7 heart particles — Java: for (int i = 0; i < 7; ++i)
+                                for (int hp = 0; hp < 7; ++hp) {
+                                    broadcastParticle("heart",
+                                        static_cast<float>(babyX + ((rand() % 100 - 50) / 100.0)),
+                                        static_cast<float>(babyY + 0.5 + ((rand() % 80) / 100.0)),
+                                        static_cast<float>(babyZ + ((rand() % 100 - 50) / 100.0)),
+                                        0.0f, 0.0f, 0.0f, 0.0f, 1);
+                                }
+
+                                // XP orbs — Java: 1-7 XP (give to nearest player)
+                                int32_t xpAmount = 1 + (rand() % 7);
+                                {
+                                    std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                                    PlayHandler* nearest = nullptr;
+                                    double nearestDistSq = 64.0;  // 8 blocks
+                                    for (auto& c : connections_) {
+                                        if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
+                                        auto handler = c->getHandler();
+                                        auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                                        if (!ph) continue;
+                                        double pdx = ph->getPlayerX() - babyX;
+                                        double pdz = ph->getPlayerZ() - babyZ;
+                                        double pd = pdx * pdx + pdz * pdz;
+                                        if (pd < nearestDistSq) {
+                                            nearestDistSq = pd;
+                                            nearest = ph;
+                                        }
+                                    }
+                                    if (nearest) nearest->grantExperience(xpAmount);
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // Not in love — reset breeding state
+                    mob.breedingCounter = 0;
+                    mob.mateEntityId = -1;
                 }
             }
         }
