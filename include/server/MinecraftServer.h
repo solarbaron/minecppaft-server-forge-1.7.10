@@ -11,6 +11,7 @@
 #pragma once
 
 #include "entity/EntityItem.h"
+#include "entity/EntityMinecart.h"
 #include "inventory/Inventory.h"
 #include <atomic>
 #include <chrono>
@@ -402,6 +403,7 @@ public:
      * Java reference: WorldServer.setEntityState()
      */
     void broadcastEntityEvent(int32_t entityId, int8_t status);
+    void broadcastAttachEntity(int32_t leashId, int32_t riderId, int32_t vehicleId);
 
     /**
      * Broadcast S0B Animation (e.g. arm swing) to all players except the source.
@@ -424,6 +426,8 @@ public:
      */
     void handlePlayerAttack(PlayHandler& attacker, Connection& attackerConn, int32_t targetEntityId);
     void handleEntityInteract(PlayHandler& player, Connection& conn, int32_t targetEntityId);
+    /** Boost speed of pig ridden by this player. Java: ItemCarrotOnAStick.onItemRightClick → boostSpeed() */
+    bool boostRiddenPig(int32_t riderEntityId);
 
     /**
      * Teleport a player to a position. Sends S08 PlayerPosAndLook.
@@ -673,11 +677,28 @@ private:
         bool isSheared = false;   // true = wool already sheared off
         // Pig state — Java: EntityPig dataWatcher(16) bit 0x01
         bool isSaddled = false;   // true = pig has saddle
+        // ─── Rider state (pig riding) — Java: EntityLiving.riddenByEntity ───
+        int32_t riderEntityId = -1;   // Entity ID of riding player (-1 = none)
+        // Java: EntityAIControlledByPlayer fields
+        float pigCurrentSpeed = 0.0f;      // Java: currentSpeed (ramps 0→0.3)
+        bool pigSpeedBoosted = false;      // Java: speedBoosted
+        int32_t pigSpeedBoostTime = 0;     // Java: speedBoostTime
+        int32_t pigMaxSpeedBoostTime = 0;  // Java: maxSpeedBoostTime
         // Breeding state — Java: EntityAnimal.inLove + EntityAIMate
         int32_t inLoveTicks = 0;    // 600 ticks (30s) when fed breeding item
         int32_t breedCooldown = 0;  // 6000 ticks (5 min) after breeding
         int32_t breedingCounter = 0; // Proximity mating countdown (60 ticks)
         int32_t mateEntityId = -1;  // Entity ID of the mate being approached
+        // Wolf state — Java: EntityWolf / EntityTameable DataWatcher
+        bool isTamed = false;           // DataWatcher 16 bit 0x04
+        bool isSitting = false;         // DataWatcher 16 bit 0x01
+        bool isAngry = false;           // DataWatcher 16 bit 0x02
+        std::string ownerUuid;          // DataWatcher 17 (String, owner UUID)
+        int32_t collarColor = 14;       // DataWatcher 20 (byte, default=14=orange, Java: BlockColored.func_150032_b(1))
+        int32_t wolfAttackTarget = -1;  // Entity ID of current attack target
+        int32_t wolfFollowTicks = 0;    // Follow-owner movement timer
+        // Ocelot/Cat state — Java: EntityOcelot DataWatcher(18)
+        int32_t catSkinType = 0;        // 0=wild ocelot, 1=tuxedo, 2=tabby, 3=siamese
     };
     mutable std::mutex mobEntitiesMutex_;
     std::vector<SpawnedMob> mobEntities_;
@@ -780,6 +801,125 @@ public:
 
     /** Tick all throwable projectiles (flight physics, collision, despawn). */
     void tickThrowables();
+
+    // ─── Fish hook entities ─────────────────────────────────────────
+    // Java reference: EntityFishHook — fishing rod projectile with catch mechanics
+    struct SpawnedFishHook {
+        int32_t entityId = 0;
+        int32_t anglerEntityId = -1;    // Entity ID of the player who cast
+        double posX = 0, posY = 0, posZ = 0;
+        double motionX = 0, motionY = 0, motionZ = 0;
+        float yaw = 0, pitch = 0;
+        bool isDead = false;
+        bool inGround = false;
+        int32_t ticksInGround = 0;      // Despawn after 1200 ticks in ground
+        int32_t ticksInAir = 0;
+
+        // Java: EntityFishHook 3-phase catch cycle
+        int32_t ticksCaughtDelay = 0;    // Phase 1: initial wait (100-900 ticks)
+        int32_t ticksCatchableDelay = 0; // Phase 2: fish approach (20-80 ticks)
+        int32_t ticksCatchable = 0;      // Phase 3: bite window (10-30 ticks)
+        float fishApproachAngle = 0.0f;  // Angle for approach particle effects
+
+        int64_t spawnTick = 0;
+
+        static constexpr float GRAVITY_WATER = 0.04f;  // buoyancy in water
+        static constexpr float AIR_FRICTION = 0.92f;
+        static constexpr float WATER_FRICTION = 0.5f;
+        static constexpr int32_t GROUND_DESPAWN = 1200;
+    };
+    mutable std::mutex fishHookEntitiesMutex_;
+    std::vector<SpawnedFishHook> fishHookEntities_;
+    std::atomic<int32_t> nextFishHookEntityId_{800000};
+
+    /**
+     * Spawn a fish hook projectile.
+     * Java reference: EntityFishHook(World, EntityPlayer) constructor
+     * @return entity ID of the spawned hook
+     */
+    int32_t spawnFishHook(double x, double y, double z,
+                          double motionX, double motionY, double motionZ,
+                          int32_t anglerEntityId);
+
+    /** Tick all fish hook entities (water physics, catch cycle, despawn). */
+    void tickFishHooks();
+
+    /**
+     * Retract a fish hook — Java: EntityFishHook.handleHookRetraction()
+     * Returns durability damage to apply to fishing rod (0=nothing, 1=caught fish, 2=ground, 3=entity)
+     */
+    int32_t retractFishHook(int32_t anglerEntityId);
+
+    // ─── Minecart entities ───────────────────────────────────────────
+    // Java reference: EntityMinecart — rail physics, 7 subtypes
+    struct SpawnedMinecart {
+        int32_t entityId = 0;
+        int32_t minecartType = 0;  // 0=empty, 1=chest, 2=furnace, 3=TNT, 4=spawner, 5=hopper, 6=command
+        EntityMinecart logic;       // Header-only rail physics engine
+        int32_t riderEntityId = -1; // Entity ID of the riding player (-1 = none)
+        bool isDead = false;
+        int64_t spawnTick = 0;
+        // Movement tracking for S15/S18 broadcast
+        int32_t lastSentPosX = 0, lastSentPosY = 0, lastSentPosZ = 0;
+        int32_t ticksSinceLastTeleport = 0;
+    };
+    mutable std::mutex minecartEntitiesMutex_;
+    std::vector<SpawnedMinecart> minecartEntities_;
+    std::atomic<int32_t> nextMinecartEntityId_{500000};
+
+    /** Spawn a minecart entity on a rail and broadcast to clients. */
+    int32_t spawnMinecart(int32_t type, double x, double y, double z);
+
+    /** Tick all minecart entities (rail physics, movement broadcast, despawn). */
+    void tickMinecarts();
+
+    // ─── Lightning bolt entities ────────────────────────────────────
+    // Java reference: EntityLightningBolt — thunder weather effect
+    struct SpawnedLightning {
+        int32_t entityId = 0;
+        EntityLightningBolt logic;  // Header-only state machine
+        bool isDead = false;
+        int64_t spawnTick = 0;
+    };
+    mutable std::mutex lightningEntitiesMutex_;
+    std::vector<SpawnedLightning> lightningEntities_;
+    std::atomic<int32_t> nextLightningEntityId_{600000};
+
+    /** Spawn a lightning bolt at position and broadcast S2C to clients. */
+    int32_t spawnLightning(double x, double y, double z);
+
+    /** Tick all lightning bolts (state countdown, fire, entity damage). */
+    void tickLightning();
+
+    // ─── Boat entities ──────────────────────────────────────────────────
+    // Java reference: EntityBoat — water physics, rider steering, collision breaking
+    struct SpawnedBoat {
+        int32_t entityId = 0;
+        double posX = 0, posY = 0, posZ = 0;
+        double motionX = 0, motionY = 0, motionZ = 0;
+        float yaw = 0, pitch = 0;
+        double prevPosX = 0, prevPosY = 0, prevPosZ = 0;
+        double speedMultiplier = 0.07;     // Java: EntityBoat.speedMultiplier
+        float damageTaken = 0.0f;          // Java: DataWatcher 19
+        int32_t timeSinceHit = 0;          // Java: DataWatcher 17
+        int32_t forwardDirection = 1;      // Java: DataWatcher 18
+        int32_t riderEntityId = -1;        // Entity ID of riding player (-1 = none)
+        bool isDead = false;
+        bool onGround = false;
+        int64_t spawnTick = 0;
+        // Movement tracking for S18 broadcast
+        int32_t lastSentPosX = 0, lastSentPosY = 0, lastSentPosZ = 0;
+        int32_t ticksSinceLastTeleport = 0;
+    };
+    mutable std::mutex boatEntitiesMutex_;
+    std::vector<SpawnedBoat> boatEntities_;
+    std::atomic<int32_t> nextBoatEntityId_{700000};
+
+    /** Spawn a boat entity at position and broadcast S0E to clients. */
+    int32_t spawnBoat(double x, double y, double z, float yaw);
+
+    /** Tick all boat entities (water physics, steering, collision, broadcast). */
+    void tickBoats();
 
 private:
     // ─── Chest storage (in-memory tile entities) ─────────────────────

@@ -384,6 +384,23 @@ public:
     void sendEntityVelocity(Connection& conn, int32_t entityId, double vx, double vy, double vz);
 
     /**
+     * Send S1B AttachEntity to mount/dismount an entity.
+     * Java reference: S1BPacketEntityAttach
+     * @param leash 0 for riding, 1 for leash
+     * @param entityId the entity being attached
+     * @param vehicleId the vehicle entity (-1 to dismount)
+     */
+    void sendAttachEntity(Connection& conn, int32_t leash, int32_t entityId, int32_t vehicleId);
+
+    /**
+     * Send S2C SpawnGlobalEntity to the client (lightning bolt).
+     * Java reference: S2CPacketSpawnGlobalEntity
+     * @param type 1 = lightning bolt
+     */
+    void sendSpawnGlobalEntity(Connection& conn, int32_t entityId, int8_t type,
+                                double x, double y, double z);
+
+    /**
      * Send S0F SpawnMob to the client.
      * Java reference: S0FPacketSpawnMob
      */
@@ -449,6 +466,14 @@ public:
     bool isDead() const { return dead_; }
     int16_t getCurrentSlot() const { return currentSlot_; }
     bool isSneaking() const { return isSneaking_; }
+
+    // C0C SteerVehicle input — Java: EntityLivingBase.moveForward/moveStrafing
+    float getMoveForward() const { return moveForward_; }
+    float getMoveStrafing() const { return moveStrafing_; }
+
+    // Riding state — tracks which entity this player is riding
+    int32_t getRidingEntityId() const { return ridingEntityId_; }
+    void setRidingEntityId(int32_t id) { ridingEntityId_ = id; }
     bool isSprinting() const { return isSprinting_; }
 
     // Java: Entity.setFire(int seconds) — sets fire ticks
@@ -845,6 +870,7 @@ public:
 private:
     void handleKeepAlive(const uint8_t* data, size_t length, Connection& conn);
     void handleChatMessage(const uint8_t* data, size_t length, Connection& conn);
+    void handleSteerVehicle(const uint8_t* data, size_t length, Connection& conn);
     void handlePlayerPosition(const uint8_t* data, size_t length, Connection& conn);
     void handlePlayerLook(const uint8_t* data, size_t length, Connection& conn);
     void handlePlayerPosAndLook(const uint8_t* data, size_t length, Connection& conn);
@@ -875,6 +901,11 @@ private:
     double playerX_ = 0.0, playerY_ = 0.0, playerZ_ = 0.0;
     float playerYaw_ = 0.0f, playerPitch_ = 0.0f;
     bool playerOnGround_ = false;
+
+    // C0C SteerVehicle input — Java: EntityLivingBase moveForward/moveStrafing
+    float moveForward_ = 0.0f;
+    float moveStrafing_ = 0.0f;
+    int32_t ridingEntityId_ = -1;  // Entity this player is currently riding (-1 = none)
 
 public:
     // Entity tracker: last sent position/rotation for relative movement

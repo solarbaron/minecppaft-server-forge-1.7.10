@@ -434,6 +434,32 @@ namespace PacketBuilder {
         return w.toFramed();
     }
 
+    // ─── 0x1C Entity Metadata (float at index) ───
+    // Java: S1CPacketEntityMetadata — single DataWatcher float entry
+    // Used for: wolf health (index 18), etc.
+    inline std::vector<uint8_t> entityMetadataFloat(int32_t entityId, uint8_t index, float value) {
+        PacketWriter w(ClientboundPacket::EntityMetadata);
+        w.writeVarInt(entityId);
+        // DataWatcher entry: type<<5 | index, where type=3 (float)
+        w.writeUByte((3 << 5) | (index & 0x1F));
+        w.writeFloat(value);
+        w.writeUByte(0x7F); // End of metadata
+        return w.toFramed();
+    }
+
+    // ─── 0x1C Entity Metadata (string at index) ───
+    // Java: S1CPacketEntityMetadata — single DataWatcher string entry
+    // Used for: wolf/ocelot owner name (index 17), etc.
+    inline std::vector<uint8_t> entityMetadataString(int32_t entityId, uint8_t index, const std::string& value) {
+        PacketWriter w(ClientboundPacket::EntityMetadata);
+        w.writeVarInt(entityId);
+        // DataWatcher entry: type<<5 | index, where type=4 (string)
+        w.writeUByte((4 << 5) | (index & 0x1F));
+        w.writeString(value);
+        w.writeUByte(0x7F); // End of metadata
+        return w.toFramed();
+    }
+
     // ─── 0x3A Tab Complete ───
     // Java: S3APacketTabComplete
     inline std::vector<uint8_t> tabComplete(const std::vector<std::string>& completions) {

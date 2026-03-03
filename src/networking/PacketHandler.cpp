@@ -697,6 +697,8 @@ void PlayHandler::handlePacket(int32_t packetId,
             handleTabComplete(data, length, conn);
             break;
         case ServerboundPacket::SteerVehicle:
+            handleSteerVehicle(data, length, conn);
+            break;
         case ServerboundPacket::EnchantItem:
             // Silently consume unimplemented packets
             break;
@@ -872,6 +874,51 @@ void PlayHandler::handleKeepAlive(const uint8_t* data, size_t length, Connection
     int32_t id = readInt(data);
     if (id == lastKeepAliveId_) {
         ticksSinceLastKeepAlive_ = 0;
+    }
+}
+
+void PlayHandler::handleSteerVehicle(const uint8_t* data, size_t length, Connection& conn) {
+    // Java reference: C0CPacketInput — processInput()
+    // Format: Float strafeSpeed, Float forwardSpeed, Boolean jumping, Boolean sneaking
+    if (length < 10) return;
+    float strafeSpeed = readFloat(data);
+    float forwardSpeed = readFloat(data + 4);
+    // bool jumping = data[8] != 0;  // Not used server-side in 1.7.10
+    bool sneaking = data[9] != 0;
+
+    moveStrafing_ = strafeSpeed;
+    moveForward_ = forwardSpeed;
+
+    // Java: NetHandlerPlayServer.processInput() — sneak = dismount
+    if (sneaking && ridingEntityId_ >= 0) {
+        int32_t vehicleId = ridingEntityId_;
+        ridingEntityId_ = -1;
+        moveForward_ = 0.0f;
+        moveStrafing_ = 0.0f;
+
+        // Clear rider from minecarts
+        {
+            std::lock_guard<std::mutex> lock(server_.minecartEntitiesMutex_);
+            for (auto& mc : server_.minecartEntities_) {
+                if (mc.riderEntityId == entityId_) {
+                    mc.riderEntityId = -1;
+                    break;
+                }
+            }
+        }
+        // Clear rider from boats
+        {
+            std::lock_guard<std::mutex> lock(server_.boatEntitiesMutex_);
+            for (auto& boat : server_.boatEntities_) {
+                if (boat.riderEntityId == entityId_) {
+                    boat.riderEntityId = -1;
+                    break;
+                }
+            }
+        }
+
+        // Broadcast S1B AttachEntity dismount to all players via server
+        server_.broadcastAttachEntity(0, entityId_, -1);
     }
 }
 
@@ -1517,6 +1564,32 @@ void PlayHandler::sendSpawnObject(Connection& conn, int32_t entityId, int8_t typ
         writeShort(pkt, encVel(motionY));
         writeShort(pkt, encVel(motionZ));
     }
+    conn.sendPacket(std::move(pkt));
+}
+
+void PlayHandler::sendAttachEntity(Connection& conn, int32_t leash, int32_t entityId, int32_t vehicleId) {
+    // Java reference: S1BPacketEntityAttach.writePacketData()
+    // Format: Int entityId, Int vehicleId, Bool leash
+    // leash: 0 = mounting, 1 = leash
+    std::vector<uint8_t> pkt;
+    writeVarInt(pkt, ClientboundPacket::AttachEntity);
+    writeInt(pkt, entityId);
+    writeInt(pkt, vehicleId);
+    writeByte(pkt, static_cast<uint8_t>(leash));
+    conn.sendPacket(std::move(pkt));
+}
+
+void PlayHandler::sendSpawnGlobalEntity(Connection& conn, int32_t entityId, int8_t type,
+                                         double x, double y, double z) {
+    // Java reference: S2CPacketSpawnGlobalEntity.writePacketData()
+    // Format: VarInt entityId, Byte type, Int x*32, Int y*32, Int z*32
+    std::vector<uint8_t> pkt;
+    writeVarInt(pkt, ClientboundPacket::SpawnGlobalEntity);
+    writeVarInt(pkt, entityId);
+    writeByte(pkt, static_cast<uint8_t>(type));
+    writeInt(pkt, static_cast<int32_t>(x * 32.0));
+    writeInt(pkt, static_cast<int32_t>(y * 32.0));
+    writeInt(pkt, static_cast<int32_t>(z * 32.0));
     conn.sendPacket(std::move(pkt));
 }
 
@@ -2810,6 +2883,70 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
                 }
             }
 
+            // ─── Fishing rod use — Java: ItemFishingRod.onItemRightClick ──
+            // Right-click with fishing rod: if hook exists → retract; else → cast
+            if (heldItemId == 346) {
+                int32_t retractDamage = server_.retractFishHook(entityId_);
+                if (retractDamage >= 0) {
+                    // Hook was retracted — damage the fishing rod
+                    damageHeldItem(retractDamage);
+                    sendWindowItems(conn);
+                    // Swing arm animation
+                    server_.broadcastAnimation(entityId_, 0);
+                } else {
+                    // No active hook — cast a new one
+                    // Java: world.playSoundAtEntity(player, "random.bow", 0.5, 0.4/(rand*0.4+0.8))
+                    float castPitch = 0.4f / (static_cast<float>(rand() % 1000) / 1000.0f * 0.4f + 0.8f);
+                    server_.broadcastSound("random.bow", playerX_, playerY_, playerZ_, 0.5f, castPitch);
+
+                    // Java: EntityFishHook constructor — spawn at eye height, offset
+                    float yawRad = playerYaw_ / 180.0f * static_cast<float>(M_PI);
+                    float pitchRad = playerPitch_ / 180.0f * static_cast<float>(M_PI);
+                    double spawnX = playerX_ - static_cast<double>(std::cos(yawRad) * 0.16f);
+                    double spawnY = playerY_ + 1.62 - 0.1;
+                    double spawnZ = playerZ_ - static_cast<double>(std::sin(yawRad) * 0.16f);
+
+                    // Java: initial velocity = -sin(yaw)*cos(pitch), -sin(pitch), cos(yaw)*cos(pitch) * 0.4
+                    double motX = -std::sin(yawRad) * std::cos(pitchRad) * 0.4;
+                    double motY = -std::sin(pitchRad) * 0.4;
+                    double motZ = std::cos(yawRad) * std::cos(pitchRad) * 0.4;
+
+                    server_.spawnFishHook(spawnX, spawnY, spawnZ, motX, motY, motZ, entityId_);
+                    server_.broadcastAnimation(entityId_, 0);
+                    std::cout << "[Fish] " << playerName_ << " cast fishing rod\n";
+                }
+            }
+
+            // ─── Carrot on a Stick boost — Java: ItemCarrotOnAStick.onItemRightClick ──
+            // Right-click while riding pig → boost speed, damage item by 7
+            if (heldItemId == 398 && ridingEntityId_ >= 0) {
+                auto stickHeld = inventory_.getCurrentItem();
+                if (stickHeld.has_value()) {
+                    int32_t curDamage = stickHeld->getDamage();
+                    int32_t remaining = 25 - curDamage;  // maxDurability = 25
+                    // Java: itemStack.getMaxDurability() - itemStack.getMetadata() >= 7
+                    if (remaining >= 7) {
+                        if (server_.boostRiddenPig(entityId_)) {
+                            // Java: itemStack.damageItem(7, player)
+                            int32_t newDamage = curDamage + 7;
+                            if (newDamage >= 25) {
+                                // Breaks → becomes fishing rod (346)
+                                // Java: return new ItemStack(Items.fishing_rod, tagCompound)
+                                ItemStack fishingRod(346, 1, 0);
+                                inventory_.setInventorySlotContents(currentSlot_, fishingRod);
+                                server_.broadcastSound("random.break", playerX_, playerY_, playerZ_, 1.0f, 1.0f);
+                            } else {
+                                ItemStack updated(398, 1, newDamage);
+                                inventory_.setInventorySlotContents(currentSlot_, updated);
+                            }
+                            int16_t containerSlot = static_cast<int16_t>(36 + currentSlot_);
+                            sendSetSlot(conn, 0, containerSlot, inventory_.getStackInSlot(currentSlot_));
+                            std::cout << "[Pig] " << playerName_ << " used carrot-on-a-stick speed boost\n";
+                        }
+                    }
+                }
+            }
+
             // ─── Eye of Ender use — Java: ItemEnderEye.onItemRightClick ──
             // Consume 1 in survival, play random.bow sound (stronghold search not impl)
             if (heldItemId == 381) {
@@ -2919,6 +3056,108 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
     auto& worlds = server_.getWorlds();
     if (worlds.empty()) return;
     WorldServer* world = worlds[0].get();
+
+    // ─── Minecart item placement — Java: ItemMinecart.onItemUse() ────
+    // Place minecart on a rail block when right-clicking with minecart items
+    {
+        auto heldStack = inventory_.getCurrentItem();
+        if (heldStack) {
+            int32_t heldId = heldStack->getItemId();
+            // Minecart items: 328=minecart, 342=chest, 343=furnace, 407=TNT, 408=hopper
+            int32_t minecartType = -1;
+            if (heldId == 328) minecartType = 0;
+            else if (heldId == 342) minecartType = 1;
+            else if (heldId == 343) minecartType = 2;
+            else if (heldId == 407) minecartType = 3;
+            else if (heldId == 408) minecartType = 5;
+
+            if (minecartType >= 0) {
+                // Check if target block is a rail
+                Block* clickedBlock = world->getBlock(blockX, static_cast<int32_t>(blockY), blockZ);
+                int32_t clickedId = clickedBlock ? Block::getIdFromBlock(clickedBlock) : 0;
+                bool isRail = (clickedId == 66 || clickedId == 27 || clickedId == 28 || clickedId == 157);
+                if (isRail) {
+                    // Java: ItemMinecart.onItemUse → spawn at blockX+0.5, blockY+0.5, blockZ+0.5
+                    double spawnX = static_cast<double>(blockX) + 0.5;
+                    double spawnY = static_cast<double>(blockY) + 0.5;
+                    double spawnZ = static_cast<double>(blockZ) + 0.5;
+
+                    server_.spawnMinecart(minecartType, spawnX, spawnY, spawnZ);
+
+                    // Consume item in survival
+                    if (gameMode_ != 1) {
+                        int32_t remaining = heldStack->getStackSize() - 1;
+                        if (remaining <= 0) {
+                            inventory_.setInventorySlotContents(currentSlot_, std::nullopt);
+                        } else {
+                            ItemStack updated = *heldStack;
+                            updated.setStackSize(remaining);
+                            inventory_.setInventorySlotContents(currentSlot_, updated);
+                        }
+                        int16_t containerSlot = static_cast<int16_t>(36 + currentSlot_);
+                        sendSetSlot(conn, 0, containerSlot, inventory_.getStackInSlot(currentSlot_));
+                    }
+                    std::cout << "[Minecart] " << playerName_ << " placed minecart type " << minecartType
+                              << " at " << blockX << "," << blockY << "," << blockZ << "\n";
+                    return;
+                }
+            }
+        }
+    }
+
+    // ─── Boat item placement — Java: ItemBoat.onItemRightClick() ────────
+    // Place boat on water surface when right-clicking with a boat item (333)
+    {
+        auto heldStack = inventory_.getCurrentItem();
+        if (heldStack && heldStack->getItemId() == 333) {
+            // Java ray-traces to find water surface. Server-side approximation:
+            // Use the adjacent block position (face direction) and check for water
+            int32_t placeX = blockX, placeY = static_cast<int32_t>(blockY), placeZ = blockZ;
+            switch (direction) {
+                case 0: placeY -= 1; break;
+                case 1: placeY += 1; break;
+                case 2: placeZ -= 1; break;
+                case 3: placeZ += 1; break;
+                case 4: placeX -= 1; break;
+                case 5: placeX += 1; break;
+            }
+            // Check if target or clicked block is water (8 or 9)
+            Block* placeBlock = world->getBlock(placeX, placeY, placeZ);
+            int32_t placeId = placeBlock ? Block::getIdFromBlock(placeBlock) : 0;
+            Block* clickedBlock = world->getBlock(blockX, static_cast<int32_t>(blockY), blockZ);
+            int32_t clickedId = clickedBlock ? Block::getIdFromBlock(clickedBlock) : 0;
+            bool isWater = (placeId == 8 || placeId == 9 || clickedId == 8 || clickedId == 9);
+            if (isWater) {
+                // Java: EntityBoat spawns at blockX+0.5, blockY+1.0, blockZ+0.5
+                double spawnX = static_cast<double>(blockX) + 0.5;
+                double spawnY = static_cast<double>(blockY) + 1.0;
+                double spawnZ = static_cast<double>(blockZ) + 0.5;
+
+                // Calculate yaw from player facing: Java: ((floor(yaw*4/360+0.5) & 3) - 1) * 90
+                float boatYaw = static_cast<float>(
+                    (static_cast<int>(std::floor(playerYaw_ * 4.0f / 360.0f + 0.5f)) & 3) - 1) * 90.0f;
+
+                server_.spawnBoat(spawnX, spawnY, spawnZ, boatYaw);
+
+                // Consume item in survival
+                if (gameMode_ != 1) {
+                    int32_t remaining = heldStack->getStackSize() - 1;
+                    if (remaining <= 0) {
+                        inventory_.setInventorySlotContents(currentSlot_, std::nullopt);
+                    } else {
+                        ItemStack updated = *heldStack;
+                        updated.setStackSize(remaining);
+                        inventory_.setInventorySlotContents(currentSlot_, updated);
+                    }
+                    int16_t containerSlot = static_cast<int16_t>(36 + currentSlot_);
+                    sendSetSlot(conn, 0, containerSlot, inventory_.getStackInSlot(currentSlot_));
+                }
+                std::cout << "[Boat] " << playerName_ << " placed boat at "
+                          << blockX << "," << blockY << "," << blockZ << "\n";
+                return;
+            }
+        }
+    }
 
     // ─── Bonemeal (dye 351:15) — Java: ItemDye.onItemUse → func_150919_a ─────
     // Right-click on a growable block with bone meal to accelerate growth

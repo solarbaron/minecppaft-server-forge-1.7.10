@@ -261,6 +261,10 @@ void MinecraftServer::tick() {
     tickMobs();
     tickArrows();
     tickThrowables();
+    tickFishHooks();
+    tickMinecarts();
+    tickLightning();
+    tickBoats();
 
     // Natural mob spawning every 200 ticks (10 seconds)
     // Java reference: WorldServer.tick() → SpawnerAnimals.findChunksForSpawning()
@@ -1505,6 +1509,19 @@ void MinecraftServer::broadcastEntityEvent(int32_t entityId, int8_t status) {
     }
 }
 
+void MinecraftServer::broadcastAttachEntity(int32_t leashId, int32_t riderId, int32_t vehicleId) {
+    // S1B AttachEntity — broadcast to all players
+    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    for (auto& conn : connections_) {
+        if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+        auto handler = conn->getHandler();
+        auto* play = dynamic_cast<PlayHandler*>(handler.get());
+        if (play) {
+            play->sendAttachEntity(*conn, leashId, riderId, vehicleId);
+        }
+    }
+}
+
 void MinecraftServer::broadcastAnimation(int32_t entityId, uint8_t animationType) {
     // Java reference: WorldServer entity.worldObj.setEntityState() for animation
     // Broadcasts S0B Animation to all players except the source entity
@@ -1575,6 +1592,109 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
     }
 
     if (!target || !targetConn || target->isDead()) {
+        // ─── Player-vs-Minecart attack ───────────────────────────────
+        // Check if the target is a minecart entity
+        {
+            std::lock_guard<std::mutex> cartLock(minecartEntitiesMutex_);
+            for (auto& cart : minecartEntities_) {
+                if (cart.entityId != targetEntityId || cart.isDead) continue;
+
+                bool isCreative = (attacker.getGameMode() == 1);
+                auto result = cart.logic.attackEntityFrom(attacker.getWeaponDamage(), isCreative, false);
+
+                if (result.broken) {
+                    cart.isDead = true;
+                    // Drop minecart item in survival
+                    if (result.dropItems) {
+                        // Java: EntityMinecart.killMinecart → drop Items.minecart (328)
+                        // Minecart type → item: 0→328, 1→342 (chest), 2→343 (furnace),
+                        //   3→407 (TNT), 5→408 (hopper)
+                        int32_t dropItemId = 328; // default: minecart
+                        switch (cart.minecartType) {
+                            case 1: dropItemId = 342; break; // chest minecart
+                            case 2: dropItemId = 343; break; // furnace minecart
+                            case 3: dropItemId = 407; break; // TNT minecart
+                            case 5: dropItemId = 408; break; // hopper minecart
+                            default: break;
+                        }
+                        spawnItemDrop(cart.logic.posX, cart.logic.posY, cart.logic.posZ,
+                            dropItemId, 0, 1);
+                    }
+
+                    // Broadcast S13 DestroyEntities
+                    std::vector<int32_t> destroyIds = { cart.entityId };
+                    std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                    for (auto& conn : connections_) {
+                        if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                        auto handler = conn->getHandler();
+                        auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                        if (ph) ph->sendDestroyEntities(*conn, destroyIds);
+                    }
+                    std::cout << "[Minecart] Entity " << cart.entityId << " destroyed by " << attacker.getPlayerName() << "\n";
+                }
+                return; // Handled
+            }
+        }
+
+        // ─── Player-vs-Boat attack ───────────────────────────────────
+        // Java: EntityBoat.attackEntityFrom()
+        {
+            std::lock_guard<std::mutex> boatLock(boatEntitiesMutex_);
+            for (auto& boat : boatEntities_) {
+                if (boat.entityId != targetEntityId || boat.isDead) continue;
+
+                bool isCreative = (attacker.getGameMode() == 1);
+
+                if (isCreative) {
+                    // Creative: instant kill
+                    boat.isDead = true;
+                } else {
+                    // Java: EntityBoat.attackEntityFrom → setForwardDirection(-getForwardDirection())
+                    boat.forwardDirection = -boat.forwardDirection;
+                    // Java: setTimeSinceHit(10)
+                    boat.timeSinceHit = 10;
+                    // Java: setDamageTaken(getDamageTaken() + damage * 10)
+                    float damage = attacker.getWeaponDamage();
+                    boat.damageTaken += damage * 10.0f;
+
+                    // Java: if getDamageTaken() > 40 → setDead + drop items
+                    if (boat.damageTaken > 40.0f) {
+                        boat.isDead = true;
+                    }
+                }
+
+                if (boat.isDead) {
+                    // Dismount rider + broadcast destroy — single lock
+                    std::vector<int32_t> destroyIds = { boat.entityId };
+                    std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                    for (auto& conn : connections_) {
+                        if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                        auto handler = conn->getHandler();
+                        auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                        if (!ph) continue;
+                        // Dismount rider
+                        if (boat.riderEntityId >= 0) {
+                            if (ph->getEntityId() == boat.riderEntityId) {
+                                ph->setRidingEntityId(-1);
+                            }
+                            ph->sendAttachEntity(*conn, 0, boat.riderEntityId, -1);
+                        }
+                        ph->sendDestroyEntities(*conn, destroyIds);
+                    }
+
+                    // Drop boat item in survival
+                    if (!isCreative) {
+                        spawnItemDrop(boat.posX, boat.posY, boat.posZ, 333, 0, 1);
+                    }
+                    std::cout << "[Boat] Entity " << boat.entityId << " destroyed by " << attacker.getPlayerName() << "\n";
+                } else {
+                    // Hurt animation — S19 EntityStatus byte 2
+                    broadcastEntityEvent(boat.entityId, 2);
+                }
+                return;
+            }
+        }
+
         // ─── Player-vs-Mob attack ────────────────────────────────────
         // If not a player target, check if it's a mob entity
         std::lock_guard<std::mutex> mobLock(mobEntitiesMutex_);
@@ -1634,6 +1754,8 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
                     case 90: hurtSound = "mob.pig.say"; break;
                     case 91: hurtSound = "mob.sheep.say"; break;
                     case 93: hurtSound = "mob.chicken.hurt"; break;
+                    case 95: hurtSound = "mob.wolf.hurt"; break;
+                    case 98: hurtSound = "mob.cat.hitt"; break;  // Ocelot/Cat
                     case 99: hurtSound = "mob.irongolem.hit"; break;
                     default: break;
                 }
@@ -1695,6 +1817,22 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
                 }
             }
 
+            // ─── Wolf owner-defense — Java: EntityAIOwnerHurtTarget ──
+            // When a player attacks a mob, their standing tamed wolves target it
+            {
+                std::string attackerUuid = attacker.getUuid();
+                for (auto& wolf : mobEntities_) {
+                    if (wolf.isDead || wolf.mobType != 95) continue;
+                    if (!wolf.isTamed || wolf.isSitting) continue;
+                    if (wolf.ownerUuid != attackerUuid) continue;
+                    double wdx = wolf.posX - mob.posX;
+                    double wdz = wolf.posZ - mob.posZ;
+                    if (wdx * wdx + wdz * wdz < 256.0) { // Within 16 blocks
+                        wolf.wolfAttackTarget = targetEntityId;
+                    }
+                }
+            }
+
             // Fire Aspect — set mob on fire for cooked drops
             auto attackerHeld = attacker.getHeldItem();
             if (attackerHeld && attackerHeld->hasEnchantments()) {
@@ -1737,6 +1875,8 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
                         case 90: deathSound = "mob.pig.death"; break;
                         case 91: deathSound = "mob.sheep.say"; break;
                         case 93: deathSound = "mob.chicken.hurt"; break;
+                        case 95: deathSound = "mob.wolf.death"; break;
+                        case 98: deathSound = "mob.cat.hitt"; break;  // Ocelot/Cat
                         case 99: deathSound = "mob.irongolem.death"; break;
                         default: break;
                     }
@@ -1855,6 +1995,21 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
                             // Java: EntityPig.dropFewItems — if saddled, drop saddle
                             if (mob.isSaddled) {
                                 spawnItemDrop(mob.posX, mob.posY, mob.posZ, 329, 0, 1);
+                            }
+                            // Dismount rider if pig was being ridden
+                            if (mob.riderEntityId >= 0) {
+                                broadcastAttachEntity(0, mob.riderEntityId, -1);
+                                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                                for (auto& c : connections_) {
+                                    if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
+                                    auto h = c->getHandler();
+                                    auto* ph = dynamic_cast<PlayHandler*>(h.get());
+                                    if (ph && ph->getEntityId() == mob.riderEntityId) {
+                                        ph->setRidingEntityId(-1);
+                                        break;
+                                    }
+                                }
+                                mob.riderEntityId = -1;
                             }
                             break;
                         case 91: // Sheep → wool (35) only if not sheared
@@ -2265,9 +2420,239 @@ void MinecraftServer::handleEntityInteract(PlayHandler& player, Connection& conn
         return;
     }
 
+    // ─── Wolf interactions — Java: EntityWolf.interact() ──────────────
+    // Handles: bone taming, sit/stand toggle, meat healing, dye collar, breeding
+    {
+        std::lock_guard<std::mutex> lock(mobEntitiesMutex_);
+        for (auto& mob : mobEntities_) {
+            if (mob.entityId != targetEntityId) continue;
+            if (mob.isDead || mob.mobType != 95) break;
+
+            // Helper: broadcast wolf DataWatcher 16 byte (sitting|angry|tamed flags)
+            auto broadcastWolfDW16 = [&](SpawnedMob& w) {
+                uint8_t dw16 = 0;
+                if (w.isSitting) dw16 |= 0x01;
+                if (w.isAngry)   dw16 |= 0x02;
+                if (w.isTamed)   dw16 |= 0x04;
+                auto metaPkt = PacketBuilder::entityMetadataByte(w.entityId, 16, dw16);
+                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                for (auto& c : connections_) {
+                    if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
+                    c->sendPacket(metaPkt);
+                }
+            };
+
+            // Helper: is this a wolf-favorite meat? Java: ItemFood.isWolfsFavoriteMeat()
+            auto isWolfMeat = [](int32_t id) -> bool {
+                // Raw porkchop(319), cooked porkchop(320), raw beef(363), steak(364),
+                // raw chicken(365), cooked chicken(366), rotten flesh(367)
+                return id == 319 || id == 320 || id == 363 || id == 364 ||
+                       id == 365 || id == 366 || id == 367;
+            };
+
+            // Helper: get heal amount for meat items — Java: ItemFood.getHealAmount()
+            auto getMeatHealAmount = [](int32_t id) -> float {
+                switch (id) {
+                    case 319: return 3.0f;  // raw_porkchop
+                    case 320: return 8.0f;  // cooked_porkchop
+                    case 363: return 3.0f;  // raw_beef
+                    case 364: return 8.0f;  // steak
+                    case 365: return 2.0f;  // raw_chicken
+                    case 366: return 6.0f;  // cooked_chicken
+                    case 367: return 4.0f;  // rotten_flesh
+                    default: return 0.0f;
+                }
+            };
+
+            if (mob.isTamed) {
+                // ─── Tamed wolf: heal with meat ───
+                if (heldItem && isWolfMeat(heldId) && mob.health < 20.0f) {
+                    float healAmount = getMeatHealAmount(heldId);
+                    mob.health = std::min(20.0f, mob.health + healAmount);
+                    if (gameMode != 1) {
+                        player.decrHeldItem();
+                    }
+                    player.sendWindowItems(conn);
+
+                    // Broadcast updated health — DW 18 float
+                    {
+                        auto metaPkt = PacketBuilder::entityMetadataFloat(mob.entityId, 18, mob.health);
+                        std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                        for (auto& c : connections_) {
+                            if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
+                            c->sendPacket(metaPkt);
+                        }
+                    }
+                    return;
+                }
+
+                // ─── Tamed wolf: dye collar — Java: EntityWolf.interact() with Items.dye ───
+                if (heldId == 351) {
+                    int32_t dyeColor = heldItem->getDamage() & 0x0F;
+                    int32_t newCollarColor = 15 - dyeColor;  // Java: BlockColored.func_150032_b()
+                    if (newCollarColor != mob.collarColor) {
+                        mob.collarColor = newCollarColor;
+                        if (gameMode != 1) {
+                            player.decrHeldItem();
+                        }
+                        player.sendWindowItems(conn);
+                        // Broadcast DW 20 byte — collar color
+                        {
+                            auto metaPkt = PacketBuilder::entityMetadataByte(
+                                mob.entityId, 20, static_cast<uint8_t>(mob.collarColor & 0x0F));
+                            std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                            for (auto& c : connections_) {
+                                if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
+                                c->sendPacket(metaPkt);
+                            }
+                        }
+                    }
+                    return;
+                }
+
+                // ─── Tamed wolf: sit/stand toggle — Java: EntityAISit ───
+                // Only owner can toggle, and only if not holding breeding item
+                if (mob.ownerUuid == player.getUuid() && !(heldItem && isWolfMeat(heldId))) {
+                    mob.isSitting = !mob.isSitting;
+                    mob.wolfAttackTarget = -1;
+                    broadcastWolfDW16(mob);
+                    std::cout << "[Wolf] " << player.getPlayerName()
+                              << (mob.isSitting ? " made wolf sit" : " made wolf stand")
+                              << " (entity " << mob.entityId << ")\n";
+                    return;
+                }
+            } else {
+                // ─── Wild wolf: tame with bone (352) — Java: EntityWolf.interact() ───
+                if (heldId == 352 && !mob.isAngry) {
+                    if (gameMode != 1) {
+                        player.decrHeldItem();
+                    }
+                    player.sendWindowItems(conn);
+
+                    if (rand() % 3 == 0) {
+                        // Taming success! — Java: 1/3 chance
+                        mob.isTamed = true;
+                        mob.isSitting = true;
+                        mob.isAngry = false;
+                        mob.ownerUuid = player.getUuid();
+                        mob.health = 20.0f;  // Java: setHealth(20.0f) on tame
+                        mob.wolfAttackTarget = -1;
+
+                        broadcastWolfDW16(mob);
+
+                        // Broadcast updated health — DW 18
+                        {
+                            auto metaPkt = PacketBuilder::entityMetadataFloat(mob.entityId, 18, mob.health);
+                            std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                            for (auto& c : connections_) {
+                                if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
+                                c->sendPacket(metaPkt);
+                            }
+                        }
+
+                        // S1A EntityStatus byte 7 — heart particles (tame success)
+                        broadcastEntityEvent(mob.entityId, 7);
+
+                        std::cout << "[Wolf] " << player.getPlayerName()
+                                  << " tamed wolf " << mob.entityId << "\n";
+                    } else {
+                        // Taming failed — S1A EntityStatus byte 6 — smoke particles
+                        broadcastEntityEvent(mob.entityId, 6);
+                    }
+                    return;
+                }
+            }
+            break;
+        }
+    }
+
+    // ─── Ocelot interactions — Java: EntityOcelot.interact() ────────────
+    // Handles: fish taming, sit/stand toggle
+    {
+        std::lock_guard<std::mutex> lock(mobEntitiesMutex_);
+        for (auto& mob : mobEntities_) {
+            if (mob.entityId != targetEntityId) continue;
+            if (mob.isDead || mob.mobType != 98) break;
+
+            // Helper: broadcast ocelot DataWatcher 16 byte (sitting|tamed flags)
+            auto broadcastCatDW16 = [&](SpawnedMob& o) {
+                uint8_t dw16 = 0;
+                if (o.isSitting) dw16 |= 0x01;
+                if (o.isTamed)   dw16 |= 0x04;
+                auto metaPkt = PacketBuilder::entityMetadataByte(o.entityId, 16, dw16);
+                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                for (auto& c : connections_) {
+                    if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
+                    c->sendPacket(metaPkt);
+                }
+            };
+
+            if (mob.isTamed) {
+                // ─── Tamed ocelot: sit/stand toggle ───
+                // Java: only owner can toggle, and only if not holding breeding item
+                if (mob.ownerUuid == player.getUuid() && !(heldId == 349)) {
+                    mob.isSitting = !mob.isSitting;
+                    broadcastCatDW16(mob);
+                    std::cout << "[Cat] " << player.getPlayerName()
+                              << (mob.isSitting ? " made cat sit" : " made cat stand")
+                              << " (entity " << mob.entityId << ")\n";
+                    return;
+                }
+            } else {
+                // ─── Wild ocelot: tame with fish (349) — Java: EntityOcelot.interact() ───
+                // Java: aiTempt.isRunning() && Items.fish && dist < 9.0 && random(3)==0
+                if (heldId == 349) {
+                    double dx = player.getPlayerX() - mob.posX;
+                    double dz = player.getPlayerZ() - mob.posZ;
+                    if (dx * dx + dz * dz < 9.0) {
+                        if (gameMode != 1) {
+                            player.decrHeldItem();
+                        }
+                        player.sendWindowItems(conn);
+
+                        if (rand() % 3 == 0) {
+                            // Taming success! — Java: 1/3 chance
+                            mob.isTamed = true;
+                            mob.isSitting = true;
+                            mob.ownerUuid = player.getUuid();
+                            // Java: setTameSkin(1 + world.rand.nextInt(3))
+                            mob.catSkinType = 1 + (rand() % 3);
+
+                            broadcastCatDW16(mob);
+
+                            // Broadcast DW 18 (catSkinType)
+                            {
+                                auto metaPkt = PacketBuilder::entityMetadataByte(
+                                    mob.entityId, 18, static_cast<uint8_t>(mob.catSkinType));
+                                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                                for (auto& c : connections_) {
+                                    if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
+                                    c->sendPacket(metaPkt);
+                                }
+                            }
+
+                            // S1A EntityStatus byte 7 — heart particles (tame success)
+                            broadcastEntityEvent(mob.entityId, 7);
+
+                            std::cout << "[Cat] " << player.getPlayerName()
+                                      << " tamed ocelot " << mob.entityId
+                                      << " (skin=" << mob.catSkinType << ")\n";
+                        } else {
+                            // Taming failed — S1A EntityStatus byte 6 — smoke particles
+                            broadcastEntityEvent(mob.entityId, 6);
+                        }
+                        return;
+                    }
+                }
+            }
+            break;
+        }
+    }
+
     // ─── Animal feeding (breeding) — Java: EntityAnimal.interact() ───
     // Feeding the breeding item to a passive mob puts it in love mode (600 ticks)
     // Per-mob breeding items: cow/mooshroom/sheep → wheat (296), pig → carrot (391), chicken → seeds
+    // Wolf → any meat (tamed only, when at full health)
     if (heldItem && heldId != 0) {
         std::lock_guard<std::mutex> lock(mobEntitiesMutex_);
         for (auto& mob : mobEntities_) {
@@ -2287,6 +2672,17 @@ void MinecraftServer::handleEntityInteract(PlayHandler& player, Connection& conn
                     break;
                 case 93:  // Chicken → any seeds (ItemSeeds: wheat 295, melon 362, pumpkin 361)
                     isBreedingItem = (heldId == 295 || heldId == 361 || heldId == 362);
+                    break;
+                case 95:  // Wolf → meat (tamed only) — Java: EntityWolf.isBreedingItem()
+                    if (mob.isTamed) {
+                        isBreedingItem = (heldId == 319 || heldId == 320 || heldId == 363 ||
+                                         heldId == 364 || heldId == 365 || heldId == 366 || heldId == 367);
+                    }
+                    break;
+                case 98:  // Ocelot → fish (tamed only) — Java: EntityOcelot.isBreedingItem()
+                    if (mob.isTamed) {
+                        isBreedingItem = (heldId == 349);  // Raw fish
+                    }
                     break;
                 default:
                     break;
@@ -2312,6 +2708,150 @@ void MinecraftServer::handleEntityInteract(PlayHandler& player, Connection& conn
             break;
         }
     }
+
+    // ─── Saddled pig mounting — Java: EntityPig.interact() ─────────────
+    // If not a breeding item, check if target is a saddled pig to mount
+    // Java: if (!super.interact(player)) { if (getSaddled() && !isRemote && (riddenByEntity == null || riddenByEntity == player)) { player.mountEntity(this); } }
+    {
+        std::lock_guard<std::mutex> lock(mobEntitiesMutex_);
+        for (auto& mob : mobEntities_) {
+            if (mob.entityId != targetEntityId) continue;
+            if (mob.isDead || mob.mobType != 90) break;
+            if (!mob.isSaddled) break;
+
+            if (mob.riderEntityId == player.getEntityId()) {
+                // Dismount — Java: player.mountEntity(null)
+                mob.riderEntityId = -1;
+                mob.pigCurrentSpeed = 0.0f;
+                mob.pigSpeedBoosted = false;
+                player.setRidingEntityId(-1);
+
+                broadcastAttachEntity(0, player.getEntityId(), -1);
+                std::cout << "[Pig] " << player.getPlayerName() << " dismounted pig " << mob.entityId << "\n";
+            } else if (mob.riderEntityId < 0) {
+                // Mount — Java: player.mountEntity(pig)
+                mob.riderEntityId = player.getEntityId();
+                mob.pigCurrentSpeed = 0.0f;
+                player.setRidingEntityId(mob.entityId);
+
+                broadcastAttachEntity(0, player.getEntityId(), mob.entityId);
+                std::cout << "[Pig] " << player.getPlayerName() << " mounted saddled pig " << mob.entityId << "\n";
+            }
+            // Java: if riddenByEntity != null && riddenByEntity != player → return true (already occupied)
+            return;
+        }
+    }
+
+    // ─── Minecart mounting — Java: EntityMinecart.interactFirst() ────
+    // Right-click on an empty minecart (type 0) to mount it
+    // Right-click while riding to dismount
+    {
+        std::lock_guard<std::mutex> cartLock(minecartEntitiesMutex_);
+        for (auto& cart : minecartEntities_) {
+            if (cart.entityId != targetEntityId || cart.isDead) continue;
+            if (cart.minecartType != 0) break; // Only empty minecarts are rideable
+
+            if (cart.riderEntityId == player.getEntityId()) {
+                // Dismount — Java: EntityMinecart.interactFirst → mountEntity(null)
+                cart.riderEntityId = -1;
+                cart.logic.riderEntityId = -1;
+                player.setRidingEntityId(-1);
+
+                // S1B AttachEntity — detach (vehicleId = -1)
+                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                for (auto& c : connections_) {
+                    if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
+                    auto h = c->getHandler();
+                    auto* ph = dynamic_cast<PlayHandler*>(h.get());
+                    if (ph) ph->sendAttachEntity(*c, 0, player.getEntityId(), -1);
+                }
+                std::cout << "[Minecart] " << player.getPlayerName() << " dismounted minecart " << cart.entityId << "\n";
+            } else if (cart.riderEntityId < 0) {
+                // Mount — Java: player.mountEntity(minecart)
+                cart.riderEntityId = player.getEntityId();
+                cart.logic.riderEntityId = player.getEntityId();
+                player.setRidingEntityId(cart.entityId);
+
+                // S1B AttachEntity — attach (vehicleId = cart entityId)
+                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                for (auto& c : connections_) {
+                    if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
+                    auto h = c->getHandler();
+                    auto* ph = dynamic_cast<PlayHandler*>(h.get());
+                    if (ph) ph->sendAttachEntity(*c, 0, player.getEntityId(), cart.entityId);
+                }
+                std::cout << "[Minecart] " << player.getPlayerName() << " mounted minecart " << cart.entityId << "\n";
+            }
+            return;
+        }
+    }
+
+    // ─── Boat mounting — Java: EntityBoat.interactFirst() ────────────
+    // Right-click on a boat to mount. Right-click while riding to dismount.
+    {
+        std::lock_guard<std::mutex> boatLock(boatEntitiesMutex_);
+        for (auto& boat : boatEntities_) {
+            if (boat.entityId != targetEntityId || boat.isDead) continue;
+
+            if (boat.riderEntityId == player.getEntityId()) {
+                // Dismount
+                boat.riderEntityId = -1;
+                player.setRidingEntityId(-1);
+
+                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                for (auto& c : connections_) {
+                    if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
+                    auto h = c->getHandler();
+                    auto* ph = dynamic_cast<PlayHandler*>(h.get());
+                    if (ph) ph->sendAttachEntity(*c, 0, player.getEntityId(), -1);
+                }
+                std::cout << "[Boat] " << player.getPlayerName() << " dismounted boat " << boat.entityId << "\n";
+            } else if (boat.riderEntityId < 0) {
+                // Mount — Java: player.mountEntity(boat)
+                boat.riderEntityId = player.getEntityId();
+                player.setRidingEntityId(boat.entityId);
+
+                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                for (auto& c : connections_) {
+                    if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
+                    auto h = c->getHandler();
+                    auto* ph = dynamic_cast<PlayHandler*>(h.get());
+                    if (ph) ph->sendAttachEntity(*c, 0, player.getEntityId(), boat.entityId);
+                }
+                std::cout << "[Boat] " << player.getPlayerName() << " mounted boat " << boat.entityId << "\n";
+            }
+            return;
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Pig speed boost — Java: EntityAIControlledByPlayer.boostSpeed()
+// Called by PlayHandler when player right-clicks carrot-on-a-stick while riding
+// ═══════════════════════════════════════════════════════════════════════════
+
+bool MinecraftServer::boostRiddenPig(int32_t riderEntityId) {
+    std::lock_guard<std::mutex> lock(mobEntitiesMutex_);
+    for (auto& mob : mobEntities_) {
+        if (mob.isDead || mob.mobType != 90 || mob.riderEntityId != riderEntityId) continue;
+        if (!mob.isSaddled) return false;
+
+        // Java: isControlledByPlayer() → rider has carrot_on_stick && !speedBoosted
+        //                                && currentSpeed > maxSpeed * 0.3f
+        constexpr float PIG_MAX_SPEED = 0.3f;
+        if (mob.pigSpeedBoosted) return false;  // Already boosting
+        if (mob.pigCurrentSpeed < PIG_MAX_SPEED * 0.3f) return false;  // Too slow
+
+        // Java: boostSpeed() → speedBoosted = true, speedBoostTime = 0, maxSpeedBoostTime = rand(841)+140
+        mob.pigSpeedBoosted = true;
+        mob.pigSpeedBoostTime = 0;
+        mob.pigMaxSpeedBoostTime = 140 + (rand() % 841);  // 140-980 ticks = 7-49 seconds
+
+        std::cout << "[Pig] Speed boost activated on pig " << mob.entityId
+                  << " (duration=" << mob.pigMaxSpeedBoostTime << " ticks)\n";
+        return true;
+    }
+    return false;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -3981,7 +4521,7 @@ static float getMobMaxHealth(uint8_t mobType) {
         case 94: return 10.0f;  // Squid
         case 95: return 8.0f;   // Wolf
         case 96: return 6.0f;   // Mooshroom
-        case 98: return 6.0f;   // Ocelot
+        case 98: return 10.0f;  // Ocelot — Java: EntityOcelot.applyEntityAttributes() maxHealth=10
         case 99: return 100.0f; // Iron Golem
         case 100: return 26.0f; // Horse (base, varies)
         case 120: return 10.0f; // Villager
@@ -4010,6 +4550,9 @@ static float getMobMovementSpeed(uint8_t mobType) {
         case 91: return 0.115f; // Sheep (wander speed)
         case 92: return 0.10f;  // Cow (wander speed)
         case 93: return 0.125f; // Chicken (wander speed)
+        case 95: return 0.30f;  // Wolf — Java: EntityWolf.movementSpeed
+        case 98: return 0.30f;  // Ocelot — Java: EntityOcelot.applyEntityAttributes() movementSpeed=0.3
+        case 99: return 0.20f;  // Iron Golem (wander speed)
         default: return 0.00f;  // Non-moving mob
     }
 }
@@ -4042,6 +4585,39 @@ int32_t MinecraftServer::summonMob(uint8_t mobType, double x, double y, double z
             auto handler = conn->getHandler();
             auto* ph = dynamic_cast<PlayHandler*>(handler.get());
             if (ph) ph->sendSpawnMob(*conn, eid, mobType, x, y, z, 0.0f, 0.0f, 0.0f);
+        }
+
+        // Wolf-specific DataWatcher metadata — Java: EntityWolf.entityInit()
+        // DW 16: byte (bit 0=sitting, bit 1=angry, bit 2=tamed)
+        // DW 17: String (owner name, empty for wild)
+        // DW 18: float (wolf health)
+        // DW 19: byte (begging, 0)
+        // DW 20: byte (collar color, default 14=orange)
+        if (mobType == 95) {
+            auto dw16Pkt = PacketBuilder::entityMetadataByte(eid, 16, 0);
+            auto dw18Pkt = PacketBuilder::entityMetadataFloat(eid, 18, mob.health);
+            auto dw19Pkt = PacketBuilder::entityMetadataByte(eid, 19, 0);
+            auto dw20Pkt = PacketBuilder::entityMetadataByte(eid, 20, static_cast<uint8_t>(mob.collarColor & 0x0F));
+            for (auto& conn : connections_) {
+                if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                conn->sendPacket(dw16Pkt);
+                conn->sendPacket(dw18Pkt);
+                conn->sendPacket(dw19Pkt);
+                conn->sendPacket(dw20Pkt);
+            }
+        }
+
+        // Ocelot-specific DataWatcher metadata — Java: EntityOcelot.entityInit()
+        // DW 18: byte (catSkinType: 0=wild, 1=tuxedo, 2=tabby, 3=siamese)
+        // Shares DW 16 (sitting/tamed) and DW 17 (owner) with EntityTameable parent
+        if (mobType == 98) {
+            auto dw16Pkt = PacketBuilder::entityMetadataByte(eid, 16, 0);
+            auto dw18Pkt = PacketBuilder::entityMetadataByte(eid, 18, static_cast<uint8_t>(mob.catSkinType));
+            for (auto& conn : connections_) {
+                if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                conn->sendPacket(dw16Pkt);
+                conn->sendPacket(dw18Pkt);
+            }
         }
     }
     {
@@ -4319,9 +4895,9 @@ void MinecraftServer::spawnPassiveMobs() {
     double spawnY = static_cast<double>(surfaceY);
 
     // Pick passive mob type — equal chances
-    // 90=Pig, 91=Sheep, 92=Cow, 93=Chicken
-    static const uint8_t passiveMobs[] = {90, 91, 92, 93};
-    uint8_t mobType = passiveMobs[rng() % 4];
+    // 90=Pig, 91=Sheep, 92=Cow, 93=Chicken, 95=Wolf, 98=Ocelot
+    static const uint8_t passiveMobs[] = {90, 91, 92, 93, 95, 98};
+    uint8_t mobType = passiveMobs[rng() % 6];
 
     std::uniform_real_distribution<float> yawDist(0.0f, 360.0f);
     float yaw = yawDist(rng);
@@ -4452,6 +5028,26 @@ void MinecraftServer::tickMobs() {
                     case 90: sound = "mob.pig.say"; break;
                     case 91: sound = "mob.sheep.say"; break;
                     case 93: sound = "mob.chicken.say"; break;
+                    case 95: // Wolf — Java: EntityWolf.getLivingSound()
+                        if (mob.isTamed) {
+                            sound = (mob.health < 10.0f) ? "mob.wolf.whine" : "mob.wolf.panting";
+                        } else {
+                            sound = mob.isAngry ? "mob.wolf.growl" : "mob.wolf.bark";
+                        }
+                        break;
+                    case 98: // Ocelot/Cat — Java: EntityOcelot.getLivingSound()
+                        if (mob.isTamed) {
+                            // Java: if isInLove → purr; 1/4 → purreow; else meow
+                            if (mob.inLoveTicks > 0) {
+                                sound = "mob.cat.purr";
+                            } else if (rand() % 4 == 0) {
+                                sound = "mob.cat.purreow";
+                            } else {
+                                sound = "mob.cat.meow";
+                            }
+                        }
+                        // Wild ocelot: no ambient sound — Java: returns ""
+                        break;
                     default: break;
                 }
                 if (sound) {
@@ -4627,6 +5223,436 @@ void MinecraftServer::tickMobs() {
             if (mob.isDead) continue;
             float speed = getMobMovementSpeed(mob.mobType);
             if (speed <= 0.0f) continue; // Non-moving mob
+
+            // ─── Pig riding AI — Java: EntityAIControlledByPlayer ────────
+            // If pig is ridden, use controlled movement instead of wander AI
+            if (mob.mobType == 90 && mob.isSaddled && mob.riderEntityId >= 0) {
+                // Find rider's PlayHandler to get yaw + check held item
+                PlayHandler* rider = nullptr;
+                Connection* riderConn = nullptr;
+                {
+                    std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                    for (auto& c : connections_) {
+                        if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
+                        auto handler = c->getHandler();
+                        auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                        if (ph && ph->getEntityId() == mob.riderEntityId) {
+                            rider = ph;
+                            riderConn = c.get();
+                            break;
+                        }
+                    }
+                }
+
+                if (rider) {
+                    // Java: canBeSteered() → rider holding carrot_on_a_stick (398)
+                    auto riderHeld = rider->getHeldItem();
+                    int32_t riderHeldId = riderHeld ? riderHeld->getItemId() : 0;
+                    bool canSteer = (riderHeldId == 398) || mob.pigSpeedBoosted;
+
+                    if (canSteer) {
+                        // ─── EntityAIControlledByPlayer.updateTask() ─────────
+                        // Java: float f = wrapAngleTo180(player.rotationYaw - thisEntity.rotationYaw) * 0.5f
+                        float riderYaw = rider->getPlayerYaw();
+                        float yawDelta = riderYaw - mob.yaw;
+                        // Wrap to -180..180
+                        while (yawDelta > 180.0f) yawDelta -= 360.0f;
+                        while (yawDelta < -180.0f) yawDelta += 360.0f;
+                        yawDelta *= 0.5f;
+                        // Clamp ±5°
+                        if (yawDelta > 5.0f) yawDelta = 5.0f;
+                        if (yawDelta < -5.0f) yawDelta = -5.0f;
+                        mob.yaw += yawDelta;
+                        // Wrap yaw to -180..180
+                        while (mob.yaw > 180.0f) mob.yaw -= 360.0f;
+                        while (mob.yaw < -180.0f) mob.yaw += 360.0f;
+
+                        // Java: currentSpeed ramp: if (currentSpeed < maxSpeed) currentSpeed += (maxSpeed - currentSpeed) * 0.01f
+                        constexpr float PIG_MAX_SPEED = 0.3f;  // Java: EntityAIControlledByPlayer(pig, 0.3f)
+                        if (mob.pigCurrentSpeed < PIG_MAX_SPEED) {
+                            mob.pigCurrentSpeed += (PIG_MAX_SPEED - mob.pigCurrentSpeed) * 0.01f;
+                        }
+                        if (mob.pigCurrentSpeed > PIG_MAX_SPEED) {
+                            mob.pigCurrentSpeed = PIG_MAX_SPEED;
+                        }
+
+                        // Java: speed boost (from right-clicking carrot-on-stick while riding)
+                        float adjustedSpeed = mob.pigCurrentSpeed;
+                        if (mob.pigSpeedBoosted) {
+                            ++mob.pigSpeedBoostTime;
+                            if (mob.pigSpeedBoostTime > mob.pigMaxSpeedBoostTime) {
+                                mob.pigSpeedBoosted = false;
+                            }
+                            // Java: f2 += f2 * 1.15f * sin(speedBoostTime / maxSpeedBoostTime * PI)
+                            float boostFrac = static_cast<float>(mob.pigSpeedBoostTime) /
+                                              static_cast<float>(mob.pigMaxSpeedBoostTime);
+                            adjustedSpeed += adjustedSpeed * 1.15f * std::sin(boostFrac * static_cast<float>(M_PI));
+                        }
+
+                        // Java: moveEntityWithHeading(0.0f, speed)
+                        // Simplified: move forward along yaw at adjustedSpeed
+                        float yawRad = mob.yaw / 180.0f * static_cast<float>(M_PI);
+                        double moveX = -std::sin(yawRad) * adjustedSpeed;
+                        double moveZ = std::cos(yawRad) * adjustedSpeed;
+
+                        double newX = mob.posX + moveX;
+                        double newZ = mob.posZ + moveZ;
+
+                        // Ground/collision check (same as wander AI)
+                        if (!worlds_.empty()) {
+                            auto* wld = worlds_[0].get();
+                            int bx = static_cast<int>(std::floor(newX));
+                            int bz = static_cast<int>(std::floor(newZ));
+                            int startY = static_cast<int>(mob.posY);
+
+                            Block* feetBlock = wld->getBlock(bx, startY, bz);
+                            if (feetBlock != nullptr) {
+                                Block* stepBlock = wld->getBlock(bx, startY + 1, bz);
+                                Block* headBlock = wld->getBlock(bx, startY + 2, bz);
+                                if (stepBlock == nullptr && headBlock == nullptr) {
+                                    mob.posX = newX;
+                                    mob.posZ = newZ;
+                                    mob.posY = static_cast<double>(startY + 1);
+                                }
+                            } else {
+                                // Apply gravity
+                                int groundY = startY;
+                                for (int y = startY - 1; y > 0; --y) {
+                                    Block* b = wld->getBlock(bx, y, bz);
+                                    if (b != nullptr) { groundY = y + 1; break; }
+                                    if (y == 1) groundY = 1;
+                                }
+                                mob.posX = newX;
+                                mob.posZ = newZ;
+                                mob.posY = static_cast<double>(groundY);
+                            }
+                        }
+
+                        // Java: carrot_on_a_stick durability damage — 0.6% chance per tick
+                        // Java: if (!creative && currentSpeed >= maxSpeed * 0.5f && rand.nextFloat() < 0.006f && !speedBoosted)
+                        if (riderHeldId == 398 && rider->getGameMode() != 1 &&
+                            mob.pigCurrentSpeed >= PIG_MAX_SPEED * 0.5f &&
+                            (rand() % 1000) < 6 && !mob.pigSpeedBoosted) {
+                            // Damage the carrot-on-a-stick using PlayHandler API
+                            auto heldItem = rider->getHeldItem();
+                            if (heldItem.has_value()) {
+                                int32_t newDmg = heldItem->getDamage() + 1;
+                                if (newDmg >= 25) {
+                                    // Breaks → becomes fishing rod (346)
+                                    rider->replaceHeldItem(ItemStack(346, 1, 0));
+                                    broadcastSound("random.break", mob.posX, mob.posY, mob.posZ, 1.0f, 1.0f);
+                                } else {
+                                    heldItem->setDamage(newDmg);
+                                    rider->replaceHeldItem(heldItem);
+                                }
+                                rider->sendWindowItems(*riderConn);
+                            }
+                        }
+
+                        // Update rider position — Java: Entity.updateRiderPosition()
+                        rider->setPlayerPosition(mob.posX, mob.posY + 0.63, mob.posZ);
+
+                    } else {
+                        // Not holding carrot-on-a-stick: pig stops (speed decays)
+                        mob.pigCurrentSpeed = 0.0f;
+                    }
+                } else {
+                    // Rider disconnected — dismount
+                    mob.riderEntityId = -1;
+                    mob.pigCurrentSpeed = 0.0f;
+                    mob.pigSpeedBoosted = false;
+                }
+
+                // Broadcast position update for ridden pig
+                {
+                    std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                    for (auto& c : connections_) {
+                        if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
+                        auto handler = c->getHandler();
+                        auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                        if (ph) {
+                            ph->sendEntityTeleport(*c, mob.entityId,
+                                mob.posX, mob.posY, mob.posZ, mob.yaw, mob.pitch);
+                        }
+                    }
+                }
+                mob.lastSentPosX = static_cast<int32_t>(std::floor(mob.posX * 32.0));
+                mob.lastSentPosY = static_cast<int32_t>(std::floor(mob.posY * 32.0));
+                mob.lastSentPosZ = static_cast<int32_t>(std::floor(mob.posZ * 32.0));
+                continue; // Skip normal wander AI for ridden pig
+            }
+
+            // ─── Wolf AI — Java: EntityWolf AI tasks ──────────────────
+            // Tamed wolves: sit or follow owner. Wild wolves: wander.
+            if (mob.mobType == 95) {
+                if (mob.isTamed && mob.isSitting) {
+                    // Sitting — don't move at all — Java: EntityAISit
+                    // Still broadcast position (entity might have been pushed)
+                    {
+                        std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                        for (auto& conn : connections_) {
+                            if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                            auto handler = conn->getHandler();
+                            auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                            if (ph) ph->sendEntityTeleport(*conn, mob.entityId,
+                                mob.posX, mob.posY, mob.posZ, mob.yaw, mob.pitch);
+                        }
+                    }
+                    continue;
+                }
+
+                if (mob.isTamed && !mob.isSitting) {
+                    // ─── Follow owner — Java: EntityAIFollowOwner ───
+                    PlayHandler* owner = nullptr;
+                    {
+                        std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                        for (auto& conn : connections_) {
+                            if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                            auto handler = conn->getHandler();
+                            auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                            if (ph && ph->getUuid() == mob.ownerUuid) {
+                                owner = ph;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (owner) {
+                        double dx = owner->getPlayerX() - mob.posX;
+                        double dz = owner->getPlayerZ() - mob.posZ;
+                        double distSq = dx * dx + dz * dz;
+
+                        // Java: EntityAIFollowOwner teleport if > 12 blocks (144 sq)
+                        if (distSq > 144.0) {
+                            // Teleport near owner — Java: tries random positions within 3 blocks
+                            double tpX = owner->getPlayerX() + ((rand() % 5) - 2);
+                            double tpZ = owner->getPlayerZ() + ((rand() % 5) - 2);
+                            double tpY = owner->getPlayerY();
+
+                            // Find ground at teleport position
+                            if (!worlds_.empty()) {
+                                auto* wld = worlds_[0].get();
+                                int bx = static_cast<int>(std::floor(tpX));
+                                int bz = static_cast<int>(std::floor(tpZ));
+                                int startY = static_cast<int>(tpY);
+                                for (int y = startY; y > 0; --y) {
+                                    Block* b = wld->getBlock(bx, y, bz);
+                                    if (b != nullptr) {
+                                        tpY = static_cast<double>(y + 1);
+                                        break;
+                                    }
+                                }
+                            }
+
+                            mob.posX = tpX;
+                            mob.posY = tpY;
+                            mob.posZ = tpZ;
+                        } else if (distSq > 4.0) {
+                            // Walk toward owner — Java: EntityAIFollowOwner min dist = 2 blocks
+                            double dist = std::sqrt(distSq);
+                            double dirX = dx / dist;
+                            double dirZ = dz / dist;
+                            mob.posX += dirX * speed * 0.8;
+                            mob.posZ += dirZ * speed * 0.8;
+
+                            // Update yaw to face owner
+                            mob.yaw = static_cast<float>(std::atan2(-dirX, dirZ) * 180.0 / M_PI);
+
+                            // Ground/collision check
+                            if (!worlds_.empty()) {
+                                auto* wld = worlds_[0].get();
+                                int bx = static_cast<int>(std::floor(mob.posX));
+                                int bz = static_cast<int>(std::floor(mob.posZ));
+                                int startY = static_cast<int>(mob.posY);
+                                Block* feetBlock = wld->getBlock(bx, startY, bz);
+                                if (feetBlock != nullptr) {
+                                    Block* stepBlock = wld->getBlock(bx, startY + 1, bz);
+                                    Block* headBlock = wld->getBlock(bx, startY + 2, bz);
+                                    if (stepBlock == nullptr && headBlock == nullptr) {
+                                        mob.posY = static_cast<double>(startY + 1);
+                                    }
+                                } else {
+                                    for (int y = startY - 1; y > 0; --y) {
+                                        Block* b = wld->getBlock(bx, y, bz);
+                                        if (b != nullptr) { mob.posY = static_cast<double>(y + 1); break; }
+                                        if (y == 1) mob.posY = 1.0;
+                                    }
+                                }
+                            }
+                        }
+                        // else: within 2 blocks of owner, idle
+
+                        // ─── Wolf attack target — defend owner ───
+                        // Java: EntityAIOwnerHurtByTarget / EntityAIOwnerHurtTarget
+                        // Simplified: if wolf has an attack target, walk to it and deal damage
+                        if (mob.wolfAttackTarget >= 0) {
+                            // Find target mob
+                            SpawnedMob* target = nullptr;
+                            for (auto& other : mobEntities_) {
+                                if (other.entityId == mob.wolfAttackTarget && !other.isDead) {
+                                    target = &other;
+                                    break;
+                                }
+                            }
+                            if (target) {
+                                double tdx = target->posX - mob.posX;
+                                double tdz = target->posZ - mob.posZ;
+                                double tdistSq = tdx * tdx + tdz * tdz;
+                                if (tdistSq < 2.0) {
+                                    // Attack — Java: EntityWolf attack damage = 4 (tamed)
+                                    target->health -= 4.0f;
+                                    broadcastEntityEvent(target->entityId, 2); // hurt animation
+                                    broadcastSound("mob.wolf.growl", mob.posX, mob.posY, mob.posZ, 0.4f, 1.0f);
+                                    if (target->health <= 0.0f) {
+                                        target->isDead = true;
+                                        mob.wolfAttackTarget = -1;
+                                    }
+                                } else if (tdistSq < 256.0) {
+                                    // Walk toward target
+                                    double tdist = std::sqrt(tdistSq);
+                                    mob.posX += (tdx / tdist) * speed;
+                                    mob.posZ += (tdz / tdist) * speed;
+                                    mob.yaw = static_cast<float>(std::atan2(-tdx / tdist, tdz / tdist) * 180.0 / M_PI);
+                                } else {
+                                    // Target too far, give up
+                                    mob.wolfAttackTarget = -1;
+                                }
+                            } else {
+                                mob.wolfAttackTarget = -1;
+                            }
+                        }
+                    }
+
+                    // Broadcast position
+                    {
+                        std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                        for (auto& conn : connections_) {
+                            if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                            auto handler = conn->getHandler();
+                            auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                            if (ph) ph->sendEntityTeleport(*conn, mob.entityId,
+                                mob.posX, mob.posY, mob.posZ, mob.yaw, mob.pitch);
+                        }
+                    }
+                    mob.lastSentPosX = static_cast<int32_t>(std::floor(mob.posX * 32.0));
+                    mob.lastSentPosY = static_cast<int32_t>(std::floor(mob.posY * 32.0));
+                    mob.lastSentPosZ = static_cast<int32_t>(std::floor(mob.posZ * 32.0));
+                    continue; // Skip generic wander
+                }
+                // Wild wolf: fall through to normal passive wander AI
+            }
+
+            // ─── Ocelot/Cat AI — Java: EntityOcelot AI tasks ──────────────
+            // Tamed cats: sit or follow owner. Wild ocelots: wander.
+            if (mob.mobType == 98) {
+                if (mob.isTamed && mob.isSitting) {
+                    // Sitting — don't move — Java: EntityAISit
+                    {
+                        std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                        for (auto& conn : connections_) {
+                            if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                            auto handler = conn->getHandler();
+                            auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                            if (ph) ph->sendEntityTeleport(*conn, mob.entityId,
+                                mob.posX, mob.posY, mob.posZ, mob.yaw, mob.pitch);
+                        }
+                    }
+                    continue;
+                }
+
+                if (mob.isTamed && !mob.isSitting) {
+                    // ─── Follow owner — Java: EntityAIFollowOwner (minDist=5, maxDist=10) ───
+                    PlayHandler* owner = nullptr;
+                    {
+                        std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                        for (auto& conn : connections_) {
+                            if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                            auto handler = conn->getHandler();
+                            auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                            if (ph && ph->getUuid() == mob.ownerUuid) {
+                                owner = ph;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (owner) {
+                        double dx = owner->getPlayerX() - mob.posX;
+                        double dz = owner->getPlayerZ() - mob.posZ;
+                        double distSq = dx * dx + dz * dz;
+
+                        // Java: EntityAIFollowOwner teleport if > 12 blocks (144 sq)
+                        if (distSq > 144.0) {
+                            double tpX = owner->getPlayerX() + ((rand() % 5) - 2);
+                            double tpZ = owner->getPlayerZ() + ((rand() % 5) - 2);
+                            double tpY = owner->getPlayerY();
+                            if (!worlds_.empty()) {
+                                auto* wld = worlds_[0].get();
+                                int bx = static_cast<int>(std::floor(tpX));
+                                int bz = static_cast<int>(std::floor(tpZ));
+                                int startY = static_cast<int>(tpY);
+                                for (int y = startY; y > 0; --y) {
+                                    Block* b = wld->getBlock(bx, y, bz);
+                                    if (b != nullptr) {
+                                        tpY = static_cast<double>(y + 1);
+                                        break;
+                                    }
+                                }
+                            }
+                            mob.posX = tpX;
+                            mob.posY = tpY;
+                            mob.posZ = tpZ;
+                        } else if (distSq > 25.0) {
+                            // Walk toward owner — Java: EntityAIFollowOwner minDist=5
+                            double dist = std::sqrt(distSq);
+                            double dirX = dx / dist;
+                            double dirZ = dz / dist;
+                            mob.posX += dirX * speed * 0.8;
+                            mob.posZ += dirZ * speed * 0.8;
+                            mob.yaw = static_cast<float>(std::atan2(-dirX, dirZ) * 180.0 / M_PI);
+
+                            // Ground/collision check
+                            if (!worlds_.empty()) {
+                                auto* wld = worlds_[0].get();
+                                int bx = static_cast<int>(std::floor(mob.posX));
+                                int bz = static_cast<int>(std::floor(mob.posZ));
+                                int startY = static_cast<int>(mob.posY);
+                                Block* feetBlock = wld->getBlock(bx, startY, bz);
+                                if (feetBlock != nullptr) {
+                                    Block* stepBlock = wld->getBlock(bx, startY + 1, bz);
+                                    Block* headBlock = wld->getBlock(bx, startY + 2, bz);
+                                    if (stepBlock == nullptr && headBlock == nullptr) {
+                                        mob.posY = static_cast<double>(startY + 1);
+                                    }
+                                } else {
+                                    for (int y = startY - 1; y > 0; --y) {
+                                        Block* b = wld->getBlock(bx, y, bz);
+                                        if (b != nullptr) { mob.posY = static_cast<double>(y + 1); break; }
+                                        if (y == 1) mob.posY = 1.0;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Broadcast position
+                    {
+                        std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                        for (auto& conn : connections_) {
+                            if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                            auto handler = conn->getHandler();
+                            auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                            if (ph) ph->sendEntityTeleport(*conn, mob.entityId,
+                                mob.posX, mob.posY, mob.posZ, mob.yaw, mob.pitch);
+                        }
+                    }
+                    mob.lastSentPosX = static_cast<int32_t>(std::floor(mob.posX * 32.0));
+                    mob.lastSentPosY = static_cast<int32_t>(std::floor(mob.posY * 32.0));
+                    mob.lastSentPosZ = static_cast<int32_t>(std::floor(mob.posZ * 32.0));
+                    continue; // Skip generic wander
+                }
+                // Wild ocelot: fall through to normal passive wander AI
+            }
 
             // ─── Passive mob wander AI ───────────────────────────────
             // Java: EntityAIWander — pick random direction, walk slowly
@@ -4978,6 +6004,36 @@ void MinecraftServer::tickMobs() {
         // Java: EntityCreeper.onUpdate() — fuse timer, explode when timeSinceIgnited >= fuseTime(30)
         for (auto& mob : mobEntities_) {
             if (mob.isDead || mob.mobType != 50) continue; // Creeper only
+
+            // ─── Creeper-ocelot avoidance — Java: EntityAIAvoidEntity(EntityOcelot.class, 6.0f, 1.0, 1.2) ───
+            // Creepers flee from ocelots/cats within 6 blocks
+            {
+                bool flee = false;
+                double fleeX = 0, fleeZ = 0;
+                for (auto& other : mobEntities_) {
+                    if (other.isDead || other.mobType != 98) continue;
+                    double cdx = other.posX - mob.posX;
+                    double cdz = other.posZ - mob.posZ;
+                    double cdistSq = cdx * cdx + cdz * cdz;
+                    if (cdistSq < 36.0 && cdistSq > 0.01) {  // 6 blocks squared
+                        // Flee away from ocelot
+                        double cdist = std::sqrt(cdistSq);
+                        fleeX = -cdx / cdist;
+                        fleeZ = -cdz / cdist;
+                        flee = true;
+                        break;
+                    }
+                }
+                if (flee) {
+                    // Run away from ocelot — Java: speed 1.0-1.2
+                    float fleeSpeed = getMobMovementSpeed(50) * 1.5f;
+                    mob.posX += fleeX * fleeSpeed;
+                    mob.posZ += fleeZ * fleeSpeed;
+                    mob.yaw = static_cast<float>(std::atan2(-fleeX, fleeZ) * 180.0 / M_PI);
+                    if (mob.fuseTicks > 0) mob.fuseTicks = 0;  // Cancel fuse
+                    continue;  // Skip normal creeper AI
+                }
+            }
 
             // Find nearest player within 3 blocks
             PlayHandler* nearest = nullptr;
@@ -6831,6 +7887,1180 @@ void MinecraftServer::tickRandomBlocks() {
             }
         }
     }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Fish hook entity spawning — Java: EntityFishHook(World, EntityPlayer)
+// ═══════════════════════════════════════════════════════════════════════════
+
+int32_t MinecraftServer::spawnFishHook(double x, double y, double z,
+                                        double motionX, double motionY, double motionZ,
+                                        int32_t anglerEntityId) {
+    // Remove any existing hook owned by this angler
+    {
+        std::lock_guard<std::mutex> lock(fishHookEntitiesMutex_);
+        for (auto& h : fishHookEntities_) {
+            if (h.anglerEntityId == anglerEntityId && !h.isDead) {
+                h.isDead = true;
+            }
+        }
+    }
+
+    int32_t eid = nextFishHookEntityId_.fetch_add(1, std::memory_order_relaxed);
+    int64_t currentTick = tickCount_.load(std::memory_order_relaxed);
+
+    SpawnedFishHook hook;
+    hook.entityId = eid;
+    hook.anglerEntityId = anglerEntityId;
+    hook.posX = x; hook.posY = y; hook.posZ = z;
+
+    // Java: handleHookCasting(motionX, motionY, motionZ, 1.5f, 1.0f)
+    // Normalize, add Gaussian inaccuracy, scale by 1.5
+    double len = std::sqrt(motionX * motionX + motionY * motionY + motionZ * motionZ);
+    if (len > 0.001) {
+        motionX /= len; motionY /= len; motionZ /= len;
+    }
+    static thread_local std::mt19937 rng(std::random_device{}());
+    std::normal_distribution<double> gauss(0.0, 0.0075);  // Java: 0.0075 * inaccuracy(1.0)
+    motionX += gauss(rng);
+    motionY += gauss(rng);
+    motionZ += gauss(rng);
+    double speed = 1.5;  // Java: handleHookCasting speed parameter
+    hook.motionX = motionX * speed;
+    hook.motionY = motionY * speed;
+    hook.motionZ = motionZ * speed;
+
+    // Calculate yaw/pitch from motion
+    double hLen = std::sqrt(hook.motionX * hook.motionX + hook.motionZ * hook.motionZ);
+    hook.yaw = static_cast<float>(std::atan2(hook.motionX, hook.motionZ) * 180.0 / M_PI);
+    hook.pitch = static_cast<float>(std::atan2(hook.motionY, hLen) * 180.0 / M_PI);
+
+    hook.isDead = false;
+    hook.inGround = false;
+    hook.ticksInGround = 0;
+    hook.ticksInAir = 0;
+    hook.ticksCaughtDelay = 0;
+    hook.ticksCatchableDelay = 0;
+    hook.ticksCatchable = 0;
+    hook.fishApproachAngle = 0.0f;
+    hook.spawnTick = currentTick;
+
+    // Broadcast S0E SpawnObject — type 90 = fishing float, data = angler entity ID
+    // Java: S0E objectType=90 for EntityFishHook, data=angler.getEntityId()
+    {
+        std::lock_guard<std::mutex> lock(connectionsMutex_);
+        for (auto& conn : connections_) {
+            if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+            auto handler = conn->getHandler();
+            auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+            if (ph) {
+                ph->sendSpawnObject(*conn, eid, 90, x, y, z,
+                                    hook.pitch, hook.yaw,
+                                    anglerEntityId,
+                                    hook.motionX, hook.motionY, hook.motionZ);
+            }
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(fishHookEntitiesMutex_);
+        fishHookEntities_.push_back(std::move(hook));
+    }
+    return eid;
+}
+
+// ─── Fish hook ticking ──────────────────────────────────────────────────
+// Java: EntityFishHook.onUpdate() — physics, water detection, 3-phase catch cycle
+void MinecraftServer::tickFishHooks() {
+    std::vector<int32_t> deadIds;
+
+    {
+        std::lock_guard<std::mutex> lock(fishHookEntitiesMutex_);
+        if (fishHookEntities_.empty()) return;
+
+        auto& worlds = getWorlds();
+        if (worlds.empty()) return;
+        WorldServer* world = worlds[0].get();
+
+        static thread_local std::mt19937 rng(std::random_device{}());
+
+        for (auto& h : fishHookEntities_) {
+            if (h.isDead) continue;
+
+            // Check if angler still exists and holds fishing rod
+            // Java: if (angler.isDead || getCurrentEquippedItem != fishing_rod || dist > 1024) setDead
+            bool anglerValid = false;
+            {
+                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                for (auto& conn : connections_) {
+                    if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                    auto handler = conn->getHandler();
+                    auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                    if (ph && ph->getEntityId() == h.anglerEntityId) {
+                        auto held = ph->getHeldItem();
+                        if (held && held->getItemId() == 346) {
+                            double dx = ph->getPlayerX() - h.posX;
+                            double dy = ph->getPlayerY() - h.posY;
+                            double dz = ph->getPlayerZ() - h.posZ;
+                            if (dx * dx + dy * dy + dz * dz <= 1024.0) {
+                                anglerValid = true;
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+            if (!anglerValid) {
+                h.isDead = true;
+                deadIds.push_back(h.entityId);
+                continue;
+            }
+
+            // In-ground logic
+            if (h.inGround) {
+                ++h.ticksInGround;
+                if (h.ticksInGround >= SpawnedFishHook::GROUND_DESPAWN) {
+                    h.isDead = true;
+                    deadIds.push_back(h.entityId);
+                }
+                continue;
+            }
+
+            ++h.ticksInAir;
+
+            // Simple block collision check
+            int32_t bx = static_cast<int32_t>(std::floor(h.posX + h.motionX));
+            int32_t by = static_cast<int32_t>(std::floor(h.posY + h.motionY));
+            int32_t bz = static_cast<int32_t>(std::floor(h.posZ + h.motionZ));
+            Block* hitBlock = world->getBlock(bx, by, bz);
+            if (hitBlock) {
+                int32_t blockId = Block::getIdFromBlock(hitBlock);
+                // Skip water (8,9) and air (0)
+                if (blockId != 0 && blockId != 8 && blockId != 9) {
+                    h.inGround = true;
+                    h.ticksInGround = 0;
+                    continue;
+                }
+            }
+
+            // Apply motion
+            h.posX += h.motionX;
+            h.posY += h.motionY;
+            h.posZ += h.motionZ;
+
+            // Water submersion check — Java: sample 5 vertical slices of bounding box
+            // Simplified: check if the block at hook position is water
+            int32_t hookBlockX = static_cast<int32_t>(std::floor(h.posX));
+            int32_t hookBlockY = static_cast<int32_t>(std::floor(h.posY));
+            int32_t hookBlockZ = static_cast<int32_t>(std::floor(h.posZ));
+            Block* hookBlock = world->getBlock(hookBlockX, hookBlockY, hookBlockZ);
+            int32_t hookBlockId = hookBlock ? Block::getIdFromBlock(hookBlock) : 0;
+            bool inWater = (hookBlockId == 8 || hookBlockId == 9);
+
+            // Also check block one below for partial submersion
+            Block* belowBlock = world->getBlock(hookBlockX, hookBlockY - 1, hookBlockZ);
+            int32_t belowBlockId = belowBlock ? Block::getIdFromBlock(belowBlock) : 0;
+            double waterSubmersion = 0.0;
+            if (inWater) {
+                waterSubmersion = 1.0;
+            } else if (belowBlockId == 8 || belowBlockId == 9) {
+                waterSubmersion = 0.5;
+            }
+
+            // ─── 3-phase catch cycle (only when in water) ──────────────
+            // Java: EntityFishHook.onUpdate() lines 224-293
+            if (waterSubmersion > 0.0) {
+                // Speed modifier for rain/sky — Java: lines 226-232
+                int32_t speedMod = 1;
+                std::uniform_real_distribution<float> dist01(0.0f, 1.0f);
+                if (dist01(rng) < 0.25f && isRaining()) {
+                    speedMod = 2;
+                }
+                // Java: if can't see sky, --speedMod (not implemented, keep 1)
+
+                if (h.ticksCatchable > 0) {
+                    // Phase 3: Bite window active — decrement
+                    --h.ticksCatchable;
+                    if (h.ticksCatchable <= 0) {
+                        h.ticksCaughtDelay = 0;
+                        h.ticksCatchableDelay = 0;
+                    }
+                } else if (h.ticksCatchableDelay > 0) {
+                    // Phase 2: Fish approaching — decrement
+                    h.ticksCatchableDelay -= speedMod;
+                    if (h.ticksCatchableDelay <= 0) {
+                        // Fish bites! — Java: motionY -= 0.2, play splash, set catchable window
+                        h.motionY -= 0.2;
+                        // Play splash sound
+                        broadcastSound("random.splash", h.posX, h.posY, h.posZ,
+                                       0.25f, 1.0f + (dist01(rng) - dist01(rng)) * 0.4f);
+                        // Spawn bubble and wake particles
+                        broadcastParticle("bubble", static_cast<float>(h.posX),
+                                         static_cast<float>(hookBlockY) + 1.0f,
+                                         static_cast<float>(h.posZ),
+                                         0.25f, 0.0f, 0.25f, 0.2f, 6);
+                        broadcastParticle("wake", static_cast<float>(h.posX),
+                                         static_cast<float>(hookBlockY) + 1.0f,
+                                         static_cast<float>(h.posZ),
+                                         0.25f, 0.0f, 0.25f, 0.2f, 6);
+                        // Java: ticksCatchable = MathHelper.getRandomIntegerInRange(rand, 10, 30)
+                        std::uniform_int_distribution<int32_t> catchDist(10, 30);
+                        h.ticksCatchable = catchDist(rng);
+                    } else {
+                        // Fish approaching — update approach angle, spawn particles
+                        std::normal_distribution<double> angleDist(0.0, 4.0);
+                        h.fishApproachAngle += static_cast<float>(angleDist(rng));
+                        float angleRad = h.fishApproachAngle * static_cast<float>(M_PI) / 180.0f;
+                        float sinA = std::sin(angleRad);
+                        float cosA = std::cos(angleRad);
+                        double particleX = h.posX + static_cast<double>(sinA * static_cast<float>(h.ticksCatchableDelay) * 0.1f);
+                        double particleY = static_cast<double>(hookBlockY) + 1.0;
+                        double particleZ = h.posZ + static_cast<double>(cosA * static_cast<float>(h.ticksCatchableDelay) * 0.1f);
+                        // Bubble approaching
+                        if (dist01(rng) < 0.15f) {
+                            broadcastParticle("bubble",
+                                             static_cast<float>(particleX),
+                                             static_cast<float>(particleY) - 0.1f,
+                                             static_cast<float>(particleZ),
+                                             sinA, 0.1f, cosA, 0.0f, 1);
+                        }
+                        // Wake particles
+                        float wakeF7 = sinA * 0.04f;
+                        float wakeF8 = cosA * 0.04f;
+                        broadcastParticle("wake",
+                                         static_cast<float>(particleX),
+                                         static_cast<float>(particleY),
+                                         static_cast<float>(particleZ),
+                                         wakeF8, 0.01f, -wakeF7, 1.0f, 0);
+                        broadcastParticle("wake",
+                                         static_cast<float>(particleX),
+                                         static_cast<float>(particleY),
+                                         static_cast<float>(particleZ),
+                                         -wakeF8, 0.01f, wakeF7, 1.0f, 0);
+                    }
+                } else if (h.ticksCaughtDelay > 0) {
+                    // Phase 1: Initial wait — decrement, spawn random splash particles
+                    h.ticksCaughtDelay -= speedMod;
+                    float splashChance = 0.15f;
+                    if (h.ticksCaughtDelay < 20) {
+                        splashChance += static_cast<float>(20 - h.ticksCaughtDelay) * 0.05f;
+                    } else if (h.ticksCaughtDelay < 40) {
+                        splashChance += static_cast<float>(40 - h.ticksCaughtDelay) * 0.02f;
+                    } else if (h.ticksCaughtDelay < 60) {
+                        splashChance += static_cast<float>(60 - h.ticksCaughtDelay) * 0.01f;
+                    }
+                    if (dist01(rng) < splashChance) {
+                        // Random splash particle
+                        std::uniform_real_distribution<float> angleDist(0.0f, 360.0f);
+                        std::uniform_real_distribution<float> radDist(25.0f, 60.0f);
+                        float angle = angleDist(rng) * static_cast<float>(M_PI) / 180.0f;
+                        float radius = radDist(rng);
+                        double splashX = h.posX + static_cast<double>(std::sin(angle) * radius * 0.1f);
+                        double splashY = static_cast<double>(hookBlockY) + 1.0;
+                        double splashZ = h.posZ + static_cast<double>(std::cos(angle) * radius * 0.1f);
+                        std::uniform_int_distribution<int32_t> splashCount(2, 3);
+                        broadcastParticle("splash",
+                                         static_cast<float>(splashX),
+                                         static_cast<float>(splashY),
+                                         static_cast<float>(splashZ),
+                                         0.1f, 0.0f, 0.1f, 0.0f, splashCount(rng));
+                    }
+                    if (h.ticksCaughtDelay <= 0) {
+                        // Transition to phase 2
+                        std::uniform_real_distribution<float> angleDist2(0.0f, 360.0f);
+                        h.fishApproachAngle = angleDist2(rng);
+                        std::uniform_int_distribution<int32_t> approachDist(20, 80);
+                        h.ticksCatchableDelay = approachDist(rng);
+                    }
+                } else {
+                    // No phase active — start phase 1
+                    // Java: ticksCaughtDelay = rand(100,900) - Lure*20*5
+                    std::uniform_int_distribution<int32_t> waitDist(100, 900);
+                    h.ticksCaughtDelay = waitDist(rng);
+                    // Lure enchantment reduction applied in retractFishHook via angler lookup
+                    // For simplicity, we apply Lure here if we can find it
+                    {
+                        std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                        for (auto& conn : connections_) {
+                            if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                            auto handler = conn->getHandler();
+                            auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                            if (ph && ph->getEntityId() == h.anglerEntityId) {
+                                auto held = ph->getHeldItem();
+                                if (held && held->hasEnchantments()) {
+                                    int32_t lureLevel = held->getEnchantmentLevel(62);  // Lure
+                                    h.ticksCaughtDelay -= lureLevel * 20 * 5;
+                                    if (h.ticksCaughtDelay < 1) h.ticksCaughtDelay = 1;
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                // Java: if ticksCatchable > 0, add random downward bobbing
+                if (h.ticksCatchable > 0) {
+                    std::uniform_real_distribution<float> dist00(0.0f, 1.0f);
+                    float bob = dist00(rng) * dist00(rng) * dist00(rng);
+                    h.motionY -= static_cast<double>(bob) * 0.2;
+                }
+            }
+
+            // Buoyancy — Java: motionY += 0.04 * (waterSubmersion * 2.0 - 1.0)
+            double buoyancyFactor = waterSubmersion * 2.0 - 1.0;
+            h.motionY += 0.04 * buoyancyFactor;
+
+            // Friction
+            float friction = 0.92f;  // Java: default friction
+            if (waterSubmersion > 0.0) {
+                friction = static_cast<float>(static_cast<double>(friction) * 0.9);
+                h.motionY *= 0.8;
+            }
+            h.motionX *= static_cast<double>(friction);
+            h.motionY *= static_cast<double>(friction);
+            h.motionZ *= static_cast<double>(friction);
+
+            // Update yaw/pitch for broadcast
+            double hLen = std::sqrt(h.motionX * h.motionX + h.motionZ * h.motionZ);
+            h.yaw = static_cast<float>(std::atan2(h.motionX, h.motionZ) * 180.0 / M_PI);
+            h.pitch = static_cast<float>(std::atan2(h.motionY, hLen) * 180.0 / M_PI);
+        }
+
+        // Remove dead hooks
+        fishHookEntities_.erase(
+            std::remove_if(fishHookEntities_.begin(), fishHookEntities_.end(),
+                [](const SpawnedFishHook& h) { return h.isDead; }),
+            fishHookEntities_.end());
+    }
+
+    // Broadcast S13 DestroyEntities for dead hooks
+    if (!deadIds.empty()) {
+        std::lock_guard<std::mutex> lock(connectionsMutex_);
+        for (auto& conn : connections_) {
+            if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+            auto handler = conn->getHandler();
+            auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+            if (ph) {
+                ph->sendDestroyEntities(*conn, deadIds);
+            }
+        }
+    }
+
+    // Broadcast position updates via S18 EntityTeleport
+    {
+        std::lock_guard<std::mutex> lock(fishHookEntitiesMutex_);
+        std::lock_guard<std::mutex> connLock(connectionsMutex_);
+        for (auto& h : fishHookEntities_) {
+            if (h.isDead) continue;
+            for (auto& conn : connections_) {
+                if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                auto handler = conn->getHandler();
+                auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                if (ph) {
+                    ph->sendEntityTeleport(*conn, h.entityId,
+                                           h.posX, h.posY, h.posZ,
+                                           h.yaw, h.pitch);
+                }
+            }
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Fish hook retraction — Java: EntityFishHook.handleHookRetraction()
+// Returns: -1 = no hook found, 0+ = durability damage for fishing rod
+// ═══════════════════════════════════════════════════════════════════════════
+int32_t MinecraftServer::retractFishHook(int32_t anglerEntityId) {
+    std::lock_guard<std::mutex> lock(fishHookEntitiesMutex_);
+
+    // Find the angler's active hook
+    SpawnedFishHook* hook = nullptr;
+    for (auto& h : fishHookEntities_) {
+        if (h.anglerEntityId == anglerEntityId && !h.isDead) {
+            hook = &h;
+            break;
+        }
+    }
+    if (!hook) return -1; // No active hook
+
+    int32_t damage = 0;
+
+    // Java: if (ticksCatchable > 0) → catch a fish/junk/valuable
+    if (hook->ticksCatchable > 0) {
+        // ─── Loot table generation — Java: EntityFishHook.func_146033_f() ───
+        // Determine loot category based on random roll + enchantments
+        static thread_local std::mt19937 rng(std::random_device{}());
+        std::uniform_real_distribution<float> dist01(0.0f, 1.0f);
+
+        // Get Luck of the Sea (enchant 61) and Lure (enchant 62) levels from fishing rod
+        int32_t luckLevel = 0;
+        int32_t lureLevel = 0;
+        {
+            std::lock_guard<std::mutex> connLock(connectionsMutex_);
+            for (auto& conn : connections_) {
+                if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                auto handler = conn->getHandler();
+                auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                if (ph && ph->getEntityId() == anglerEntityId) {
+                    auto held = ph->getHeldItem();
+                    if (held && held->hasEnchantments()) {
+                        luckLevel = held->getEnchantmentLevel(61); // Luck of the Sea
+                        lureLevel = held->getEnchantmentLevel(62); // Lure
+                    }
+                    break;
+                }
+            }
+        }
+
+        // Java: junkChance = 0.1 - luck*0.025 - lure*0.01
+        // Java: treasureChance = 0.05 + luck*0.01 - lure*0.01
+        float junkChance = std::max(0.0f, std::min(1.0f, 0.1f - static_cast<float>(luckLevel) * 0.025f - static_cast<float>(lureLevel) * 0.01f));
+        float treasureChance = std::max(0.0f, std::min(1.0f, 0.05f + static_cast<float>(luckLevel) * 0.01f - static_cast<float>(lureLevel) * 0.01f));
+
+        float roll = dist01(rng);
+
+        int32_t lootItemId = 349;  // default: raw fish (cod)
+        int32_t lootDamage = 0;
+        int32_t lootCount = 1;
+
+        if (roll < junkChance) {
+            // ─── JUNK ──────────────────────────────────────────────────────
+            // Java: WeightedRandomFishable JUNK list, total weight = 83
+            // leather_boots(10), leather(10), bone(10), potionitem(10), string(5),
+            // fishing_rod(2), bowl(10), stick(5), dye:0(1), tripwire_hook(10), rotten_flesh(10)
+            std::uniform_int_distribution<int32_t> junkRoll(0, 82);
+            int32_t j = junkRoll(rng);
+            if (j < 10)      { lootItemId = 301; lootDamage = 0; }  // leather_boots (damaged)
+            else if (j < 20) { lootItemId = 334; lootDamage = 0; }  // leather
+            else if (j < 30) { lootItemId = 352; lootDamage = 0; }  // bone
+            else if (j < 40) { lootItemId = 373; lootDamage = 0; }  // water bottle (potion)
+            else if (j < 45) { lootItemId = 287; lootDamage = 0; }  // string
+            else if (j < 47) { lootItemId = 346; lootDamage = 0; }  // fishing_rod (damaged)
+            else if (j < 57) { lootItemId = 281; lootDamage = 0; }  // bowl
+            else if (j < 62) { lootItemId = 280; lootDamage = 0; }  // stick
+            else if (j < 63) { lootItemId = 351; lootDamage = 0; lootCount = 10; }  // ink sac x10
+            else if (j < 73) { lootItemId = 131; lootDamage = 0; }  // tripwire_hook
+            else              { lootItemId = 367; lootDamage = 0; }  // rotten_flesh
+
+            std::cout << "[Fish] Caught junk (item " << lootItemId << ")\n";
+        } else if (roll < junkChance + treasureChance) {
+            // ─── VALUABLES (treasure) ──────────────────────────────────────
+            // Java: WeightedRandomFishable VALUABLES list, total weight = 6
+            // waterlily(1), name_tag(1), saddle(1), bow(1), fishing_rod(1), book(1)
+            std::uniform_int_distribution<int32_t> treasureRoll(0, 5);
+            int32_t t = treasureRoll(rng);
+            switch (t) {
+                case 0: lootItemId = 111; break;  // lily pad
+                case 1: lootItemId = 421; break;  // name tag
+                case 2: lootItemId = 329; break;  // saddle
+                case 3: lootItemId = 261; break;  // bow (possibly enchanted)
+                case 4: lootItemId = 346; break;  // fishing rod (possibly enchanted)
+                case 5: lootItemId = 340; break;  // book (possibly enchanted)
+            }
+            std::cout << "[Fish] Caught treasure! (item " << lootItemId << ")\n";
+        } else {
+            // ─── FISH ──────────────────────────────────────────────────────
+            // Java: WeightedRandomFishable FISH list, total weight = 100
+            // cod(60), salmon(25), clownfish(2), pufferfish(13)
+            std::uniform_int_distribution<int32_t> fishRoll(0, 99);
+            int32_t f = fishRoll(rng);
+            lootItemId = 349;  // Items.fish
+            if (f < 60)       { lootDamage = 0; }  // cod
+            else if (f < 85)  { lootDamage = 1; }  // salmon
+            else if (f < 87)  { lootDamage = 2; }  // clownfish
+            else              { lootDamage = 3; }  // pufferfish
+
+            std::cout << "[Fish] Caught fish (damage variant " << lootDamage << ")\n";
+        }
+
+        // Spawn the caught item as a dropped item flying towards the angler
+        // Java: entityItem.motionX = dx*0.1, motionY = dy*0.1 + sqrt(dist)*0.08, motionZ = dz*0.1
+        spawnItemDrop(hook->posX, hook->posY, hook->posZ,
+                      lootItemId, lootDamage, lootCount);
+
+        // Award XP — Java: spawnEntityInWorld(new EntityXPOrb(..., rand.nextInt(6) + 1))
+        // We use the existing addPlayerExperience mechanism through a connection lookup
+        {
+            std::lock_guard<std::mutex> connLock(connectionsMutex_);
+            for (auto& conn : connections_) {
+                if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                auto handler = conn->getHandler();
+                auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                if (ph && ph->getEntityId() == anglerEntityId) {
+                    std::uniform_int_distribution<int32_t> xpDist(1, 6);
+                    int32_t xp = xpDist(rng);
+                    ph->grantExperience(xp);
+                    break;
+                }
+            }
+        }
+
+        // Play splash sound for the catch
+        broadcastSound("random.splash", hook->posX, hook->posY, hook->posZ,
+                       0.25f, 1.0f);
+
+        damage = 1;
+    }
+
+    // Java: if (inGround) damage = 2
+    if (hook->inGround) {
+        damage = 2;
+    }
+
+    // Mark hook as dead and broadcast destroy
+    hook->isDead = true;
+    std::vector<int32_t> destroyIds = {hook->entityId};
+    {
+        std::lock_guard<std::mutex> connLock(connectionsMutex_);
+        for (auto& conn : connections_) {
+            if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+            auto handler = conn->getHandler();
+            auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+            if (ph) {
+                ph->sendDestroyEntities(*conn, destroyIds);
+            }
+        }
+    }
+
+    return damage;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Minecart entity spawning — Java: ItemMinecart.onItemUse → new EntityMinecart
+// ═══════════════════════════════════════════════════════════════════════════
+
+int32_t MinecraftServer::spawnMinecart(int32_t type, double x, double y, double z) {
+    int32_t eid = nextMinecartEntityId_.fetch_add(1);
+
+    SpawnedMinecart cart;
+    cart.entityId = eid;
+    cart.minecartType = type;
+    cart.isDead = false;
+    cart.riderEntityId = -1;
+    cart.logic.entityId = eid;
+    cart.logic.posX = x;
+    cart.logic.posY = y;
+    cart.logic.posZ = z;
+    cart.logic.prevPosX = x;
+    cart.logic.prevPosY = y;
+    cart.logic.prevPosZ = z;
+    cart.logic.minecartType = type;
+    cart.lastSentPosX = static_cast<int32_t>(x * 32.0);
+    cart.lastSentPosY = static_cast<int32_t>(y * 32.0);
+    cart.lastSentPosZ = static_cast<int32_t>(z * 32.0);
+
+    {
+        std::lock_guard<std::mutex> lock(minecartEntitiesMutex_);
+        minecartEntities_.push_back(std::move(cart));
+    }
+
+    // Broadcast S0E SpawnObject — type 10 = minecart, data = minecart subtype
+    // Java: EntityTrackerEntry.func_151260_c → S0EPacketSpawnObject(entity, 10, EntityMinecart.minecartType)
+    std::lock_guard<std::mutex> connLock(connectionsMutex_);
+    for (auto& conn : connections_) {
+        if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+        auto handler = conn->getHandler();
+        auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+        if (ph) {
+            ph->sendSpawnObject(*conn, eid, 10, x, y, z, 0.0f, 0.0f, type, 0.0, 0.0, 0.0);
+        }
+    }
+
+    std::cout << "[Minecart] Spawned type " << type << " entity " << eid
+              << " at " << x << "," << y << "," << z << "\n";
+    return eid;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Minecart entity ticking — Java: EntityMinecart.onUpdate
+// Rail physics, gravity, movement broadcast, rider sync, cleanup
+// ═══════════════════════════════════════════════════════════════════════════
+
+void MinecraftServer::tickMinecarts() {
+    std::lock_guard<std::mutex> lock(minecartEntitiesMutex_);
+    if (minecartEntities_.empty()) return;
+
+    auto* world = worlds_.empty() ? nullptr : worlds_[0].get();
+    if (!world) return;
+
+    std::vector<int32_t> destroyIds;
+
+    for (auto& cart : minecartEntities_) {
+        if (cart.isDead) continue;
+
+        auto& logic = cart.logic;
+        auto result = logic.onUpdate();
+
+        if (result.shouldDie || logic.isDead) {
+            cart.isDead = true;
+            destroyIds.push_back(cart.entityId);
+            continue;
+        }
+
+        // Check block underneath for rail
+        int32_t bx = static_cast<int32_t>(std::floor(logic.posX));
+        int32_t by = static_cast<int32_t>(std::floor(logic.posY));
+        int32_t bz = static_cast<int32_t>(std::floor(logic.posZ));
+
+        Block* blockBelow = world->getBlock(bx, by, bz);
+        int32_t blockId = blockBelow ? Block::getIdFromBlock(blockBelow) : 0;
+
+        bool onRail = (blockId == 66 || blockId == 27 || blockId == 28 || blockId == 157);
+
+        if (onRail) {
+            int32_t railMeta = world->getBlockMetadata(bx, by, bz);
+            bool isPoweredRail = (blockId == 27);
+            bool isPowered = isPoweredRail && (railMeta & 8);
+            bool hasRider = (cart.riderEntityId >= 0);
+
+            // Get rider yaw/forward if present
+            float riderYaw = 0;
+            double riderForward = 0;
+            if (hasRider) {
+                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                for (auto& conn : connections_) {
+                    if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                    auto handler = conn->getHandler();
+                    auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                    if (ph && ph->getEntityId() == cart.riderEntityId) {
+                        riderYaw = ph->getPlayerYaw();
+                        // Use C0C SteerVehicle input from player
+                        riderForward = static_cast<double>(ph->getMoveForward());
+                        break;
+                    }
+                }
+            }
+
+            logic.onRailTick(bx, by, bz, EntityMinecart::MAX_SPEED,
+                             EntityMinecart::SLOPE_ACCEL, railMeta,
+                             isPoweredRail, isPowered, hasRider, riderYaw, riderForward);
+        } else {
+            // Apply gravity + off-rail movement
+            logic.offRailTick(EntityMinecart::MAX_SPEED);
+            // Simple ground check
+            Block* groundBlock = world->getBlock(bx, by - 1, bz);
+            logic.onGround = (groundBlock != nullptr && Block::getIdFromBlock(groundBlock) != 0);
+        }
+
+        // Move entity
+        logic.posX += logic.motionX;
+        logic.posY += logic.motionY;
+        logic.posZ += logic.motionZ;
+
+        // Update yaw from motion
+        logic.updateYawFromMotion();
+        logic.prevRotationYaw = logic.rotationYaw;
+
+        // Broadcast S18 EntityTeleport
+        int32_t newPX = static_cast<int32_t>(std::floor(logic.posX * 32.0));
+        int32_t newPY = static_cast<int32_t>(std::floor(logic.posY * 32.0));
+        int32_t newPZ = static_cast<int32_t>(std::floor(logic.posZ * 32.0));
+
+        bool moved = (newPX != cart.lastSentPosX || newPY != cart.lastSentPosY || newPZ != cart.lastSentPosZ);
+        if (moved) {
+            cart.lastSentPosX = newPX;
+            cart.lastSentPosY = newPY;
+            cart.lastSentPosZ = newPZ;
+
+            std::lock_guard<std::mutex> connLock(connectionsMutex_);
+            for (auto& conn : connections_) {
+                if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                auto handler = conn->getHandler();
+                auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                if (ph) {
+                    ph->sendEntityTeleport(*conn, cart.entityId,
+                        logic.posX, logic.posY, logic.posZ,
+                        logic.rotationYaw, logic.rotationPitch);
+                }
+            }
+        }
+    }
+
+    // Broadcast destroy for dead minecarts
+    if (!destroyIds.empty()) {
+        std::lock_guard<std::mutex> connLock(connectionsMutex_);
+        for (auto& conn : connections_) {
+            if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+            auto handler = conn->getHandler();
+            auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+            if (ph) ph->sendDestroyEntities(*conn, destroyIds);
+        }
+    }
+
+    // Remove dead minecarts
+    minecartEntities_.erase(
+        std::remove_if(minecartEntities_.begin(), minecartEntities_.end(),
+            [](const SpawnedMinecart& c) { return c.isDead; }),
+        minecartEntities_.end());
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Lightning bolt spawning — Java: WorldServer.addWeatherEffect
+// ═══════════════════════════════════════════════════════════════════════════
+
+int32_t MinecraftServer::spawnLightning(double x, double y, double z) {
+    int32_t eid = nextLightningEntityId_.fetch_add(1);
+
+    SpawnedLightning bolt;
+    bolt.entityId = eid;
+    bolt.isDead = false;
+    bolt.logic.entityId = eid;
+    bolt.logic.spawn(x, y, z, rand(), 1 + (rand() % 3));
+
+    {
+        std::lock_guard<std::mutex> lock(lightningEntitiesMutex_);
+        lightningEntities_.push_back(std::move(bolt));
+    }
+
+    // Broadcast S2C SpawnGlobalEntity — type 1 = lightning
+    {
+        std::lock_guard<std::mutex> connLock(connectionsMutex_);
+        for (auto& conn : connections_) {
+            if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+            auto handler = conn->getHandler();
+            auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+            if (ph) {
+                ph->sendSpawnGlobalEntity(*conn, eid, 1, x, y, z);
+            }
+        }
+    }
+
+    // Thunder + explosion sounds — Java: EntityLightningBolt constructor
+    broadcastSound("ambient.weather.thunder", x, y, z,
+        EntityLightningBolt::THUNDER_VOLUME,
+        0.8f + static_cast<float>(rand() % 200) / 1000.0f);
+    broadcastSound("random.explode", x, y, z,
+        EntityLightningBolt::EXPLODE_VOLUME,
+        0.5f + static_cast<float>(rand() % 200) / 1000.0f);
+
+    // Fire at impact — Java: setFire at posX/posY/posZ if air + doFireTick
+    if (!worlds_.empty()) {
+        auto* world = worlds_[0].get();
+        int32_t fx = static_cast<int32_t>(std::floor(x));
+        int32_t fy = static_cast<int32_t>(std::floor(y));
+        int32_t fz = static_cast<int32_t>(std::floor(z));
+
+        Block* atPos = world->getBlock(fx, fy, fz);
+        if (!atPos || Block::getIdFromBlock(atPos) == 0) {
+            world->setBlock(fx, fy, fz, Block::getBlockById(51)); // fire
+            world->setBlockMetadata(fx, fy, fz, 0);
+            broadcastBlockChange(fx, fy, fz, 51, 0);
+        }
+
+        // 4 random nearby fires — Java: ±1 block XYZ
+        for (int i = 0; i < EntityLightningBolt::INITIAL_FIRE_ATTEMPTS; ++i) {
+            int32_t rx = fx + (rand() % 3) - 1;
+            int32_t ry = fy + (rand() % 3) - 1;
+            int32_t rz = fz + (rand() % 3) - 1;
+            Block* nearBlock = world->getBlock(rx, ry, rz);
+            if (!nearBlock || Block::getIdFromBlock(nearBlock) == 0) {
+                // Check below has solid block
+                Block* belowBlock = world->getBlock(rx, ry - 1, rz);
+                if (belowBlock && Block::getIdFromBlock(belowBlock) != 0) {
+                    world->setBlock(rx, ry, rz, Block::getBlockById(51));
+                    world->setBlockMetadata(rx, ry, rz, 0);
+                    broadcastBlockChange(rx, ry, rz, 51, 0);
+                }
+            }
+        }
+    }
+
+    std::cout << "[Lightning] Spawned entity " << eid << " at " << x << "," << y << "," << z << "\n";
+    return eid;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Lightning bolt ticking — Java: EntityLightningBolt.onUpdate
+// Handles re-strike flashes, entity damage, and despawning
+// ═══════════════════════════════════════════════════════════════════════════
+
+void MinecraftServer::tickLightning() {
+    std::lock_guard<std::mutex> lock(lightningEntitiesMutex_);
+    if (lightningEntities_.empty()) return;
+
+    std::vector<int32_t> destroyIds;
+
+    for (auto& bolt : lightningEntities_) {
+        if (bolt.isDead) continue;
+
+        int32_t randRetrigger = rand() % 10;
+        int64_t randNewVertex = static_cast<int64_t>(rand()) << 32 | rand();
+
+        auto result = bolt.logic.onUpdate(randRetrigger, randNewVertex);
+
+        if (result.shouldDie || bolt.logic.isDead) {
+            bolt.isDead = true;
+            destroyIds.push_back(bolt.entityId);
+            continue;
+        }
+
+        // Re-strike thunder
+        if (result.playThunder) {
+            broadcastSound("ambient.weather.thunder",
+                bolt.logic.posX, bolt.logic.posY, bolt.logic.posZ,
+                EntityLightningBolt::THUNDER_VOLUME,
+                0.8f + static_cast<float>(rand() % 200) / 1000.0f);
+            broadcastSound("random.explode",
+                bolt.logic.posX, bolt.logic.posY, bolt.logic.posZ,
+                EntityLightningBolt::EXPLODE_VOLUME,
+                0.5f + static_cast<float>(rand() % 200) / 1000.0f);
+        }
+
+        // Entity damage in radius — Java: 3-block radius AABB scan
+        if (result.damageEntities) {
+            double minX, minY, minZ, maxX, maxY, maxZ;
+            bolt.logic.getDamageBounds(minX, minY, minZ, maxX, maxY, maxZ);
+
+            // Damage nearby players — Java: 5 hearts (10 damage)
+            std::lock_guard<std::mutex> connLock(connectionsMutex_);
+            for (auto& conn : connections_) {
+                if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                auto handler = conn->getHandler();
+                auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                if (!ph || ph->isDead() || ph->getGameMode() == 1) continue;
+
+                double px = ph->getPlayerX(), py = ph->getPlayerY(), pz = ph->getPlayerZ();
+                if (px >= minX && px <= maxX && py >= minY && py <= maxY && pz >= minZ && pz <= maxZ) {
+                    // Java: entity.attackEntityFrom(DamageSource.lightning, 5.0f)
+                    ph->applyDamage(5.0f);
+                }
+            }
+
+            // Damage nearby mobs
+            {
+                std::lock_guard<std::mutex> mobLock(mobEntitiesMutex_);
+                for (auto& mob : mobEntities_) {
+                    if (mob.isDead) continue;
+                    if (mob.posX >= minX && mob.posX <= maxX &&
+                        mob.posY >= minY && mob.posY <= maxY &&
+                        mob.posZ >= minZ && mob.posZ <= maxZ) {
+                        mob.health -= 5.0f;
+                        if (mob.health <= 0) {
+                            mob.isDead = true;
+                            mob.health = 0;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Re-strike fire
+        if (result.tryFire && !worlds_.empty()) {
+            auto* world = worlds_[0].get();
+            int32_t fx = static_cast<int32_t>(std::floor(bolt.logic.posX));
+            int32_t fy = static_cast<int32_t>(std::floor(bolt.logic.posY));
+            int32_t fz = static_cast<int32_t>(std::floor(bolt.logic.posZ));
+            Block* atPos = world->getBlock(fx, fy, fz);
+            if (!atPos || Block::getIdFromBlock(atPos) == 0) {
+                world->setBlock(fx, fy, fz, Block::getBlockById(51));
+                world->setBlockMetadata(fx, fy, fz, 0);
+                broadcastBlockChange(fx, fy, fz, 51, 0);
+            }
+        }
+    }
+
+    // Broadcast destroy for dead bolts
+    if (!destroyIds.empty()) {
+        std::lock_guard<std::mutex> connLock(connectionsMutex_);
+        for (auto& conn : connections_) {
+            if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+            auto handler = conn->getHandler();
+            auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+            if (ph) ph->sendDestroyEntities(*conn, destroyIds);
+        }
+    }
+
+    // Remove dead lightning
+    lightningEntities_.erase(
+        std::remove_if(lightningEntities_.begin(), lightningEntities_.end(),
+            [](const SpawnedLightning& l) { return l.isDead; }),
+        lightningEntities_.end());
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Boat entity spawning — Java: ItemBoat.onItemRightClick → new EntityBoat
+// ═══════════════════════════════════════════════════════════════════════════
+
+int32_t MinecraftServer::spawnBoat(double x, double y, double z, float yaw) {
+    int32_t eid = nextBoatEntityId_.fetch_add(1);
+
+    SpawnedBoat boat;
+    boat.entityId = eid;
+    boat.posX = boat.prevPosX = x;
+    boat.posY = boat.prevPosY = y;
+    boat.posZ = boat.prevPosZ = z;
+    boat.yaw = yaw;
+    boat.isDead = false;
+    boat.riderEntityId = -1;
+    boat.speedMultiplier = 0.07;
+    boat.spawnTick = tickCounter_.load();
+    boat.lastSentPosX = static_cast<int32_t>(x * 32.0);
+    boat.lastSentPosY = static_cast<int32_t>(y * 32.0);
+    boat.lastSentPosZ = static_cast<int32_t>(z * 32.0);
+
+    {
+        std::lock_guard<std::mutex> lock(boatEntitiesMutex_);
+        boatEntities_.push_back(std::move(boat));
+    }
+
+    // Broadcast S0E SpawnObject — type 1 = boat
+    // Java: EntityTrackerEntry → S0EPacketSpawnObject(entity, 1)
+    std::lock_guard<std::mutex> connLock(connectionsMutex_);
+    for (auto& conn : connections_) {
+        if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+        auto handler = conn->getHandler();
+        auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+        if (ph) {
+            ph->sendSpawnObject(*conn, eid, 1, x, y, z, yaw, 0.0f, 0, 0.0, 0.0, 0.0);
+        }
+    }
+
+    std::cout << "[Boat] Spawned entity " << eid << " at " << x << "," << y << "," << z << "\n";
+    return eid;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Boat entity ticking — Java: EntityBoat.onUpdate
+// Water physics, rider steering, collision breaking, movement broadcast
+// ═══════════════════════════════════════════════════════════════════════════
+
+void MinecraftServer::tickBoats() {
+    std::lock_guard<std::mutex> lock(boatEntitiesMutex_);
+    if (boatEntities_.empty()) return;
+
+    auto* world = worlds_.empty() ? nullptr : worlds_[0].get();
+    if (!world) return;
+
+    std::vector<int32_t> destroyIds;
+
+    for (auto& boat : boatEntities_) {
+        if (boat.isDead) continue;
+
+        // Save previous position — Java: prevPosX/Y/Z
+        boat.prevPosX = boat.posX;
+        boat.prevPosY = boat.posY;
+        boat.prevPosZ = boat.posZ;
+
+        // Decrement timeSinceHit — Java: DataWatcher 17
+        if (boat.timeSinceHit > 0) --boat.timeSinceHit;
+
+        // Decrement damageTaken — Java: DataWatcher 19
+        if (boat.damageTaken > 0.0f) boat.damageTaken -= 1.0f;
+
+        // ─── Water submersion check — Java: 5 sampling points along AABB height ───
+        // Java: d10 = fraction of AABB submerged in water (0.0 to 1.0)
+        // We approximate by checking 5 Y-levels between boat bottom and top
+        // Boat height = 0.6 (from EntityBoat constructor setSize(1.5, 0.6))
+        double boatMinY = boat.posY - 0.3;  // yOffset = height/2 = 0.3
+        double boatMaxY = boat.posY + 0.3;
+        double d5 = 0.0;
+        for (int i = 0; i < 5; ++i) {
+            double sliceMin = boatMinY + (boatMaxY - boatMinY) * (double)i / 5.0 - 0.125;
+            double sliceMax = boatMinY + (boatMaxY - boatMinY) * (double)(i + 1) / 5.0 - 0.125;
+            // Check center of slice for water
+            double sliceMid = (sliceMin + sliceMax) / 2.0;
+            int32_t checkY = static_cast<int32_t>(std::floor(sliceMid));
+            int32_t checkX = static_cast<int32_t>(std::floor(boat.posX));
+            int32_t checkZ = static_cast<int32_t>(std::floor(boat.posZ));
+            Block* blk = world->getBlock(checkX, checkY, checkZ);
+            int32_t blkId = blk ? Block::getIdFromBlock(blk) : 0;
+            if (blkId == 8 || blkId == 9) {
+                d5 += 1.0 / 5.0;
+            }
+        }
+
+        // Pre-collision speed for speed multiplier comparison
+        double oldSpeed = std::sqrt(boat.motionX * boat.motionX + boat.motionZ * boat.motionZ);
+
+        // ─── Buoyancy — Java: EntityBoat.onUpdate() lines 189-197 ───
+        if (d5 < 1.0) {
+            // Partially submerged or out of water
+            double d4 = d5 * 2.0 - 1.0;
+            boat.motionY += 0.04 * d4;
+        } else {
+            // Fully submerged
+            if (boat.motionY < 0.0) {
+                boat.motionY /= 2.0;
+            }
+            boat.motionY += 0.007;
+        }
+
+        // ─── Rider steering — Java: EntityBoat lines 198-203 ───
+        if (boat.riderEntityId >= 0) {
+            float riderYaw = 0;
+            float riderForward = 0;
+            float riderStrafe = 0;
+
+            // Find rider's PlayHandler to get steering input
+            {
+                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                for (auto& conn : connections_) {
+                    if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                    auto handler = conn->getHandler();
+                    auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                    if (ph && ph->getEntityId() == boat.riderEntityId) {
+                        riderYaw = ph->getPlayerYaw();
+                        riderForward = ph->getMoveForward();
+                        riderStrafe = ph->getMoveStrafing();
+                        break;
+                    }
+                }
+            }
+
+            // Java: float f = riddenByEntity.rotationYaw + -moveStrafing * 90.0f
+            float steeredYaw = riderYaw + -riderStrafe * 90.0f;
+            // Java: motionX += -sin(f * PI/180) * speedMultiplier * moveForward * 0.05
+            // Java: motionZ +=  cos(f * PI/180) * speedMultiplier * moveForward * 0.05
+            double yawRad = static_cast<double>(steeredYaw) * M_PI / 180.0;
+            boat.motionX += -std::sin(yawRad) * boat.speedMultiplier * static_cast<double>(riderForward) * 0.05;
+            boat.motionZ +=  std::cos(yawRad) * boat.speedMultiplier * static_cast<double>(riderForward) * 0.05;
+        }
+
+        // ─── Speed cap — Java: EntityBoat lines 204-209 ───
+        double newSpeed = std::sqrt(boat.motionX * boat.motionX + boat.motionZ * boat.motionZ);
+        if (newSpeed > 0.35) {
+            double scale = 0.35 / newSpeed;
+            boat.motionX *= scale;
+            boat.motionZ *= scale;
+            newSpeed = 0.35;
+        }
+
+        // ─── Speed multiplier ramp — Java: EntityBoat lines 210-220 ───
+        if (newSpeed > oldSpeed && boat.speedMultiplier < 0.35) {
+            boat.speedMultiplier += (0.35 - boat.speedMultiplier) / 35.0;
+            if (boat.speedMultiplier > 0.35) boat.speedMultiplier = 0.35;
+        } else {
+            boat.speedMultiplier -= (boat.speedMultiplier - 0.07) / 35.0;
+            if (boat.speedMultiplier < 0.07) boat.speedMultiplier = 0.07;
+        }
+
+        // ─── Ground friction — Java: EntityBoat lines 237-241 ───
+        // Applied BEFORE moveEntity in Java, but we apply inline
+        Block* groundBlock = world->getBlock(
+            static_cast<int32_t>(std::floor(boat.posX)),
+            static_cast<int32_t>(std::floor(boat.posY)) - 1,
+            static_cast<int32_t>(std::floor(boat.posZ)));
+        boat.onGround = (groundBlock != nullptr && Block::getIdFromBlock(groundBlock) != 0
+                         && Block::getIdFromBlock(groundBlock) != 8
+                         && Block::getIdFromBlock(groundBlock) != 9);
+        if (boat.onGround) {
+            boat.motionX *= 0.5;
+            boat.motionY *= 0.5;
+            boat.motionZ *= 0.5;
+        }
+
+        // Apply motion — Java: moveEntity(motionX, motionY, motionZ)
+        boat.posX += boat.motionX;
+        boat.posY += boat.motionY;
+        boat.posZ += boat.motionZ;
+
+        // ─── Block collision check — Java: isCollidedHorizontally && d8 > 0.2 ───
+        int32_t cx = static_cast<int32_t>(std::floor(boat.posX));
+        int32_t cy = static_cast<int32_t>(std::floor(boat.posY));
+        int32_t cz = static_cast<int32_t>(std::floor(boat.posZ));
+        Block* atPos = world->getBlock(cx, cy, cz);
+        int32_t atId = atPos ? Block::getIdFromBlock(atPos) : 0;
+
+        // Solid non-passable block = collision (exclude air, water, lava, plants)
+        bool isSolid = (atId != 0 && atId != 8 && atId != 9 && atId != 10 && atId != 11 &&
+                        atId != 31 && atId != 32 && atId != 37 && atId != 38 &&
+                        atId != 39 && atId != 40 && atId != 6 && atId != 50 &&
+                        atId != 51 && atId != 55 && atId != 78 && atId != 106);
+        if (isSolid && oldSpeed > 0.2) {
+            // Java: isCollidedHorizontally && d8 > 0.2 → break with planks + sticks
+            boat.isDead = true;
+            destroyIds.push_back(boat.entityId);
+
+            // Dismount rider
+            if (boat.riderEntityId >= 0) {
+                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                for (auto& conn : connections_) {
+                    if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                    auto handler = conn->getHandler();
+                    auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                    if (!ph) continue;
+                    if (ph->getEntityId() == boat.riderEntityId) {
+                        ph->setRidingEntityId(-1);
+                    }
+                    ph->sendAttachEntity(*conn, 0, boat.riderEntityId, -1);
+                }
+            }
+
+            // Java: drop 3 planks (5) + 2 sticks (280)
+            spawnItemDrop(boat.posX, boat.posY, boat.posZ, 5, 0, 3);
+            spawnItemDrop(boat.posX, boat.posY, boat.posZ, 280, 0, 2);
+            broadcastSound("random.break", boat.posX, boat.posY, boat.posZ, 1.0f, 1.0f);
+            continue;
+        }
+
+        // ─── Non-collision friction — Java: EntityBoat lines 253-257 ───
+        if (!isSolid) {
+            boat.motionX *= 0.99;   // Java: 0.99f
+            boat.motionY *= 0.95;   // Java: 0.95f
+            boat.motionZ *= 0.99;   // Java: 0.99f
+        }
+
+        // ─── Yaw from motion — Java: EntityBoat lines 258-272 ───
+        // Java uses prevPos - pos (note: opposite direction), then wrapAngleTo180 + clamp ±20°
+        boat.pitch = 0.0f;
+        double dx = boat.prevPosX - boat.posX;
+        double dz = boat.prevPosZ - boat.posZ;
+        if (dx * dx + dz * dz > 0.001) {
+            double targetYaw = std::atan2(dz, dx) * 180.0 / M_PI;
+            // Java: wrapAngleTo180_double(targetYaw - rotationYaw)
+            double delta = targetYaw - static_cast<double>(boat.yaw);
+            // Wrap to -180..180
+            while (delta > 180.0) delta -= 360.0;
+            while (delta < -180.0) delta += 360.0;
+            // Clamp ±20°
+            if (delta > 20.0) delta = 20.0;
+            if (delta < -20.0) delta = -20.0;
+            boat.yaw = static_cast<float>(static_cast<double>(boat.yaw) + delta);
+        }
+
+        // ─── Broadcast position — S18 EntityTeleport ───
+        int32_t newPX = static_cast<int32_t>(std::floor(boat.posX * 32.0));
+        int32_t newPY = static_cast<int32_t>(std::floor(boat.posY * 32.0));
+        int32_t newPZ = static_cast<int32_t>(std::floor(boat.posZ * 32.0));
+
+        bool moved = (newPX != boat.lastSentPosX || newPY != boat.lastSentPosY || newPZ != boat.lastSentPosZ);
+        ++boat.ticksSinceLastTeleport;
+
+        if (moved || boat.ticksSinceLastTeleport >= 400) {
+            boat.lastSentPosX = newPX;
+            boat.lastSentPosY = newPY;
+            boat.lastSentPosZ = newPZ;
+            boat.ticksSinceLastTeleport = 0;
+
+            std::lock_guard<std::mutex> connLock(connectionsMutex_);
+            for (auto& conn : connections_) {
+                if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                auto handler = conn->getHandler();
+                auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                if (ph) {
+                    ph->sendEntityTeleport(*conn, boat.entityId,
+                        boat.posX, boat.posY, boat.posZ, boat.yaw, boat.pitch);
+                }
+            }
+        }
+    }
+
+    // Broadcast destroy for dead boats
+    if (!destroyIds.empty()) {
+        std::lock_guard<std::mutex> connLock(connectionsMutex_);
+        for (auto& conn : connections_) {
+            if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+            auto handler = conn->getHandler();
+            auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+            if (ph) ph->sendDestroyEntities(*conn, destroyIds);
+        }
+    }
+
+    // Remove dead boats
+    boatEntities_.erase(
+        std::remove_if(boatEntities_.begin(), boatEntities_.end(),
+            [](const SpawnedBoat& b) { return b.isDead; }),
+        boatEntities_.end());
 }
 
 } // namespace mccpp
