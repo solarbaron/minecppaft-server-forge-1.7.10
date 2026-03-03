@@ -2671,8 +2671,10 @@ void PlayHandler::handlePlayerDigging(const uint8_t* data, size_t length, Connec
         }
 
         // ─── Mining XP ──────────────────────────────────────────────────
-        // Java: Block.getExpDrop() — ores drop XP when mined
-        {
+        // Java: BlockOre.dropBlockAsItemWithChance → dropXpOnBlockBreak
+        // XP only drops when the dropped item differs from the block itself
+        // (i.e. NOT when using Silk Touch, which yields the ore block)
+        if (!hasSilkTouch) {
             int32_t xp = 0;
             switch (brokenBlockId) {
                 case 16:  xp = (rand() % 3);     break; // Coal ore: 0-2
@@ -2681,11 +2683,15 @@ void PlayHandler::handlePlayerDigging(const uint8_t* data, size_t length, Connec
                 case 73: case 74: xp = 1 + (rand() % 5); break; // Redstone ore: 1-5
                 case 21:  xp = 2 + (rand() % 4); break; // Lapis ore: 2-5
                 case 153: xp = 2 + (rand() % 4); break; // Quartz ore: 2-5
+                // Java: BlockMobSpawner.dropBlockAsItemWithChance → 15+rand(15)+rand(15)
+                case 52:  xp = 15 + (rand() % 15) + (rand() % 15); break; // Mob spawner: 15-45
                 default: break;
             }
             if (xp > 0) {
-                addExperience(xp);
-                sendSetExperience(conn, experienceBar_, experienceLevel_, experienceTotal_);
+                server_.spawnXPOrbs(
+                    static_cast<double>(blockX) + 0.5,
+                    static_cast<double>(blockY) + 0.5,
+                    static_cast<double>(blockZ) + 0.5, xp);
             }
         }
 
