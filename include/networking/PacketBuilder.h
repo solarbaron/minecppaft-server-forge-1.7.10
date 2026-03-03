@@ -460,6 +460,32 @@ namespace PacketBuilder {
         return w.toFramed();
     }
 
+    // ─── 0x1C Entity Metadata (short at index) ───
+    // Java: S1CPacketEntityMetadata — single DataWatcher short entry
+    // DataWatcher type 1 = short
+    inline std::vector<uint8_t> entityMetadataShort(int32_t entityId, uint8_t index, int16_t value) {
+        PacketWriter w(ClientboundPacket::EntityMetadata);
+        w.writeVarInt(entityId);
+        // DataWatcher entry: type<<5 | index, where type=1 (short)
+        w.writeUByte((1 << 5) | (index & 0x1F));
+        w.writeShort(value);
+        w.writeUByte(0x7F); // End of metadata
+        return w.toFramed();
+    }
+
+    // ─── 0x1C Entity Metadata (int at index) ───
+    // Java: S1CPacketEntityMetadata — single DataWatcher int entry
+    // DataWatcher type 2 = int. Used for EntityHorse DW 16/20/22.
+    inline std::vector<uint8_t> entityMetadataInt(int32_t entityId, uint8_t index, int32_t value) {
+        PacketWriter w(ClientboundPacket::EntityMetadata);
+        w.writeVarInt(entityId);
+        // DataWatcher entry: type<<5 | index, where type=2 (int)
+        w.writeUByte((2 << 5) | (index & 0x1F));
+        w.writeInt(value);
+        w.writeUByte(0x7F); // End of metadata
+        return w.toFramed();
+    }
+
     // ─── 0x3A Tab Complete ───
     // Java: S3APacketTabComplete
     inline std::vector<uint8_t> tabComplete(const std::vector<std::string>& completions) {

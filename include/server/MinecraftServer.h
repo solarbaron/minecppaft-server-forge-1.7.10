@@ -699,6 +699,13 @@ private:
         int32_t wolfFollowTicks = 0;    // Follow-owner movement timer
         // Ocelot/Cat state — Java: EntityOcelot DataWatcher(18)
         int32_t catSkinType = 0;        // 0=wild ocelot, 1=tuxedo, 2=tabby, 3=siamese
+        // Horse state — Java: EntityHorse DataWatcher
+        int32_t horseType = 0;           // DW 19 byte: 0=horse, 1=donkey, 2=mule, 3=zombie horse, 4=skeleton horse
+        int32_t horseVariant = 0;        // DW 20 int: low byte=color(0-6), high byte=marking(0-4)
+        int32_t horseTemper = 0;         // Java: EntityHorse.temper (0-100, maxTemper=100)
+        int32_t horseArmorIndex = 0;     // DW 22 int: 0=none, 1=iron(+5), 2=gold(+7), 3=diamond(+11)
+        bool isHorseSaddled = false;     // DW 16 bit 4
+        bool isHorseChested = false;     // DW 16 bit 8 (donkey/mule only)
     };
     mutable std::mutex mobEntitiesMutex_;
     std::vector<SpawnedMob> mobEntities_;
@@ -920,6 +927,47 @@ public:
 
     /** Tick all boat entities (water physics, steering, collision, broadcast). */
     void tickBoats();
+
+    // ─── XP orb entities ────────────────────────────────────────────────
+    // Java reference: EntityXPOrb — experience orb physics, player attraction, pickup
+    struct SpawnedXPOrb {
+        int32_t entityId = 0;
+        double posX = 0, posY = 0, posZ = 0;
+        double motionX = 0, motionY = 0, motionZ = 0;
+        int32_t xpValue = 0;        // Java: EntityXPOrb.xpValue
+        int32_t xpOrbAge = 0;       // Java: EntityXPOrb.xpOrbAge — despawn after 6000 ticks
+        int32_t xpColor = 0;        // Java: EntityXPOrb.xpColor — tick counter for target refresh
+        int32_t pickupDelay = 0;    // Java: EntityXPOrb.field_70532_c — delay before pickup
+        bool isDead = false;
+        bool onGround = false;
+        int64_t spawnTick = 0;
+
+        static constexpr float GRAVITY = 0.03f;        // Java: motionY -= 0.03
+        static constexpr float AIR_FRICTION = 0.98f;    // Java: motionY *= 0.98
+        static constexpr float GROUND_BOUNCE = -0.9f;   // Java: motionY *= -0.9 on ground
+        static constexpr double ATTRACT_RANGE = 8.0;    // Java: d6 = 8.0
+        static constexpr int32_t DESPAWN_AGE = 6000;     // Java: 6000 ticks = 5 minutes
+    };
+    mutable std::mutex xpOrbEntitiesMutex_;
+    std::vector<SpawnedXPOrb> xpOrbEntities_;
+    std::atomic<int32_t> nextXPOrbEntityId_{900000};
+
+    /**
+     * Spawn XP orbs at a position, splitting large amounts via getXPSplit().
+     * Java reference: EntityXPOrb constructor + EntityLiving.onDeathUpdate() splitting
+     * @param totalXp total experience to distribute across orbs
+     */
+public:
+    void spawnXPOrbs(double x, double y, double z, int32_t totalXp);
+
+    /** Tick all XP orb entities (physics, player attraction, pickup, despawn). */
+    void tickXPOrbs();
+
+    /**
+     * Java: EntityXPOrb.getXPSplit() — determine orb size for splitting large XP values.
+     * Returns the largest standard orb value <= the remaining XP.
+     */
+    static int32_t getXPSplit(int32_t xpAmount);
 
 private:
     // ─── Chest storage (in-memory tile entities) ─────────────────────

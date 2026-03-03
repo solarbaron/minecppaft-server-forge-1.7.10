@@ -238,6 +238,61 @@ void MinecraftServer::tick() {
                 }
             }
         }
+
+        // ─── Thunderstorm lightning strikes — Java: WorldServer.func_147456_g() line 225 ───
+        // For each active chunk: 1/100000 chance per tick during thunderstorm to spawn lightning
+        // Java: if (rand.nextInt(100000) == 0 && isRaining() && isThundering())
+        auto* world = worlds_[0].get();
+        if (world->isRaining() && world->isThundering() &&
+            world->getRainingStrength() > 0.0f && world->getThunderingStrength() > 0.0f) {
+            // Approximate Java's per-active-chunk iteration:
+            //   Java iterates ~441 chunks (21×21 view), each with 1/100000 chance.
+            //   We sample around each player's loaded chunk area.
+            std::lock_guard<std::mutex> connLock(connectionsMutex_);
+            for (auto& conn : connections_) {
+                if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                auto handler = conn->getHandler();
+                auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                if (!ph) continue;
+
+                // ~441 active chunks per player (21×21 view distance)
+                // Each chunk has 1/100000 chance → ~441/100000 ≈ 0.44% per tick per player
+                // Simplify: roll once with adjusted probability
+                int32_t activeChunks = 441; // 21×21 default view
+                // For each virtual chunk, roll 1/100000
+                for (int32_t c = 0; c < activeChunks; ++c) {
+                    if (rand() % 100000 != 0) continue;
+
+                    // Pick random position near player — Java uses LCG for XZ within chunk
+                    double px = ph->getPlayerX();
+                    double pz = ph->getPlayerZ();
+                    // Random chunk offset within view distance (±10 chunks)
+                    int32_t chunkOffX = (rand() % 21) - 10;
+                    int32_t chunkOffZ = (rand() % 21) - 10;
+                    int32_t chunkX = static_cast<int32_t>(std::floor(px / 16.0)) + chunkOffX;
+                    int32_t chunkZ = static_cast<int32_t>(std::floor(pz / 16.0)) + chunkOffZ;
+                    // Random XZ within chunk (0-15)
+                    int32_t strikeX = chunkX * 16 + (rand() % 16);
+                    int32_t strikeZ = chunkZ * 16 + (rand() % 16);
+
+                    // getPrecipitationHeight — find highest non-air block
+                    int32_t strikeY = 0;
+                    for (int32_t y = 255; y >= 0; --y) {
+                        Block* blk = world->getBlock(strikeX, y, strikeZ);
+                        int32_t bid = blk ? Block::getIdFromBlock(blk) : 0;
+                        if (bid != 0) {
+                            strikeY = y + 1;
+                            break;
+                        }
+                    }
+
+                    spawnLightning(static_cast<double>(strikeX),
+                                   static_cast<double>(strikeY),
+                                   static_cast<double>(strikeZ));
+                    break; // One strike per player per tick max
+                }
+            }
+        }
     }
 
     // Tick item entities (physics, despawn, pickup)
@@ -265,6 +320,7 @@ void MinecraftServer::tick() {
     tickMinecarts();
     tickLightning();
     tickBoats();
+    tickXPOrbs();
 
     // Natural mob spawning every 200 ticks (10 seconds)
     // Java reference: WorldServer.tick() → SpawnerAnimals.findChunksForSpawning()
@@ -1757,6 +1813,14 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
                     case 95: hurtSound = "mob.wolf.hurt"; break;
                     case 98: hurtSound = "mob.cat.hitt"; break;  // Ocelot/Cat
                     case 99: hurtSound = "mob.irongolem.hit"; break;
+                    case 100: { // Horse — Java: EntityHorse.getHurtSound()
+                        int ht = mob.horseType;
+                        if (ht == 3) hurtSound = "mob.horse.zombie.hit";
+                        else if (ht == 4) hurtSound = "mob.horse.skeleton.hit";
+                        else if (ht == 1 || ht == 2) hurtSound = "mob.horse.donkey.hit";
+                        else hurtSound = "mob.horse.hit";
+                        break;
+                    }
                     default: break;
                 }
                 broadcastSound(hurtSound, mob.posX, mob.posY, mob.posZ, 1.0f, 1.0f);
@@ -1878,6 +1942,14 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
                         case 95: deathSound = "mob.wolf.death"; break;
                         case 98: deathSound = "mob.cat.hitt"; break;  // Ocelot/Cat
                         case 99: deathSound = "mob.irongolem.death"; break;
+                        case 100: { // Horse — Java: EntityHorse.getDeathSound()
+                            int ht = mob.horseType;
+                            if (ht == 3) deathSound = "mob.horse.zombie.death";
+                            else if (ht == 4) deathSound = "mob.horse.skeleton.death";
+                            else if (ht == 1 || ht == 2) deathSound = "mob.horse.donkey.death";
+                            else deathSound = "mob.horse.death";
+                            break;
+                        }
                         default: break;
                     }
                     broadcastSound(deathSound, mob.posX, mob.posY, mob.posZ, 1.0f, 1.0f);
@@ -1929,8 +2001,11 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
                     }
                 };
                 int32_t killXp = getMobXp(mob.mobType);
-                attacker.grantExperience(killXp);
-                attacker.sendExperienceUpdate(attackerConn);
+                // Java: EntityLiving.onDeathUpdate() → world.spawnEntityInWorld(new EntityXPOrb(...))
+                // Spawn XP orbs at mob death position instead of granting directly
+                if (killXp > 0) {
+                    spawnXPOrbs(mob.posX, mob.posY + 0.5, mob.posZ, killXp);
+                }
 
                 // Drop items based on mob type
                 // Java: EntityZombie/EntitySkeleton/etc.dropFewItems()
@@ -2030,6 +2105,41 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
                             dropId = 265; baseCount = 3 + (rand() % 3);
                             spawnItemDrop(mob.posX, mob.posY, mob.posZ, 38, 0, 1 + (rand() % 2));
                             break;
+                        case 100: { // Horse — Java: EntityHorse.getDropItem()
+                            int ht = mob.horseType;
+                            if (ht == 4) { dropId = 352; baseCount = 1 + (rand() % 2); } // Skeleton horse → bone
+                            else if (ht == 3) { // Zombie horse → rotten flesh (75% chance)
+                                if (rand() % 4 != 0) { dropId = 367; baseCount = 1 + (rand() % 2); }
+                            } else { dropId = 334; baseCount = 1 + (rand() % 2); } // Normal → leather
+                            // Drop saddle if saddled
+                            if (mob.isHorseSaddled) {
+                                spawnItemDrop(mob.posX, mob.posY, mob.posZ, 329, 0, 1);
+                            }
+                            // Drop armor — Java: EntityHorse.dropChestItems()
+                            if (mob.horseArmorIndex == 1) spawnItemDrop(mob.posX, mob.posY, mob.posZ, 417, 0, 1); // iron
+                            else if (mob.horseArmorIndex == 2) spawnItemDrop(mob.posX, mob.posY, mob.posZ, 418, 0, 1); // gold
+                            else if (mob.horseArmorIndex == 3) spawnItemDrop(mob.posX, mob.posY, mob.posZ, 419, 0, 1); // diamond
+                            // Drop chest if chested donkey/mule
+                            if (mob.isHorseChested) {
+                                spawnItemDrop(mob.posX, mob.posY, mob.posZ, 54, 0, 1); // chest block
+                            }
+                            // Dismount rider if horse was being ridden
+                            if (mob.riderEntityId >= 0) {
+                                broadcastAttachEntity(0, mob.riderEntityId, -1);
+                                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                                for (auto& c : connections_) {
+                                    if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
+                                    auto h = c->getHandler();
+                                    auto* ph = dynamic_cast<PlayHandler*>(h.get());
+                                    if (ph && ph->getEntityId() == mob.riderEntityId) {
+                                        ph->setRidingEntityId(-1);
+                                        break;
+                                    }
+                                }
+                                mob.riderEntityId = -1;
+                            }
+                            break;
+                        }
                         default: break;
                     }
                     if (dropId > 0) {
@@ -2197,10 +2307,10 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
         broadcastChatMessage(deathMsg);
 
         // Java: EntityPlayer.getExperiencePoints() — drops level*7 XP (max 100)
+        // Java: EntityPlayer.getExperiencePoints() — drops level*7 XP (max 100) as orbs
         int32_t killXp = std::min(target->getExperienceLevel() * 7, 100);
         if (killXp > 0) {
-            attacker.grantExperience(killXp);
-            attacker.sendExperienceUpdate(attackerConn);
+            spawnXPOrbs(target->getPlayerX(), target->getPlayerY() + 0.5, target->getPlayerZ(), killXp);
         }
 
         // Reset victim's XP on death
@@ -2644,6 +2754,181 @@ void MinecraftServer::handleEntityInteract(PlayHandler& player, Connection& conn
                         return;
                     }
                 }
+            }
+            break;
+        }
+    }
+
+    // ─── Horse interactions — Java: EntityHorse.interact() ────────────
+    // Handles: food healing/temper, saddling, armor, chest, taming (mount → buck), mounting tamed
+    {
+        std::lock_guard<std::mutex> lock(mobEntitiesMutex_);
+        for (auto& mob : mobEntities_) {
+            if (mob.entityId != targetEntityId) continue;
+            if (mob.isDead || mob.mobType != 100) break;
+
+            // Helper: broadcast horse DW 16 int (bit flags)
+            auto broadcastHorseDW16 = [&](SpawnedMob& h) {
+                int32_t dw16val = 0;
+                if (h.isTamed) dw16val |= 2;
+                if (h.isHorseSaddled) dw16val |= 4;
+                if (h.isHorseChested) dw16val |= 8;
+                auto metaPkt = PacketBuilder::entityMetadataInt(h.entityId, 16, dw16val);
+                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                for (auto& c : connections_) {
+                    if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
+                    c->sendPacket(metaPkt);
+                }
+            };
+
+            // Helper: broadcast horse DW 22 (armor index)
+            auto broadcastHorseDW22 = [&](SpawnedMob& h) {
+                auto metaPkt = PacketBuilder::entityMetadataInt(h.entityId, 22, h.horseArmorIndex);
+                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                for (auto& c : connections_) {
+                    if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
+                    c->sendPacket(metaPkt);
+                }
+            };
+
+            bool consumed = false;
+
+            // ─── Horse armor equipping — Java: EntityHorse.interact() armor check ───
+            if (heldItem && mob.horseType == 0) { // Only normal horses wear armor
+                int armorIdx = 0;
+                if (heldId == 417) armorIdx = 1; // iron_horse_armor
+                else if (heldId == 418) armorIdx = 2; // golden_horse_armor
+                else if (heldId == 419) armorIdx = 3; // diamond_horse_armor
+                if (armorIdx > 0 && mob.isTamed) {
+                    mob.horseArmorIndex = armorIdx;
+                    broadcastHorseDW22(mob);
+                    if (gameMode != 1) player.decrHeldItem();
+                    player.sendWindowItems(conn);
+                    broadcastSound("mob.horse.armor", mob.posX, mob.posY, mob.posZ, 0.5f, 1.0f);
+                    std::cout << "[Horse] " << player.getPlayerName()
+                              << " equipped armor " << armorIdx << " on horse " << mob.entityId << "\n";
+                    return;
+                }
+            }
+
+            // ─── Food items — Java: EntityHorse.interact() food table ───
+            // wheat=2hp/60age/3temper, sugar=1hp/30age/3temper, bread=7hp/180age/3temper
+            // apple=3hp/60age/3temper, golden_carrot=4hp/60age/5temper+breed, golden_apple=10hp/240age/10temper+breed
+            if (heldItem) {
+                float heal = 0; int ageGrowth = 0; int temperBoost = 0;
+                bool breedItem = false;
+                if (heldId == 296) { heal = 2; ageGrowth = 60; temperBoost = 3; }      // wheat
+                else if (heldId == 353) { heal = 1; ageGrowth = 30; temperBoost = 3; }  // sugar
+                else if (heldId == 297) { heal = 7; ageGrowth = 180; temperBoost = 3; } // bread
+                else if (heldId == 260) { heal = 3; ageGrowth = 60; temperBoost = 3; }  // apple
+                else if (heldId == 396) { heal = 4; ageGrowth = 60; temperBoost = 5; breedItem = true; } // golden_carrot
+                else if (heldId == 322) { heal = 10; ageGrowth = 240; temperBoost = 10; breedItem = true; } // golden_apple
+
+                if (heal > 0 || temperBoost > 0) {
+                    // Heal if needed — horse base max health is 26.0f
+                    float maxHp = 26.0f;
+                    if (mob.health < maxHp && heal > 0) {
+                        mob.health = std::min(mob.health + heal, maxHp);
+                        consumed = true;
+                    }
+                    // Increase temper if not tamed
+                    if (!mob.isTamed && temperBoost > 0 && mob.horseTemper < 100) {
+                        mob.horseTemper = std::min(mob.horseTemper + temperBoost, 100);
+                        consumed = true;
+                    }
+                    // Breeding — golden_carrot or golden_apple on tamed adult full-health horse
+                    if (breedItem && mob.isTamed && mob.inLoveTicks <= 0 && mob.breedCooldown <= 0) {
+                        mob.inLoveTicks = 600;
+                        broadcastEntityEvent(mob.entityId, 18); // Love hearts
+                        consumed = true;
+                    }
+                    if (consumed) {
+                        // Eating sound + consume item
+                        broadcastSound("eating", mob.posX, mob.posY, mob.posZ, 1.0f,
+                            1.0f + ((float)(rand() % 40) / 100.0f - 0.2f));
+                        if (gameMode != 1) player.decrHeldItem();
+                        player.sendWindowItems(conn);
+                        return;
+                    }
+                }
+            }
+
+            // ─── Saddle equipping — Java: EntityHorse.interact() saddle check ───
+            if (heldItem && heldId == 329 && mob.isTamed && !mob.isHorseSaddled) {
+                mob.isHorseSaddled = true;
+                broadcastHorseDW16(mob);
+                if (gameMode != 1) player.decrHeldItem();
+                player.sendWindowItems(conn);
+                broadcastSound("mob.horse.leather", mob.posX, mob.posY, mob.posZ, 0.5f, 1.0f);
+                std::cout << "[Horse] " << player.getPlayerName()
+                          << " saddled horse " << mob.entityId << "\n";
+                return;
+            }
+
+            // ─── Chest equipping (donkey/mule only) — Java: EntityHorse.canCarryChest() ───
+            if (heldItem && heldId == 54 && mob.isTamed && !mob.isHorseChested &&
+                (mob.horseType == 1 || mob.horseType == 2)) {
+                mob.isHorseChested = true;
+                broadcastHorseDW16(mob);
+                if (gameMode != 1) player.decrHeldItem();
+                player.sendWindowItems(conn);
+                broadcastSound("mob.chickenplop", mob.posX, mob.posY, mob.posZ, 1.0f,
+                    ((float)(rand() % 40) / 100.0f - 0.2f) + 1.0f);
+                std::cout << "[Horse] " << player.getPlayerName()
+                          << " added chest to " << (mob.horseType == 1 ? "donkey" : "mule")
+                          << " " << mob.entityId << "\n";
+                return;
+            }
+
+            // ─── Tamed horse: mount if saddled ───
+            if (mob.isTamed && mob.isHorseSaddled && mob.riderEntityId < 0) {
+                // Mount the player on the horse
+                mob.riderEntityId = player.getEntityId();
+                player.setRidingEntityId(mob.entityId);
+                broadcastAttachEntity(0, player.getEntityId(), mob.entityId);
+                std::cout << "[Horse] " << player.getPlayerName()
+                          << " mounted horse " << mob.entityId << "\n";
+                return;
+            }
+
+            // ─── Untamed horse: attempt taming (mount → may buck) ───
+            if (!mob.isTamed && mob.riderEntityId < 0) {
+                // Java: EntityAIRunAroundLikeCrazy — mount player, then check temper
+                mob.riderEntityId = player.getEntityId();
+                player.setRidingEntityId(mob.entityId);
+                broadcastAttachEntity(0, player.getEntityId(), mob.entityId);
+
+                // Java: temper check — rand(maxTemper=100) < temper → tame
+                if (rand() % 100 < mob.horseTemper) {
+                    // Taming success!
+                    mob.isTamed = true;
+                    mob.ownerUuid = player.getUuid();
+                    broadcastHorseDW16(mob);
+                    broadcastEntityEvent(mob.entityId, 7); // Heart particles
+                    // Play angry sound, then settle
+                    std::string angrySound = "mob.horse.angry";
+                    if (mob.horseType == 1 || mob.horseType == 2) angrySound = "mob.horse.donkey.angry";
+                    broadcastSound(angrySound, mob.posX, mob.posY, mob.posZ, 0.8f, 1.0f);
+                    std::cout << "[Horse] " << player.getPlayerName()
+                              << " tamed horse " << mob.entityId << " (temper=" << mob.horseTemper << ")\n";
+                } else {
+                    // Taming failed — buck player off after a short delay
+                    // For now, immediate dismount + smoke particles
+                    broadcastEntityEvent(mob.entityId, 6); // Smoke particles
+                    std::string angrySound = "mob.horse.angry";
+                    if (mob.horseType == 1 || mob.horseType == 2) angrySound = "mob.horse.donkey.angry";
+                    broadcastSound(angrySound, mob.posX, mob.posY, mob.posZ, 0.8f, 1.0f);
+                    // Dismount immediately
+                    broadcastAttachEntity(0, player.getEntityId(), -1);
+                    player.setRidingEntityId(-1);
+                    mob.riderEntityId = -1;
+                    // Increase temper by 5 per attempt — Java: increaseTemper(5)
+                    mob.horseTemper = std::min(mob.horseTemper + 5, 100);
+                    std::cout << "[Horse] " << player.getPlayerName()
+                              << " failed to tame horse " << mob.entityId
+                              << " (temper now " << mob.horseTemper << ")\n";
+                }
+                return;
             }
             break;
         }
@@ -4553,6 +4838,7 @@ static float getMobMovementSpeed(uint8_t mobType) {
         case 95: return 0.30f;  // Wolf — Java: EntityWolf.movementSpeed
         case 98: return 0.30f;  // Ocelot — Java: EntityOcelot.applyEntityAttributes() movementSpeed=0.3
         case 99: return 0.20f;  // Iron Golem (wander speed)
+        case 100: return 0.225f; // Horse — Java: EntityHorse.applyEntityAttributes() movementSpeed=0.225
         default: return 0.00f;  // Non-moving mob
     }
 }
@@ -4617,6 +4903,32 @@ int32_t MinecraftServer::summonMob(uint8_t mobType, double x, double y, double z
                 if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
                 conn->sendPacket(dw16Pkt);
                 conn->sendPacket(dw18Pkt);
+            }
+        }
+
+        // Horse-specific DataWatcher metadata — Java: EntityHorse.entityInit()
+        // DW 16: int (bit flags: 2=tame, 4=saddle, 8=chest, 16=bred, 32=eating, 64=rearing, 128=mouth)
+        // DW 19: byte (horse type: 0=horse, 1=donkey, 2=mule, 3=zombie, 4=skeleton)
+        // DW 20: int (variant: low byte=color 0-6, high byte=marking 0-4)
+        // DW 21: string (owner UUID)
+        // DW 22: int (armor index: 0=none, 1=iron, 2=gold, 3=diamond)
+        if (mobType == 100) {
+            int32_t dw16val = 0;
+            if (mob.isTamed) dw16val |= 2;
+            if (mob.isHorseSaddled) dw16val |= 4;
+            if (mob.isHorseChested) dw16val |= 8;
+            auto dw16Pkt = PacketBuilder::entityMetadataInt(eid, 16, dw16val);
+            auto dw19Pkt = PacketBuilder::entityMetadataByte(eid, 19, static_cast<uint8_t>(mob.horseType));
+            auto dw20Pkt = PacketBuilder::entityMetadataInt(eid, 20, mob.horseVariant);
+            auto dw21Pkt = PacketBuilder::entityMetadataString(eid, 21, mob.ownerUuid);
+            auto dw22Pkt = PacketBuilder::entityMetadataInt(eid, 22, mob.horseArmorIndex);
+            for (auto& conn : connections_) {
+                if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                conn->sendPacket(dw16Pkt);
+                conn->sendPacket(dw19Pkt);
+                conn->sendPacket(dw20Pkt);
+                conn->sendPacket(dw21Pkt);
+                conn->sendPacket(dw22Pkt);
             }
         }
     }
@@ -4896,8 +5208,8 @@ void MinecraftServer::spawnPassiveMobs() {
 
     // Pick passive mob type — equal chances
     // 90=Pig, 91=Sheep, 92=Cow, 93=Chicken, 95=Wolf, 98=Ocelot
-    static const uint8_t passiveMobs[] = {90, 91, 92, 93, 95, 98};
-    uint8_t mobType = passiveMobs[rng() % 6];
+    static const uint8_t passiveMobs[] = {90, 91, 92, 93, 95, 98, 100};
+    uint8_t mobType = passiveMobs[rng() % 7];
 
     std::uniform_real_distribution<float> yawDist(0.0f, 360.0f);
     float yaw = yawDist(rng);
@@ -4934,6 +5246,26 @@ void MinecraftServer::spawnPassiveMobs() {
         else             mob.fleeceColor = 0;  // White (most common)
     }
 
+    // Java: EntityHorse.onSpawnWithEgg() — random horse type and variant
+    if (mobType == 100) {
+        // 10% chance donkey (type 1), else normal horse (type 0)
+        if (rng() % 10 == 0) {
+            mob.horseType = 1; // Donkey
+        } else {
+            mob.horseType = 0; // Normal horse
+            // Random color (0-6) + random marking (0-4) in high byte
+            int32_t color = rng() % 7;
+            int32_t marking = rng() % 5;
+            mob.horseVariant = color | (marking << 8);
+        }
+        // Random health for normal horses: 15 + rand(0..7) + rand(0..8)
+        if (mob.horseType == 0) {
+            mob.health = 15.0f + static_cast<float>(rng() % 8) + static_cast<float>(rng() % 9);
+        } else {
+            mob.health = getMobMaxHealth(100); // Donkeys get base health
+        }
+    }
+
     // Broadcast S0F SpawnMob to all players
     {
         std::lock_guard<std::mutex> lock(connectionsMutex_);
@@ -4949,6 +5281,13 @@ void MinecraftServer::spawnPassiveMobs() {
                     uint8_t dw16 = static_cast<uint8_t>(mob.fleeceColor & 0x0F);
                     auto metaPkt = PacketBuilder::entityMetadataByte(eid, 16, dw16);
                     conn->sendPacket(std::move(metaPkt));
+                }
+                // Horse: send DataWatcher int 16 (flags), byte 19 (type), int 20 (variant)
+                if (mobType == 100) {
+                    conn->sendPacket(PacketBuilder::entityMetadataInt(eid, 16, 0)); // no flags set on wild spawn
+                    conn->sendPacket(PacketBuilder::entityMetadataByte(eid, 19, static_cast<uint8_t>(mob.horseType)));
+                    conn->sendPacket(PacketBuilder::entityMetadataInt(eid, 20, mob.horseVariant));
+                    conn->sendPacket(PacketBuilder::entityMetadataInt(eid, 22, 0)); // no armor
                 }
             }
         }
@@ -5048,6 +5387,14 @@ void MinecraftServer::tickMobs() {
                         }
                         // Wild ocelot: no ambient sound — Java: returns ""
                         break;
+                    case 100: { // Horse — Java: EntityHorse.getLivingSound()
+                        int ht = mob.horseType;
+                        if (ht == 3) sound = "mob.horse.zombie.idle";
+                        else if (ht == 4) sound = "mob.horse.skeleton.idle";
+                        else if (ht == 1 || ht == 2) sound = "mob.horse.donkey.idle";
+                        else sound = "mob.horse.idle";
+                        break;
+                    }
                     default: break;
                 }
                 if (sound) {
@@ -5203,7 +5550,8 @@ void MinecraftServer::tickMobs() {
                                             nearest = ph;
                                         }
                                     }
-                                    if (nearest) nearest->grantExperience(xpAmount);
+                                    // Java: spawns XP orbs at baby position
+                                    if (xpAmount > 0) spawnXPOrbs(babyX, babyY + 0.5, babyZ, xpAmount);
                                 }
                             }
                         }
@@ -6775,9 +7123,307 @@ void MinecraftServer::tickArrows() {
             }
         }
 
+        // ─── Mob collision check ─────────────────────────────────────
+        // Java: EntityArrow.onUpdate() — getEntitiesWithinAABBExcludingEntity
+        // scans ALL entities (mobs + players). We check mobs separately.
+        if (!arrow.isDead) {
+            std::lock_guard<std::mutex> mobLock(mobEntitiesMutex_);
+            for (auto& mob : mobEntities_) {
+                if (mob.isDead) continue;
+
+                double dx = mob.posX - arrow.posX;
+                double dy = (mob.posY + 1.0) - arrow.posY; // Center of mob
+                double dz = mob.posZ - arrow.posZ;
+                double distSq = dx * dx + dy * dy + dz * dz;
+
+                // Java: expand(0.3, 0.3, 0.3) — hit radius ~1.5 blocks
+                if (distSq > 2.25) continue;
+
+                // ─── Enderman arrow immunity ─────────────────────────
+                // Java: EntityEnderman.attackEntityFrom() returns false for arrows
+                if (mob.mobType == 58) {
+                    // Arrow bounces off — Java: motionX/Y/Z *= -0.1, yaw += 180
+                    arrow.motionX *= -0.1;
+                    arrow.motionY *= -0.1;
+                    arrow.motionZ *= -0.1;
+                    arrow.ticksInAir = 0;
+                    // Enderman teleports away from arrow
+                    for (int tp = 0; tp < 64; ++tp) {
+                        double newX = mob.posX + ((double)rand() / RAND_MAX - 0.5) * 64.0;
+                        double newY = mob.posY + (double)(rand() % 64 - 32);
+                        double newZ = mob.posZ + ((double)rand() / RAND_MAX - 0.5) * 64.0;
+                        int bex = static_cast<int>(std::floor(newX));
+                        int bey = static_cast<int>(std::floor(newY));
+                        int bez = static_cast<int>(std::floor(newZ));
+                        if (bey < 1 || bey > 250) continue;
+                        while (bey > 1 && getBlockIdInWorld(bex, bey - 1, bez) == 0) --bey;
+                        if (getBlockIdInWorld(bex, bey, bez) != 0 || getBlockIdInWorld(bex, bey + 1, bez) != 0) continue;
+                        broadcastSound("mob.endermen.portal", mob.posX, mob.posY, mob.posZ, 1.0f, 1.0f);
+                        mob.posX = newX;
+                        mob.posY = static_cast<double>(bey);
+                        mob.posZ = newZ;
+                        broadcastSound("mob.endermen.portal", mob.posX, mob.posY, mob.posZ, 1.0f, 1.0f);
+                        {
+                            std::lock_guard<std::mutex> cl(connectionsMutex_);
+                            for (auto& c : connections_) {
+                                if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
+                                auto h = c->getHandler();
+                                auto* p = dynamic_cast<PlayHandler*>(h.get());
+                                if (p) p->sendEntityTeleport(*c, mob.entityId, mob.posX, mob.posY, mob.posZ, mob.yaw, 0.0f);
+                            }
+                        }
+                        break;
+                    }
+                    break; // Arrow doesn't die but bounces
+                }
+
+                // ─── Calculate arrow damage — Java: ceil(speed * damage) ───
+                double speed = std::sqrt(arrow.motionX * arrow.motionX +
+                                          arrow.motionY * arrow.motionY +
+                                          arrow.motionZ * arrow.motionZ);
+                int32_t dmg = static_cast<int32_t>(std::ceil(speed * arrow.damage));
+                if (dmg < 1) dmg = 1;
+
+                // Critical bonus — Java: rand.nextInt(damage/2 + 2)
+                if (arrow.isCritical) {
+                    dmg += rand() % (dmg / 2 + 2);
+                }
+
+                // Apply damage to mob
+                mob.health -= static_cast<float>(dmg);
+
+                // Hurt animation — Java: EntityLivingBase.attackEntityFrom → S1A status 2
+                broadcastEntityEvent(mob.entityId, 2);
+
+                // Hurt sound — Java: getHurtSound()
+                {
+                    const char* hurtSound = "game.hostile.hurt";
+                    switch (mob.mobType) {
+                        case 50: hurtSound = "mob.creeper.say"; break;
+                        case 51: hurtSound = "mob.skeleton.hurt"; break;
+                        case 52: hurtSound = "mob.spider.say"; break;
+                        case 54: hurtSound = "mob.zombie.hurt"; break;
+                        case 55: hurtSound = "mob.slime.small"; break;
+                        case 56: hurtSound = "mob.ghast.scream"; break;
+                        case 57: hurtSound = "mob.zombiepig.zpighurt"; break;
+                        case 59: hurtSound = "mob.spider.say"; break;
+                        case 60: hurtSound = "mob.silverfish.hit"; break;
+                        case 61: hurtSound = "mob.blaze.hit"; break;
+                        case 62: hurtSound = "mob.magmacube.small"; break;
+                        case 66: hurtSound = "mob.witch.hurt"; break;
+                        case 92: hurtSound = "mob.cow.hurt"; break;
+                        case 90: hurtSound = "mob.pig.say"; break;
+                        case 91: hurtSound = "mob.sheep.say"; break;
+                        case 93: hurtSound = "mob.chicken.hurt"; break;
+                        case 95: hurtSound = "mob.wolf.hurt"; break;
+                        case 98: hurtSound = "mob.cat.hitt"; break;
+                        case 99: hurtSound = "mob.irongolem.hit"; break;
+                        case 100: {
+                            int ht = mob.horseType;
+                            if (ht == 3) hurtSound = "mob.horse.zombie.hit";
+                            else if (ht == 4) hurtSound = "mob.horse.skeleton.hit";
+                            else if (ht == 1 || ht == 2) hurtSound = "mob.horse.donkey.hit";
+                            else hurtSound = "mob.horse.hit";
+                            break;
+                        }
+                        default: break;
+                    }
+                    broadcastSound(hurtSound, mob.posX, mob.posY, mob.posZ, 1.0f, 1.0f);
+                }
+
+                // Knockback — Java: EntityArrow.onUpdate() → addVelocity
+                // knockbackStrength * 0.6 / horizDist
+                if (arrow.knockbackStrength > 0) {
+                    double horizDist = std::sqrt(arrow.motionX * arrow.motionX +
+                                                  arrow.motionZ * arrow.motionZ);
+                    if (horizDist > 0.01) {
+                        double kbX = arrow.motionX * arrow.knockbackStrength * 0.6 / horizDist;
+                        double kbZ = arrow.motionZ * arrow.knockbackStrength * 0.6 / horizDist;
+                        mob.posX += kbX;
+                        mob.posZ += kbZ;
+                    }
+                }
+
+                // Flame enchantment — Java: if (isBurning()) target.setFire(5)
+                if (arrow.isBurning) {
+                    mob.isOnFire = true;
+                }
+
+                // Arrow hit sound — Java: random.bowhit, 1.0f, 1.2f / (rand*0.2+0.9)
+                float hitPitch = 1.2f / (static_cast<float>(rand() % 1000) / 1000.0f * 0.2f + 0.9f);
+                broadcastSound("random.bowhit", arrow.posX, arrow.posY, arrow.posZ, 1.0f, hitPitch);
+
+                // ─── Death check ─────────────────────────────────────
+                if (mob.health <= 0.0f) {
+                    mob.isDead = true;
+
+                    // Death animation
+                    broadcastEntityEvent(mob.entityId, 3);
+
+                    // Death sound — Java: getDeathSound()
+                    {
+                        const char* deathSound = "game.hostile.die";
+                        switch (mob.mobType) {
+                            case 50: deathSound = "mob.creeper.death"; break;
+                            case 51: deathSound = "mob.skeleton.death"; break;
+                            case 52: deathSound = "mob.spider.death"; break;
+                            case 54: deathSound = "mob.zombie.death"; break;
+                            case 55: deathSound = "mob.slime.big"; break;
+                            case 56: deathSound = "mob.ghast.death"; break;
+                            case 57: deathSound = "mob.zombiepig.zpigdeath"; break;
+                            case 59: deathSound = "mob.spider.death"; break;
+                            case 60: deathSound = "mob.silverfish.kill"; break;
+                            case 61: deathSound = "mob.blaze.death"; break;
+                            case 62: deathSound = "mob.magmacube.big"; break;
+                            case 66: deathSound = "mob.witch.death"; break;
+                            case 92: deathSound = "mob.cow.hurt"; break;
+                            case 90: deathSound = "mob.pig.death"; break;
+                            case 91: deathSound = "mob.sheep.say"; break;
+                            case 93: deathSound = "mob.chicken.hurt"; break;
+                            case 95: deathSound = "mob.wolf.death"; break;
+                            case 98: deathSound = "mob.cat.hitt"; break;
+                            case 99: deathSound = "mob.irongolem.death"; break;
+                            case 100: {
+                                int ht = mob.horseType;
+                                if (ht == 3) deathSound = "mob.horse.zombie.death";
+                                else if (ht == 4) deathSound = "mob.horse.skeleton.death";
+                                else if (ht == 1 || ht == 2) deathSound = "mob.horse.donkey.death";
+                                else deathSound = "mob.horse.death";
+                                break;
+                            }
+                            default: break;
+                        }
+                        broadcastSound(deathSound, mob.posX, mob.posY, mob.posZ, 1.0f, 1.0f);
+                    }
+
+                    // Destroy entity
+                    {
+                        std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                        std::vector<int32_t> dead = {mob.entityId};
+                        for (auto& c : connections_) {
+                            if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
+                            auto h = c->getHandler();
+                            auto* ph = dynamic_cast<PlayHandler*>(h.get());
+                            if (ph) ph->sendDestroyEntities(*c, dead);
+                        }
+                    }
+
+                    // ─── Mob drops + XP — reuse same logic as handlePlayerAttack ───
+                    // Looting from shooter's held item
+                    int32_t lootingLevel = 0;
+                    if (arrow.shooterEntityId >= 0) {
+                        std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                        for (auto& conn : connections_) {
+                            if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                            auto handler = conn->getHandler();
+                            auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                            if (ph && ph->getEntityId() == arrow.shooterEntityId) {
+                                auto held = ph->getHeldItem();
+                                if (held && held->hasEnchantments()) {
+                                    lootingLevel = held->getEnchantmentLevel(21);
+                                }
+                                break;
+                            }
+                        }
+                    }
+
+                    // XP orbs — Java: EntityLiving.getExperiencePoints()
+                    auto getMobXp = [](uint8_t mt) -> int32_t {
+                        switch (mt) {
+                            case 54: case 51: case 50: case 52: case 58:
+                            case 66: case 60: case 59: case 57: return 5;
+                            case 61: return 10;
+                            case 56: return 5;
+                            case 62: case 55: return 1;
+                            case 92: case 90: case 91: case 93: case 94:
+                                return 1 + (rand() % 3);
+                            case 99: return 0;
+                            default: return 5;
+                        }
+                    };
+                    int32_t killXp = getMobXp(mob.mobType);
+                    if (killXp > 0) {
+                        spawnXPOrbs(mob.posX, mob.posY + 0.5, mob.posZ, killXp);
+                    }
+
+                    // Mob item drops — Java: dropFewItems()
+                    int32_t baseCount = 0, dropId = 0, dropMeta = 0;
+                    switch (mob.mobType) {
+                        case 54: dropId = 367; baseCount = 1 + (rand() % 2); break;
+                        case 51:
+                            dropId = 352; baseCount = 1 + (rand() % 2);
+                            if (rand() % 2 == 0)
+                                spawnItemDrop(mob.posX, mob.posY, mob.posZ, 262, 0, 1 + (rand() % 2) + lootingLevel);
+                            break;
+                        case 50: dropId = 289; baseCount = rand() % 2; break;
+                        case 52:
+                            dropId = 287; baseCount = 1 + (rand() % 2);
+                            if (rand() % 3 == 0)
+                                spawnItemDrop(mob.posX, mob.posY, mob.posZ, 375, 0, 1);
+                            break;
+                        case 58: dropId = 368; baseCount = rand() % 2; break;
+                        case 66: dropId = 331; baseCount = 1 + (rand() % 3); break;
+                        case 61: dropId = 369; baseCount = rand() % 2; break;
+                        case 56:
+                            dropId = 370; baseCount = rand() % 2;
+                            spawnItemDrop(mob.posX, mob.posY, mob.posZ, 289, 0, 1 + (rand() % 2));
+                            break;
+                        case 55: dropId = 341; baseCount = 1; break;
+                        case 57:
+                            dropId = 367; baseCount = 1;
+                            if (rand() % 2 == 0)
+                                spawnItemDrop(mob.posX, mob.posY, mob.posZ, 371, 0, 1 + (rand() % 2));
+                            break;
+                        case 59:
+                            dropId = 287; baseCount = 1;
+                            if (rand() % 3 == 0)
+                                spawnItemDrop(mob.posX, mob.posY, mob.posZ, 375, 0, 1);
+                            break;
+                        case 60: break; // Silverfish → nothing
+                        case 62: dropId = 378; baseCount = rand() % 2; break;
+                        case 92:
+                            dropId = 334; baseCount = 1 + (rand() % 2);
+                            spawnItemDrop(mob.posX, mob.posY, mob.posZ,
+                                mob.isOnFire ? 364 : 363, 0, 1 + (rand() % 3));
+                            break;
+                        case 90:
+                            dropId = mob.isOnFire ? 320 : 319;
+                            baseCount = 1 + (rand() % 3);
+                            if (mob.isSaddled)
+                                spawnItemDrop(mob.posX, mob.posY, mob.posZ, 329, 0, 1);
+                            break;
+                        case 91:
+                            if (!mob.isSheared) {
+                                dropId = 35; baseCount = 1; dropMeta = mob.fleeceColor;
+                            }
+                            break;
+                        case 93:
+                            dropId = 288; baseCount = 1 + (rand() % 2);
+                            spawnItemDrop(mob.posX, mob.posY, mob.posZ,
+                                mob.isOnFire ? 366 : 365, 0, 1);
+                            break;
+                        case 94: dropId = 351; baseCount = 1 + (rand() % 3); break;
+                        case 99:
+                            dropId = 265; baseCount = 3 + (rand() % 3);
+                            spawnItemDrop(mob.posX, mob.posY, mob.posZ, 38, 0, 1 + (rand() % 2));
+                            break;
+                        default: break;
+                    }
+                    if (dropId > 0) {
+                        int32_t totalCount = baseCount + lootingLevel;
+                        if (totalCount > 0)
+                            spawnItemDrop(mob.posX, mob.posY, mob.posZ, dropId, dropMeta, totalCount);
+                    }
+                }
+
+                // Arrow dies on mob hit
+                arrow.isDead = true;
+                break;
+            }
+        }
         // ─── Player collision check ──────────────────────────────────
         // Java: scan for entities in expanded AABB along motion vector
-        {
+        if (!arrow.isDead) {
             std::lock_guard<std::mutex> connLock(connectionsMutex_);
             for (auto& conn : connections_) {
                 if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
@@ -7074,20 +7720,9 @@ void MinecraftServer::tickThrowables() {
                             break;
                         }
                         case ThrowableType::ExpBottle: {
-                            // Java: 3-11 XP orbs
+                            // Java: 3-11 XP — spawns orbs at impact position
                             int xp = 3 + (rand() % 9);
-                            // Give XP to thrower
-                            std::lock_guard<std::mutex> connLock(connectionsMutex_);
-                            for (auto& conn : connections_) {
-                                if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
-                                auto handler = conn->getHandler();
-                                auto* ph = dynamic_cast<PlayHandler*>(handler.get());
-                                if (!ph) continue;
-                                if (ph->getPlayerName() == t.throwerName) {
-                                    ph->grantExperience(xp);
-                                    break;
-                                }
-                            }
+                            spawnXPOrbs(t.posX, t.posY, t.posZ, xp);
                             broadcastSound("random.glass", t.posX, t.posY, t.posZ, 1.0f, 1.0f);
                             break;
                         }
@@ -8379,20 +9014,10 @@ int32_t MinecraftServer::retractFishHook(int32_t anglerEntityId) {
                       lootItemId, lootDamage, lootCount);
 
         // Award XP — Java: spawnEntityInWorld(new EntityXPOrb(..., rand.nextInt(6) + 1))
-        // We use the existing addPlayerExperience mechanism through a connection lookup
         {
-            std::lock_guard<std::mutex> connLock(connectionsMutex_);
-            for (auto& conn : connections_) {
-                if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
-                auto handler = conn->getHandler();
-                auto* ph = dynamic_cast<PlayHandler*>(handler.get());
-                if (ph && ph->getEntityId() == anglerEntityId) {
-                    std::uniform_int_distribution<int32_t> xpDist(1, 6);
-                    int32_t xp = xpDist(rng);
-                    ph->grantExperience(xp);
-                    break;
-                }
-            }
+            std::uniform_int_distribution<int32_t> xpDist(1, 6);
+            int32_t xp = xpDist(rng);
+            spawnXPOrbs(hook->posX, hook->posY, hook->posZ, xp);
         }
 
         // Play splash sound for the catch
@@ -9061,6 +9686,270 @@ void MinecraftServer::tickBoats() {
         std::remove_if(boatEntities_.begin(), boatEntities_.end(),
             [](const SpawnedBoat& b) { return b.isDead; }),
         boatEntities_.end());
+}
+
+// ─── XP Orb Entity System ──────────────────────────────────────────────
+// Java reference: net.minecraft.entity.item.EntityXPOrb
+
+int32_t MinecraftServer::getXPSplit(int32_t xpAmount) {
+    // Java: EntityXPOrb.getXPSplit(int) — returns the largest standard orb value <= amount
+    // Tier thresholds match Java exactly
+    if (xpAmount >= 2477) return 2477;
+    if (xpAmount >= 1237) return 1237;
+    if (xpAmount >= 617) return 617;
+    if (xpAmount >= 307) return 307;
+    if (xpAmount >= 149) return 149;
+    if (xpAmount >= 73) return 73;
+    if (xpAmount >= 37) return 37;
+    if (xpAmount >= 17) return 17;
+    if (xpAmount >= 7) return 7;
+    if (xpAmount >= 3) return 3;
+    return 1;
+}
+
+void MinecraftServer::spawnXPOrbs(double x, double y, double z, int32_t totalXp) {
+    // Java: EntityLiving.onDeathUpdate() splits XP via getXPSplit()
+    // while (xpRemaining > 0) { split = getXPSplit(xpRemaining); xpRemaining -= split; spawn(split); }
+    if (totalXp <= 0) return;
+
+    std::vector<SpawnedXPOrb> newOrbs;
+    int32_t remaining = totalXp;
+    while (remaining > 0) {
+        int32_t split = getXPSplit(remaining);
+        remaining -= split;
+
+        SpawnedXPOrb orb;
+        orb.entityId = nextXPOrbEntityId_.fetch_add(1);
+        orb.posX = x;
+        orb.posY = y;
+        orb.posZ = z;
+        orb.xpValue = split;
+        orb.xpOrbAge = 0;
+        orb.xpColor = 0;
+        orb.pickupDelay = 0;
+        orb.isDead = false;
+        orb.onGround = false;
+        orb.spawnTick = getTickCount();
+
+        // Java: EntityXPOrb constructor — random initial velocity
+        // motionX = (rand * 0.2 - 0.1) * 2.0
+        // motionY = rand * 0.2 * 2.0
+        // motionZ = (rand * 0.2 - 0.1) * 2.0
+        orb.motionX = (static_cast<double>(rand() % 1000) / 1000.0 * 0.2 - 0.1) * 2.0;
+        orb.motionY = static_cast<double>(rand() % 1000) / 1000.0 * 0.2 * 2.0;
+        orb.motionZ = (static_cast<double>(rand() % 1000) / 1000.0 * 0.2 - 0.1) * 2.0;
+
+        newOrbs.push_back(orb);
+    }
+
+    // Broadcast S11 SpawnExpOrb to all players
+    {
+        std::lock_guard<std::mutex> lock(connectionsMutex_);
+        for (auto& orb : newOrbs) {
+            for (auto& conn : connections_) {
+                if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                auto handler = conn->getHandler();
+                auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                if (ph) {
+                    ph->sendSpawnExpOrb(*conn, orb.entityId,
+                        orb.posX, orb.posY, orb.posZ,
+                        static_cast<int16_t>(orb.xpValue));
+                }
+            }
+        }
+    }
+
+    // Add to tracked entities
+    {
+        std::lock_guard<std::mutex> lock(xpOrbEntitiesMutex_);
+        for (auto& orb : newOrbs) {
+            xpOrbEntities_.push_back(std::move(orb));
+        }
+    }
+
+    std::cout << "[XP] Spawned " << newOrbs.size() << " XP orbs ("
+              << totalXp << " total XP) at " << x << "," << y << "," << z << "\n";
+}
+
+void MinecraftServer::tickXPOrbs() {
+    // Java reference: EntityXPOrb.onUpdate()
+    std::lock_guard<std::mutex> lock(xpOrbEntitiesMutex_);
+    if (xpOrbEntities_.empty()) return;
+
+    // Collect destroy IDs for dead orbs
+    std::vector<int32_t> destroyIds;
+
+    for (auto& orb : xpOrbEntities_) {
+        if (orb.isDead) continue;
+
+        // Age and despawn — Java: if (xpOrbAge++ >= 6000) setDead()
+        orb.xpOrbAge++;
+        if (orb.xpOrbAge >= SpawnedXPOrb::DESPAWN_AGE) {
+            orb.isDead = true;
+            destroyIds.push_back(orb.entityId);
+            continue;
+        }
+
+        // Pickup delay countdown — Java: field_70532_c > 0 ? field_70532_c-- : ...
+        if (orb.pickupDelay > 0) {
+            orb.pickupDelay--;
+        }
+
+        // ─── Player attraction — Java: EntityXPOrb.onUpdate() lines 70-90 ───
+        // Every 25 ticks (xpColor % 25 == 0), find closest player within 8 blocks
+        // Then move toward closest player
+        orb.xpColor++;
+
+        double closestDistSq = SpawnedXPOrb::ATTRACT_RANGE * SpawnedXPOrb::ATTRACT_RANGE;
+        PlayHandler* closestPlayer = nullptr;
+        Connection* closestConn = nullptr;
+
+        {
+            std::lock_guard<std::mutex> connLock(connectionsMutex_);
+            for (auto& conn : connections_) {
+                if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                auto handler = conn->getHandler();
+                auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                if (!ph || ph->isDead()) continue;
+
+                double dx = ph->getPlayerX() - orb.posX;
+                double dy = (ph->getPlayerY() + 1.0) - orb.posY; // Eye height offset
+                double dz = ph->getPlayerZ() - orb.posZ;
+                double distSq = dx * dx + dy * dy + dz * dz;
+
+                if (distSq < closestDistSq) {
+                    closestDistSq = distSq;
+                    closestPlayer = ph;
+                    closestConn = conn.get();
+                }
+            }
+        }
+
+        // Java: if (closestEntityPlayer != null && d6 < 64.0) — attract toward player
+        if (closestPlayer && closestDistSq < 64.0) { // 8² = 64
+            double dx = closestPlayer->getPlayerX() - orb.posX;
+            double dy = (closestPlayer->getPlayerY() + 1.0) - orb.posY;
+            double dz = closestPlayer->getPlayerZ() - orb.posZ;
+            double dist = std::sqrt(closestDistSq);
+
+            // Java: vel = (1.0 - sqrt(distSq) / 8.0) * 0.1
+            // Orbs accelerate as they get closer
+            if (dist > 0.01) {
+                double vel = (1.0 - dist / SpawnedXPOrb::ATTRACT_RANGE) * 0.1;
+                orb.motionX += dx / dist * vel;
+                orb.motionY += dy / dist * vel;
+                orb.motionZ += dz / dist * vel;
+            }
+
+            // ─── Pickup check — Java: EntityXPOrb.onUpdate() lines 93-105 ───
+            // if (field_70532_c == 0 && player.xpCooldown == 0 && distSq < 1.0)
+            if (orb.pickupDelay == 0 && closestDistSq < 1.0) {
+                // Pickup! Grant XP to player
+                closestPlayer->grantExperience(orb.xpValue);
+                closestPlayer->sendExperienceUpdate(*closestConn);
+
+                // Play pickup sound — Java: world.playSoundAtEntity("random.orb", 0.1f, ...)
+                // pitch = 0.5f * ((rand * 0.8f) + 0.6f)
+                float soundPitch = 0.5f * (static_cast<float>(rand() % 1000) / 1000.0f * 0.8f + 0.6f);
+                broadcastSound("random.orb", orb.posX, orb.posY, orb.posZ, 0.1f, soundPitch);
+
+                // Send collect animation — Java: S0D CollectItem
+                {
+                    std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                    for (auto& conn : connections_) {
+                        if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                        auto handler = conn->getHandler();
+                        auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                        if (ph) {
+                            ph->sendCollectItem(*conn, orb.entityId, closestPlayer->getEntityId());
+                        }
+                    }
+                }
+
+                orb.isDead = true;
+                destroyIds.push_back(orb.entityId);
+                continue;
+            }
+        }
+
+        // ─── Physics — Java: EntityXPOrb.onUpdate() ─────────────────────
+        // Gravity
+        orb.motionY -= SpawnedXPOrb::GRAVITY;
+
+        // Apply motion
+        double newX = orb.posX + orb.motionX;
+        double newY = orb.posY + orb.motionY;
+        double newZ = orb.posZ + orb.motionZ;
+
+        // Simple ground collision — check block at feet
+        orb.onGround = false;
+        if (!worlds_.empty()) {
+            auto* world = worlds_[0].get();
+            int32_t blockX = static_cast<int32_t>(std::floor(newX));
+            int32_t blockY = static_cast<int32_t>(std::floor(newY));
+            int32_t blockZ = static_cast<int32_t>(std::floor(newZ));
+
+            Block* below = world->getBlock(blockX, blockY - 1, blockZ);
+            int32_t belowId = below ? Block::getIdFromBlock(below) : 0;
+            Block* at = world->getBlock(blockX, blockY, blockZ);
+            int32_t atId = at ? Block::getIdFromBlock(at) : 0;
+
+            // Java: EntityXPOrb checks bounding box collision
+            // Simplified: if block below is solid and we're near ground level
+            if (belowId != 0 && atId == 0 && newY < static_cast<double>(blockY) + 0.25) {
+                orb.onGround = true;
+                newY = static_cast<double>(blockY);
+                orb.motionY *= SpawnedXPOrb::GROUND_BOUNCE; // Bounce (-0.9)
+                if (std::abs(orb.motionY) < 0.01) orb.motionY = 0;
+            }
+        }
+
+        orb.posX = newX;
+        orb.posY = newY;
+        orb.posZ = newZ;
+
+        // Friction — Java: motionX *= 0.98, motionY *= 0.98 (then -0.03 gravity), motionZ *= 0.98
+        orb.motionX *= SpawnedXPOrb::AIR_FRICTION;
+        orb.motionY *= SpawnedXPOrb::AIR_FRICTION;
+        orb.motionZ *= SpawnedXPOrb::AIR_FRICTION;
+
+        // If on ground, extra horizontal friction — Java: multiply by 0.6 block slipperiness
+        if (orb.onGround) {
+            orb.motionX *= 0.7;
+            orb.motionZ *= 0.7;
+        }
+
+        // ─── Broadcast position update (EntityTeleport) every 3 ticks ───
+        if (orb.xpOrbAge % 3 == 0) {
+            std::lock_guard<std::mutex> connLock(connectionsMutex_);
+            for (auto& conn : connections_) {
+                if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                auto handler = conn->getHandler();
+                auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                if (ph) {
+                    ph->sendEntityTeleport(*conn, orb.entityId,
+                        orb.posX, orb.posY, orb.posZ, 0.0f, 0.0f);
+                }
+            }
+        }
+    }
+
+    // Broadcast destroy for dead orbs
+    if (!destroyIds.empty()) {
+        std::lock_guard<std::mutex> connLock(connectionsMutex_);
+        for (auto& conn : connections_) {
+            if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+            auto handler = conn->getHandler();
+            auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+            if (ph) ph->sendDestroyEntities(*conn, destroyIds);
+        }
+    }
+
+    // Remove dead orbs
+    xpOrbEntities_.erase(
+        std::remove_if(xpOrbEntities_.begin(), xpOrbEntities_.end(),
+            [](const SpawnedXPOrb& o) { return o.isDead; }),
+        xpOrbEntities_.end());
 }
 
 } // namespace mccpp

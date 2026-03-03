@@ -401,6 +401,13 @@ public:
                                 double x, double y, double z);
 
     /**
+     * Send S11 SpawnExpOrb to the client.
+     * Java reference: S11PacketSpawnExperienceOrb
+     */
+    void sendSpawnExpOrb(Connection& conn, int32_t entityId,
+                         double x, double y, double z, int16_t xpValue);
+
+    /**
      * Send S0F SpawnMob to the client.
      * Java reference: S0FPacketSpawnMob
      */

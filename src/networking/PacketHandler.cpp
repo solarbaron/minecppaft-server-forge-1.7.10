@@ -1593,6 +1593,20 @@ void PlayHandler::sendSpawnGlobalEntity(Connection& conn, int32_t entityId, int8
     conn.sendPacket(std::move(pkt));
 }
 
+void PlayHandler::sendSpawnExpOrb(Connection& conn, int32_t entityId,
+                                  double x, double y, double z, int16_t xpValue) {
+    // Java reference: S11PacketSpawnExperienceOrb.writePacketData()
+    // Format: VarInt entityId, Int x*32, Int y*32, Int z*32, Short count
+    std::vector<uint8_t> pkt;
+    writeVarInt(pkt, ClientboundPacket::SpawnExpOrb);
+    writeVarInt(pkt, entityId);
+    writeInt(pkt, static_cast<int32_t>(x * 32.0));
+    writeInt(pkt, static_cast<int32_t>(y * 32.0));
+    writeInt(pkt, static_cast<int32_t>(z * 32.0));
+    writeShort(pkt, xpValue);
+    conn.sendPacket(std::move(pkt));
+}
+
 void PlayHandler::sendEntityMetadataItem(Connection& conn, int32_t entityId,
                                           int16_t itemId, int8_t stackSize, int16_t damage) {
     // Java reference: S1CPacketEntityMetadata + DataWatcher serialization
