@@ -5337,8 +5337,15 @@ void PlayHandler::handleClickWindow(const uint8_t* data, size_t length, Connecti
             if (slotId < 0 || slotId > 38) { sendConfirm(false); return; }
 
             // Output slot (2): can only pick up, not place
+            // Java: SlotFurnace.onPickupFromSlot → onCrafting → spawn XP orbs
             if (slotId == 2) {
+                int32_t takenCount = 0;
+                int32_t takenItemId = -1;
+                int32_t takenDamage = 0;
                 if (furnace->slots[2] && !cursorItem_) {
+                    takenCount = furnace->slots[2]->getStackSize();
+                    takenItemId = furnace->slots[2]->getItemId();
+                    takenDamage = furnace->slots[2]->getDamage();
                     cursorItem_ = furnace->slots[2];
                     furnace->slots[2] = std::nullopt;
                 } else if (furnace->slots[2] && cursorItem_ &&
@@ -5346,8 +5353,62 @@ void PlayHandler::handleClickWindow(const uint8_t* data, size_t length, Connecti
                            cursorItem_->getDamage() == furnace->slots[2]->getDamage()) {
                     int32_t newSize = cursorItem_->getStackSize() + furnace->slots[2]->getStackSize();
                     if (newSize <= 64) {
+                        takenCount = furnace->slots[2]->getStackSize();
+                        takenItemId = furnace->slots[2]->getItemId();
+                        takenDamage = furnace->slots[2]->getDamage();
                         cursorItem_->setStackSize(newSize);
                         furnace->slots[2] = std::nullopt;
+                    }
+                }
+                // ─── Furnace smelting XP — Java: SlotFurnace.onCrafting ──────
+                // XP based on output item, per FurnaceRecipes.getSmeltingExperience
+                if (takenCount > 0 && takenItemId >= 0) {
+                    float xpPerItem = 0.0f;
+                    switch (takenItemId) {
+                        case 265: xpPerItem = 0.7f;  break; // Iron ingot (from iron ore)
+                        case 266: xpPerItem = 1.0f;  break; // Gold ingot (from gold ore)
+                        case 264: xpPerItem = 1.0f;  break; // Diamond (from diamond ore)
+                        case 388: xpPerItem = 1.0f;  break; // Emerald (from emerald ore)
+                        case 20:  xpPerItem = 0.1f;  break; // Glass (from sand)
+                        case 320: xpPerItem = 0.35f; break; // Cooked porkchop
+                        case 364: xpPerItem = 0.35f; break; // Cooked beef (steak)
+                        case 366: xpPerItem = 0.35f; break; // Cooked chicken
+                        case 1:   // Stone (from cobblestone) — check blockId context
+                            if (takenDamage == 0) xpPerItem = 0.1f;
+                            break;
+                        case 336: xpPerItem = 0.3f;  break; // Brick (from clay ball)
+                        case 172: xpPerItem = 0.35f; break; // Hardened clay (from clay block)
+                        case 351: // Dye
+                            if (takenDamage == 2) xpPerItem = 0.2f;  // Green dye (from cactus)
+                            if (takenDamage == 4) xpPerItem = 0.2f;  // Lapis (from lapis ore)
+                            break;
+                        case 263: // Coal
+                            if (takenDamage == 1) xpPerItem = 0.15f; // Charcoal (from log)
+                            else xpPerItem = 0.1f;                    // Coal (from coal ore)
+                            break;
+                        case 393: xpPerItem = 0.35f; break; // Baked potato
+                        case 405: xpPerItem = 0.1f;  break; // Nether brick item (from netherrack)
+                        case 350: xpPerItem = 0.35f; break; // Cooked fish
+                        case 331: xpPerItem = 0.7f;  break; // Redstone (from redstone ore)
+                        case 406: xpPerItem = 0.2f;  break; // Quartz (from quartz ore)
+                        default: break;
+                    }
+                    if (xpPerItem > 0.0f) {
+                        // Java: SlotFurnace.onCrafting probabilistic XP calculation
+                        int32_t totalXP = 0;
+                        if (xpPerItem >= 1.0f) {
+                            totalXP = static_cast<int32_t>(takenCount * xpPerItem);
+                        } else {
+                            float rawXP = static_cast<float>(takenCount) * xpPerItem;
+                            totalXP = static_cast<int32_t>(std::floor(rawXP));
+                            float fractional = rawXP - static_cast<float>(totalXP);
+                            if (fractional > 0.0f && (static_cast<float>(rand()) / RAND_MAX) < fractional) {
+                                ++totalXP;
+                            }
+                        }
+                        if (totalXP > 0) {
+                            server_.spawnXPOrbs(playerX_, playerY_ + 0.5, playerZ_ + 0.5, totalXP);
+                        }
                     }
                 }
                 sendConfirm(true);
