@@ -2911,18 +2911,28 @@ void MinecraftServer::redstoneNotifyNeighbors(int32_t x, int32_t y, int32_t z) {
         return false;
     };
 
-    auto scheduleRepeaterUpdate = [this, &checkRepeaterInput](int32_t rx, int32_t ry, int32_t rz) {
+    auto scheduleDiodeUpdate = [this, &checkRepeaterInput](int32_t rx, int32_t ry, int32_t rz) {
         int32_t blockId = getBlockIdInWorld(rx, ry, rz);
-        if (blockId != mccpp::RedstoneBlocks::REDSTONE_REPEATER_OFF &&
-            blockId != mccpp::RedstoneBlocks::REDSTONE_REPEATER_ON) return;
+        int32_t delayTicks = 0;
+        bool isOn = false;
+
+        if (blockId == mccpp::RedstoneBlocks::REDSTONE_REPEATER_OFF ||
+            blockId == mccpp::RedstoneBlocks::REDSTONE_REPEATER_ON) {
+            int32_t meta = getBlockMetaInWorld(rx, ry, rz);
+            int32_t delaySetting = (meta & 0x0C) >> 2;
+            delayTicks = repeaterDelays[delaySetting];
+            isOn = (blockId == mccpp::RedstoneBlocks::REDSTONE_REPEATER_ON);
+        } else if (blockId == mccpp::RedstoneBlocks::REDSTONE_COMPARATOR_OFF ||
+                   blockId == mccpp::RedstoneBlocks::REDSTONE_COMPARATOR_ON) {
+            delayTicks = 2; // Java: BlockRedstoneComparator.func_149901_b always returns 2
+            isOn = (blockId == mccpp::RedstoneBlocks::REDSTONE_COMPARATOR_ON);
+        } else {
+            return;
+        }
 
         int32_t meta = getBlockMetaInWorld(rx, ry, rz);
         int32_t facing = meta & 3;
-        int32_t delaySetting = (meta & 0x0C) >> 2;
-        int32_t delayTicks = repeaterDelays[delaySetting];
-
         bool inputPowered = checkRepeaterInput(rx, ry, rz, facing);
-        bool isOn = (blockId == mccpp::RedstoneBlocks::REDSTONE_REPEATER_ON);
 
         // Schedule update if state needs to change
         if (isOn && !inputPowered) {
@@ -2934,9 +2944,9 @@ void MinecraftServer::redstoneNotifyNeighbors(int32_t x, int32_t y, int32_t z) {
 
     for (const auto& off : offsets) {
         int32_t nx = x + off[0], ny = y + off[1], nz = z + off[2];
-        scheduleRepeaterUpdate(nx, ny, nz);
+        scheduleDiodeUpdate(nx, ny, nz);
     }
-    scheduleRepeaterUpdate(x, y, z);
+    scheduleDiodeUpdate(x, y, z);
 
     --recursionDepth;
 }
@@ -3515,6 +3525,59 @@ void MinecraftServer::tickScheduledBlocks() {
                 world->setBlock(tick.x, tick.y, tick.z, Block::getBlockById(mccpp::RedstoneBlocks::REDSTONE_REPEATER_ON));
                 world->setBlockMetadata(tick.x, tick.y, tick.z, meta);
                 broadcastBlockChange(tick.x, tick.y, tick.z, mccpp::RedstoneBlocks::REDSTONE_REPEATER_ON, meta);
+                broadcastSound("random.click",
+                    static_cast<double>(tick.x) + 0.5, static_cast<double>(tick.y) + 0.5,
+                    static_cast<double>(tick.z) + 0.5, 0.3f, 0.6f);
+                redstoneNotifyNeighbors(tick.x, tick.y, tick.z);
+            }
+        }
+
+        // Java: BlockRedstoneComparator.updateTick — toggle comparator ON/OFF
+        // Comparator OFF (149) → ON (150) or ON (150) → OFF (149)
+        if (tick.blockId == mccpp::RedstoneBlocks::REDSTONE_COMPARATOR_OFF ||
+            tick.blockId == mccpp::RedstoneBlocks::REDSTONE_COMPARATOR_ON) {
+            if (worlds_.empty()) continue;
+            auto& world = worlds_[0];
+            int32_t meta = world->getBlockMetadata(tick.x, tick.y, tick.z);
+            int32_t facing = meta & 3;
+
+            // Re-check input power at the time of the tick
+            static const int cInputDx[] = { 0, -1,  0,  1};
+            static const int cInputDz[] = { 1,  0, -1,  0};
+            int32_t ix = tick.x + cInputDx[facing];
+            int32_t iz = tick.z + cInputDz[facing];
+            int32_t inputId = getBlockIdInWorld(ix, tick.y, iz);
+            int32_t inputMeta = getBlockMetaInWorld(ix, tick.y, iz);
+
+            bool inputPowered = false;
+            if (inputId == mccpp::RedstoneBlocks::REDSTONE_WIRE && inputMeta > 0) inputPowered = true;
+            else if (inputId == mccpp::RedstoneBlocks::REDSTONE_TORCH_ON) inputPowered = true;
+            else if (inputId == mccpp::RedstoneBlocks::REDSTONE_BLOCK) inputPowered = true;
+            else if (inputId == mccpp::RedstoneBlocks::LEVER && mccpp::PowerSource::isLeverPowered(inputMeta)) inputPowered = true;
+            else if ((inputId == mccpp::RedstoneBlocks::STONE_BUTTON || inputId == mccpp::RedstoneBlocks::WOODEN_BUTTON) && (inputMeta & 0x08)) inputPowered = true;
+            else if (inputId == mccpp::RedstoneBlocks::REDSTONE_REPEATER_ON) {
+                int32_t otherFacing = inputMeta & 3;
+                int32_t outDx = -cInputDx[otherFacing];
+                int32_t outDz = -cInputDz[otherFacing];
+                if (ix + outDx == tick.x && iz + outDz == tick.z) inputPowered = true;
+            }
+
+            bool isOn = (tick.blockId == mccpp::RedstoneBlocks::REDSTONE_COMPARATOR_ON);
+
+            if (isOn && !inputPowered) {
+                // Turn OFF: switch 150 → 149, preserve metadata
+                world->setBlock(tick.x, tick.y, tick.z, Block::getBlockById(mccpp::RedstoneBlocks::REDSTONE_COMPARATOR_OFF));
+                world->setBlockMetadata(tick.x, tick.y, tick.z, meta);
+                broadcastBlockChange(tick.x, tick.y, tick.z, mccpp::RedstoneBlocks::REDSTONE_COMPARATOR_OFF, meta);
+                broadcastSound("random.click",
+                    static_cast<double>(tick.x) + 0.5, static_cast<double>(tick.y) + 0.5,
+                    static_cast<double>(tick.z) + 0.5, 0.3f, 0.5f);
+                redstoneNotifyNeighbors(tick.x, tick.y, tick.z);
+            } else if (!isOn && inputPowered) {
+                // Turn ON: switch 149 → 150, preserve metadata
+                world->setBlock(tick.x, tick.y, tick.z, Block::getBlockById(mccpp::RedstoneBlocks::REDSTONE_COMPARATOR_ON));
+                world->setBlockMetadata(tick.x, tick.y, tick.z, meta);
+                broadcastBlockChange(tick.x, tick.y, tick.z, mccpp::RedstoneBlocks::REDSTONE_COMPARATOR_ON, meta);
                 broadcastSound("random.click",
                     static_cast<double>(tick.x) + 0.5, static_cast<double>(tick.y) + 0.5,
                     static_cast<double>(tick.z) + 0.5, 0.3f, 0.6f);
