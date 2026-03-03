@@ -67,6 +67,31 @@ int32_t RedstoneSignal::calculateSignal(int32_t x, int32_t y, int32_t z,
             if (facing == 3 && dx[i] == -1) facingToward = true;  // facing east, we're west
             if (facingToward) maxPower = MAX_POWER;
         }
+        // Comparator ON — same directional output as repeater
+        if (blockId == RedstoneBlocks::REDSTONE_COMPARATOR_ON) {
+            int32_t compMeta = getMeta(nx, y, nz);
+            int32_t facing = compMeta & 0x3;
+            bool facingToward = false;
+            if (facing == 0 && dz[i] == -1) facingToward = true;
+            if (facing == 1 && dx[i] == 1) facingToward = true;
+            if (facing == 2 && dz[i] == 1) facingToward = true;
+            if (facing == 3 && dx[i] == -1) facingToward = true;
+            if (facingToward) maxPower = MAX_POWER;
+        }
+        // Lever — provides power when active
+        if (blockId == RedstoneBlocks::LEVER) {
+            int32_t levMeta = getMeta(nx, y, nz);
+            if (PowerSource::isLeverPowered(levMeta)) {
+                maxPower = MAX_POWER;
+            }
+        }
+        // Button — provides power when pressed
+        if (blockId == RedstoneBlocks::STONE_BUTTON || blockId == RedstoneBlocks::WOODEN_BUTTON) {
+            int32_t btnMeta = getMeta(nx, y, nz);
+            if (btnMeta & 0x08) {
+                maxPower = MAX_POWER;
+            }
+        }
 
         // Wire going up through adjacent block
         if (isSolid(nx, y, nz)) {
