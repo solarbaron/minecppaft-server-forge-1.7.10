@@ -191,6 +191,14 @@ public:
     };
     std::vector<SpawnerInfo> pendingSpawners;
 
+    // Chest placements from world generation — consumed on chunk load
+    // to populate server chestStorage_ with correct loot tables.
+    struct ChestInfo {
+        int32_t x, y, z;        // World coordinates
+        std::string lootTable;  // e.g. "desert_pyramid", "jungle_pyramid"
+    };
+    std::vector<ChestInfo> pendingChests;
+
     Chunk() = default;
     Chunk(int x, int z) : xPosition(x), zPosition(z) {
         biomes.fill(0);

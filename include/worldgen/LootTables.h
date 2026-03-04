@@ -352,7 +352,7 @@ namespace DungeonLoot {
         {REDSTONE,             0, 1, 4, 10},
         {GOLDEN_APPLE,         0, 1, 1, 1},   // regular
         {GOLDEN_APPLE,         1, 1, 1, 1},   // enchanted (Notch apple)
-        {MUSIC_DISC_13 + 0,    0, 1, 1, 4},   // placeholder IDs
+        {2256,                 0, 1, 1, 4},   // music_disc_13 (ID 2256)
         {IRON_HORSE_ARMOR,     0, 1, 1, 2},
         {GOLDEN_HORSE_ARMOR,   0, 1, 1, 1},
         {DIAMOND_HORSE_ARMOR,  0, 1, 1, 1},
