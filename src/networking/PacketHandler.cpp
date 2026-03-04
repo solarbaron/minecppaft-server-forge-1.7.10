@@ -6930,6 +6930,43 @@ void PlayHandler::savePlayerData() {
     root.setInteger("XpLevel", experienceLevel_);
     root.setInteger("XpTotal", experienceTotal_);
 
+    // Game mode — Java: EntityPlayerMP.writeEntityToNBT() → playerGameType
+    root.setInteger("playerGameType", gameMode_);
+
+    // Selected hotbar slot — Java: SelectedItemSlot
+    root.setInteger("SelectedItemSlot", static_cast<int32_t>(currentSlot_));
+
+    // Inventory — Java: InventoryPlayer.writeToNBT(NBTTagList)
+    // mainInventory[0-35] → Slot byte 0-35
+    // armorInventory[0-3] → Slot byte 100-103
+    {
+        auto invList = std::make_unique<nbt::NBTTagList>();
+        const auto& mainInv = inventory_.getMainInventory();
+        for (int32_t i = 0; i < static_cast<int32_t>(mainInv.size()); ++i) {
+            if (mainInv[i]) {
+                invList->appendTag(writeItemStackToNBT(*mainInv[i], static_cast<int8_t>(i)));
+            }
+        }
+        const auto& armorInv = inventory_.getArmorInventory();
+        for (int32_t i = 0; i < static_cast<int32_t>(armorInv.size()); ++i) {
+            if (armorInv[i]) {
+                invList->appendTag(writeItemStackToNBT(*armorInv[i], static_cast<int8_t>(i + 100)));
+            }
+        }
+        root.setTag("Inventory", std::move(invList));
+    }
+
+    // Ender chest — Java: InventoryEnderChest.saveInventoryToNBT()
+    {
+        auto enderList = std::make_unique<nbt::NBTTagList>();
+        for (int32_t i = 0; i < 27; ++i) {
+            if (enderChestInventory_[i]) {
+                enderList->appendTag(writeItemStackToNBT(*enderChestInventory_[i], static_cast<int8_t>(i)));
+            }
+        }
+        root.setTag("EnderItems", std::move(enderList));
+    }
+
     // Serialize to binary
     auto data = nbt::serializeNBT(root);
 
@@ -7010,8 +7047,71 @@ bool PlayHandler::loadPlayerData() {
     if (root->hasKey("XpLevel")) experienceLevel_ = root->getInteger("XpLevel");
     if (root->hasKey("XpTotal")) experienceTotal_ = root->getInteger("XpTotal");
 
+    // Game mode — Java: EntityPlayerMP.readEntityFromNBT()
+    if (root->hasKey("playerGameType")) {
+        gameMode_ = root->getInteger("playerGameType");
+    }
+
+    // Selected hotbar slot — Java: SelectedItemSlot
+    if (root->hasKey("SelectedItemSlot")) {
+        int32_t slot = root->getInteger("SelectedItemSlot");
+        if (slot >= 0 && slot < 9) currentSlot_ = static_cast<int16_t>(slot);
+    }
+
+    // Inventory — Java: InventoryPlayer.readFromNBT(NBTTagList)
+    // Clear existing inventory first
+    for (int32_t i = 0; i < InventoryPlayer::TOTAL_SIZE; ++i) {
+        inventory_.setInventorySlotContents(i, std::nullopt);
+    }
+    if (root->hasKey("Inventory")) {
+        auto* invList = root->getTagList("Inventory", static_cast<int>(nbt::TagType::Compound));
+        if (invList) {
+            for (int32_t i = 0; i < invList->tagCount(); ++i) {
+                auto* itemTag = invList->getCompoundTagAt(i);
+                if (!itemTag) continue;
+                int32_t slot = static_cast<int32_t>(itemTag->getByte("Slot")) & 0xFF;
+                auto stack = readItemStackFromNBT(*itemTag);
+                if (!stack) continue;
+                if (slot >= 0 && slot < InventoryPlayer::MAIN_SIZE) {
+                    // mainInventory slot 0-35
+                    inventory_.setInventorySlotContents(slot, stack);
+                } else if (slot >= 100 && slot < 100 + InventoryPlayer::ARMOR_SIZE) {
+                    // armorInventory slot 100-103 → index 36-39
+                    inventory_.setInventorySlotContents(slot - 100 + InventoryPlayer::MAIN_SIZE, stack);
+                }
+            }
+        }
+    }
+
+    // Ender chest — Java: InventoryEnderChest.loadInventoryFromNBT(NBTTagList)
+    for (int32_t i = 0; i < 27; ++i) {
+        enderChestInventory_[i] = std::nullopt;
+    }
+    if (root->hasKey("EnderItems")) {
+        auto* enderList = root->getTagList("EnderItems", static_cast<int>(nbt::TagType::Compound));
+        if (enderList) {
+            for (int32_t i = 0; i < enderList->tagCount(); ++i) {
+                auto* itemTag = enderList->getCompoundTagAt(i);
+                if (!itemTag) continue;
+                int32_t slot = static_cast<int32_t>(itemTag->getByte("Slot")) & 0xFF;
+                if (slot >= 0 && slot < 27) {
+                    enderChestInventory_[slot] = readItemStackFromNBT(*itemTag);
+                }
+            }
+        }
+    }
+
+    int invCount = 0;
+    for (int32_t i = 0; i < InventoryPlayer::TOTAL_SIZE; ++i) {
+        if (inventory_.getStackInSlot(i)) ++invCount;
+    }
+    int enderCount = 0;
+    for (int32_t i = 0; i < 27; ++i) {
+        if (enderChestInventory_[i]) ++enderCount;
+    }
     std::cout << "[Load] Loaded player data for " << playerName_
-              << " at (" << playerX_ << ", " << playerY_ << ", " << playerZ_ << ")\n";
+              << " at (" << playerX_ << ", " << playerY_ << ", " << playerZ_ << ")"
+              << " inv=" << invCount << " ender=" << enderCount << "\n";
     return true;
 }
 
