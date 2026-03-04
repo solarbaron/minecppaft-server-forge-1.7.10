@@ -26,6 +26,7 @@
 #include "worldgen/MapGenCaves.h"
 #include "worldgen/MapGenMineshaft.h"
 #include "worldgen/MapGenScatteredFeature.h"
+#include "worldgen/MapGenStronghold.h"
 #include "worldgen/WorldGenOre.h"
 #include "worldgen/WorldGenTrees.h"
 
@@ -37,7 +38,7 @@ namespace mccpp {
 
 class OverworldGenerator : public IChunkGenerator {
 public:
-    explicit OverworldGenerator(int64_t seed) : seed_(seed), mineshaftGen_(seed), scatteredGen_(seed) {
+    explicit OverworldGenerator(int64_t seed) : seed_(seed), mineshaftGen_(seed), scatteredGen_(seed), strongholdGen_(seed) {
         ChunkProviderGenerate::Config cfg;
         cfg.worldSeed = seed;
         cfg.mapFeaturesEnabled = false;
@@ -131,6 +132,11 @@ public:
         // ── Step 6.6: Scattered feature generation (desert/jungle pyramids, swamp huts) ──
         scatteredGen_.generate(seed_, chunkX, chunkZ, blocks.data(), meta.data(),
                               chunk->pendingSpawners, chunk->pendingChests);
+
+        // ── Step 6.7: Stronghold generation ──
+        // Java reference: MapGenStronghold + StructureStrongholdPieces
+        strongholdGen_.generate(seed_, chunkX, chunkZ, blocks.data(), meta.data(),
+                               chunk->pendingSpawners, chunk->pendingChests);
 
         // ── Step 7: Bedrock ──
         placeBedrock(chunkX, chunkZ, blocks.data());
@@ -746,6 +752,7 @@ private:
     MapGenCaves caveGen_;       // Cave carver
     MapGenMineshaft mineshaftGen_;  // Mineshaft structure generator
     MapGenScatteredFeature scatteredGen_;  // Scattered feature generator (temples, huts)
+    MapGenStronghold strongholdGen_;  // Stronghold structure generator
     std::unique_ptr<NoiseGeneratorOctaves> noiseGen1_;  // lower density
     std::unique_ptr<NoiseGeneratorOctaves> noiseGen2_;  // upper density
     std::unique_ptr<NoiseGeneratorOctaves> noiseGen3_;  // interpolation
