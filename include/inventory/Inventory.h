@@ -116,13 +116,20 @@ public:
     ItemStack splitStack(int32_t amount) {
         int32_t taken = std::min(amount, stackSize_);
         ItemStack result(itemId_, taken, damage_);
+        result.enchantments_ = enchantments_;
+        result.repairCost_ = repairCost_;
+        result.customName_ = customName_;
         stackSize_ -= taken;
         return result;
     }
 
     // Java: ItemStack.copy()
     ItemStack copy() const {
-        return ItemStack(itemId_, stackSize_, damage_);
+        ItemStack c(itemId_, stackSize_, damage_);
+        c.enchantments_ = enchantments_;
+        c.repairCost_ = repairCost_;
+        c.customName_ = customName_;
+        return c;
     }
 
     // ─── Comparison ────────────────────────────────────────────────────
@@ -162,11 +169,53 @@ public:
         return 0;
     }
 
+    // ─── Repair cost (Java: ItemStack.repairCost) ─────────────────────
+    int32_t getRepairCost() const { return repairCost_; }
+    void setRepairCost(int32_t cost) { repairCost_ = cost; }
+
+    // ─── Custom display name (Java: ItemStack.stackTagCompound.display.Name) ──
+    const std::string& getCustomName() const { return customName_; }
+    void setCustomName(const std::string& name) { customName_ = name; }
+    bool hasCustomName() const { return !customName_.empty(); }
+    void clearCustomName() { customName_.clear(); }
+
+    // Java: ItemStack.isItemStackDamageable() — true if item has durability
+    bool isItemDamageable() const {
+        // Matches the items in PlayHandler::getMaxDurability()
+        switch (itemId_) {
+            // Swords
+            case 268: case 272: case 267: case 276: case 283:
+            // Shovels
+            case 269: case 273: case 256: case 277: case 284:
+            // Pickaxes
+            case 270: case 274: case 257: case 278: case 285:
+            // Axes
+            case 271: case 275: case 258: case 279: case 286:
+            // Hoes
+            case 290: case 291: case 292: case 293: case 294:
+            // Armor
+            case 298: case 299: case 300: case 301:
+            case 302: case 303: case 304: case 305:
+            case 306: case 307: case 308: case 309:
+            case 310: case 311: case 312: case 313:
+            case 314: case 315: case 316: case 317:
+            // Bow, fishing rod, flint and steel, shears
+            case 261: case 346: case 259: case 359:
+            // Carrot on a stick
+            case 398:
+                return true;
+            default:
+                return false;
+        }
+    }
+
 private:
     int32_t itemId_ = 0;
     int32_t stackSize_ = 0;
     int32_t damage_ = 0;
     std::vector<Enchantment> enchantments_;
+    int32_t repairCost_ = 0;     // Java: ItemStack.repairCost (NBT "RepairCost")
+    std::string customName_;     // Java: stackTagCompound.display.Name
 };
 
 // ═══════════════════════════════════════════════════════════════════════════

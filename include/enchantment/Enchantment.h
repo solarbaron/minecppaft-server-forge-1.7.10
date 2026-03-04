@@ -92,7 +92,7 @@ namespace EnchantmentID {
     constexpr int32_t POWER              = 48;
     constexpr int32_t PUNCH              = 49;
     constexpr int32_t FLAME              = 50;
-    constexpr int32_t INFINITY           = 51;
+    constexpr int32_t INFINITY_ARROWS    = 51;
     constexpr int32_t LUCK_OF_THE_SEA    = 61;
     constexpr int32_t LURE               = 62;
 }

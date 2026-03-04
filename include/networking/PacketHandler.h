@@ -895,6 +895,11 @@ private:
     void handleCreativeInventory(const uint8_t* data, size_t length, Connection& conn);
     void handleEnchantItem(const uint8_t* data, size_t length, Connection& conn);
 
+    // ─── Anvil helpers ───
+    void updateAnvilOutput(Connection& conn);
+    static bool getIsRepairable(int32_t itemId, int32_t materialId);
+    static bool canApplyEnchantment(int32_t enchId, int32_t itemId);
+
     MinecraftServer& server_;
     std::string playerName_;
     std::string uuid_;
@@ -971,6 +976,14 @@ private:
     int enchantLevels_[3] = {0, 0, 0};
     int bookshelfCount_ = 0;  // Java: ContainerEnchantment bookshelf count (cached)
     std::optional<ItemStack> enchantSlotItem_;  // Java: ContainerEnchantment.tableInventory slot 0
+
+    // ─── Anvil container ───
+    // Java: ContainerRepair fields
+    std::optional<ItemStack> anvilSlots_[2];     // Input slots 0,1
+    std::optional<ItemStack> anvilOutput_;        // Output slot 2 (computed)
+    std::string anvilRepairedName_;               // Java: repairedItemName
+    int32_t anvilMaxCost_ = 0;                    // Java: maximumCost (XP levels)
+    int32_t anvilMaterialCost_ = 0;               // Java: materialCost
 
 public:
     // Accessors for server-side furnace ticking
