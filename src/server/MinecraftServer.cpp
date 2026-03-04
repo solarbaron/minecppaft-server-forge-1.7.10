@@ -857,17 +857,17 @@ namespace {
         sbWriteString(pkt, itemName);
         sbWriteByte(pkt, 0); // action = update
         sbWriteString(pkt, objName);
-        sbWriteVarInt(pkt, value);
+        sbWriteInt(pkt, value); // Java: writeInt, not VarInt
         return pkt;
     }
 
     // Build S3C Update Score packet (remove all scores for a player)
+    // Java: S3CPacketUpdateScore(String) — action=1, no objective/score fields written
     std::vector<uint8_t> buildS3CRemove(const std::string& itemName) {
         std::vector<uint8_t> pkt;
         sbWriteVarInt(pkt, 0x3C);
         sbWriteString(pkt, itemName);
-        sbWriteByte(pkt, 1); // action = remove
-        sbWriteString(pkt, ""); // empty objective = remove all
+        sbWriteByte(pkt, 1); // action = remove — nothing else written
         return pkt;
     }
 
