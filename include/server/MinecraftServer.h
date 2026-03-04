@@ -27,6 +27,7 @@
 
 #include "command/CommandSystem.h"
 #include "crafting/Crafting.h"
+#include "scoreboard/Scoreboard.h"
 
 namespace mccpp {
 
@@ -611,7 +612,56 @@ public:
      */
     void clearPlayerPotionEffects(const std::string& playerName);
 
+    // ─── Scoreboard ─────────────────────────────────────────────────────
+    // Java reference: ServerScoreboard — broadcasting scoreboard state
+
+    /** Get the server scoreboard. Java: MinecraftServer.getWorldScoreboard() */
+    Scoreboard& getScoreboard() { return scoreboard_; }
+    const Scoreboard& getScoreboard() const { return scoreboard_; }
+
+    /**
+     * Broadcast S3B ScoreboardObjective to all players.
+     * Java: ServerScoreboard.func_96522_a / func_96532_b / func_96533_c
+     * @param mode 0=create, 1=remove, 2=update display name
+     */
+    void broadcastScoreboardObjective(const std::string& objName, const std::string& displayName, int8_t mode);
+
+    /**
+     * Broadcast S3C UpdateScore to all players.
+     * Java: ServerScoreboard.func_96536_a (update) / func_96516_a (remove)
+     * @param action 0=create/update, 1=remove
+     */
+    void broadcastUpdateScore(const std::string& playerName, const std::string& objName,
+                              int32_t value, int8_t action);
+
+    /**
+     * Broadcast S3C UpdateScore (remove all scores for a player).
+     * Java: S3CPacketUpdateScore(String) constructor — removes all scores for itemName.
+     */
+    void broadcastRemoveScore(const std::string& playerName);
+
+    /**
+     * Broadcast S3D DisplayScoreboard to all players.
+     * Java: ServerScoreboard.setObjectiveInDisplaySlot
+     */
+    void broadcastDisplayScoreboard(int8_t position, const std::string& objName);
+
+    /**
+     * Broadcast S3E Teams to all players.
+     * Java: ServerScoreboard.broadcastTeamCreated/broadcastTeamRemoved/func_96513_c
+     * @param mode 0=create, 1=remove, 2=update, 3=add players, 4=remove players
+     */
+    void broadcastTeams(const ScorePlayerTeam& team, int8_t mode,
+                        const std::vector<std::string>& players = {});
+
+    /**
+     * Send full scoreboard state to a single player (used on join).
+     * Java: ServerScoreboard.func_96549_e — sends objectives, scores, display slots, and teams.
+     */
+    void sendScoreboardState(Connection& conn);
+
 private:
+    Scoreboard scoreboard_;
     int32_t defaultGameMode_ = 0; // Java: MinecraftServer.defaultGameType (0=survival)
 
     /**

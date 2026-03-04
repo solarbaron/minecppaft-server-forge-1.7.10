@@ -1236,50 +1236,361 @@ void CommandAchievement::processCommand(ICommandSender& sender, const std::vecto
     }
 }
 
-// /scoreboard — Java: net.minecraft.command.CommandScoreboard (simplified)
+// /scoreboard — Java: net.minecraft.command.CommandScoreboard
 void CommandScoreboard::processCommand(ICommandSender& sender, const std::vector<std::string>& args) {
     if (args.empty()) {
         sender.addChatMessage("\xC2\xA7" "cUsage: /scoreboard <objectives|players|teams> ...");
         return;
     }
+    auto* server = sender.getServer();
+    if (!server) return;
+    auto& sb = server->getScoreboard();
+
     if (args[0] == "objectives") {
         if (args.size() < 2) {
             sender.addChatMessage("\xC2\xA7" "cUsage: /scoreboard objectives <list|add|remove|setdisplay>");
             return;
         }
+
         if (args[1] == "list") {
-            sender.addChatMessage("There are no objectives (scoreboard not fully implemented)");
+            auto names = sb.getObjectiveNames();
+            if (names.empty()) {
+                sender.addChatMessage("There are no objectives");
+            } else {
+                sender.addChatMessage("Showing " + std::to_string(names.size()) + " objective(s):");
+                for (const auto& n : names) {
+                    const auto* obj = sb.getObjective(n);
+                    if (obj) {
+                        sender.addChatMessage("- " + obj->name + " (" + obj->displayName
+                            + ") type: " + obj->criteria.name);
+                    }
+                }
+            }
+
         } else if (args[1] == "add" && args.size() >= 4) {
-            sender.addChatMessage("Added objective '" + args[2] + "' of type '" + args[3] + "'");
+            const std::string& objName = args[2];
+            const std::string& criteriaName = args[3];
+
+            // Build display name from remaining args, or use objName
+            std::string displayName = objName;
+            if (args.size() > 4) {
+                displayName = "";
+                for (size_t i = 4; i < args.size(); ++i) {
+                    if (i > 4) displayName += " ";
+                    displayName += args[i];
+                }
+            }
+
+            if (sb.getObjective(objName)) {
+                sender.addChatMessage("\xC2\xA7" "cObjective '" + objName + "' already exists");
+                return;
+            }
+
+            ScoreCriteria criteria{criteriaName, criteriaName == "trigger"};
+            sb.addObjective(objName, displayName, criteria);
+
+            // Broadcast S3B create
+            server->broadcastScoreboardObjective(objName, displayName, 0);
+
+            sender.addChatMessage("Added new objective '" + objName + "' successfully");
+
         } else if (args[1] == "remove" && args.size() >= 3) {
-            sender.addChatMessage("Removed objective '" + args[2] + "'");
+            const std::string& objName = args[2];
+            if (!sb.getObjective(objName)) {
+                sender.addChatMessage("\xC2\xA7" "cNo objective was found by the name '" + objName + "'");
+                return;
+            }
+
+            // Clear display slots that reference this objective + broadcast
+            for (int32_t slot = 0; slot < 3; ++slot) {
+                if (sb.getDisplaySlot(slot) == objName) {
+                    sb.setDisplaySlot(slot, "");
+                    server->broadcastDisplayScoreboard(static_cast<int8_t>(slot), "");
+                }
+            }
+
+            // Broadcast S3B remove
+            server->broadcastScoreboardObjective(objName, "", 1);
+
+            sb.removeObjective(objName);
+            sender.addChatMessage("Removed objective '" + objName + "'");
+
         } else if (args[1] == "setdisplay" && args.size() >= 3) {
-            sender.addChatMessage("Set display slot '" + args[2] + "'");
+            const std::string& slotName = args[2];
+            int32_t slot = Scoreboard::getDisplaySlotNumber(slotName);
+            if (slot < 0) {
+                sender.addChatMessage("\xC2\xA7" "cUnknown display slot '" + slotName + "'");
+                return;
+            }
+
+            std::string objName = (args.size() >= 4) ? args[3] : "";
+            if (!objName.empty() && !sb.getObjective(objName)) {
+                sender.addChatMessage("\xC2\xA7" "cNo objective was found by the name '" + objName + "'");
+                return;
+            }
+
+            sb.setDisplaySlot(slot, objName);
+
+            // Broadcast S3D
+            server->broadcastDisplayScoreboard(static_cast<int8_t>(slot), objName);
+
+            if (objName.empty()) {
+                sender.addChatMessage("Cleared display slot '" + slotName + "'");
+            } else {
+                sender.addChatMessage("Set display slot '" + slotName + "' to '" + objName + "'");
+            }
+        } else {
+            sender.addChatMessage("\xC2\xA7" "cUsage: /scoreboard objectives <list|add|remove|setdisplay>");
         }
+
     } else if (args[0] == "players") {
         if (args.size() < 2) {
             sender.addChatMessage("\xC2\xA7" "cUsage: /scoreboard players <list|set|add|remove|reset>");
             return;
         }
+
         if (args[1] == "list") {
-            sender.addChatMessage("There are no tracked players");
+            // List tracked players or scores for a specific player
+            if (args.size() >= 3) {
+                const std::string& playerName = args[2];
+                auto objNames = sb.getObjectiveNames();
+                bool found = false;
+                for (const auto& obj : objNames) {
+                    auto scores = sb.getSortedScores(obj);
+                    for (const auto& s : scores) {
+                        if (s.playerName == playerName) {
+                            if (!found) {
+                                sender.addChatMessage("Showing scores for " + playerName + ":");
+                                found = true;
+                            }
+                            sender.addChatMessage("- " + s.objectiveName + ": " + std::to_string(s.points));
+                        }
+                    }
+                }
+                if (!found) {
+                    sender.addChatMessage("Player '" + playerName + "' has no scores");
+                }
+            } else {
+                sender.addChatMessage("There are no tracked players (use /scoreboard players list <player>)");
+            }
+
         } else if ((args[1] == "set" || args[1] == "add" || args[1] == "remove") && args.size() >= 5) {
-            sender.addChatMessage("Updated score of '" + args[2] + "' in '" + args[3] + "'");
+            const std::string& playerName = args[2];
+            const std::string& objName = args[3];
+            int32_t amount = 0;
+            try { amount = std::stoi(args[4]); } catch (...) {
+                sender.addChatMessage("\xC2\xA7" "cInvalid number: " + args[4]);
+                return;
+            }
+
+            if (!sb.getObjective(objName)) {
+                sender.addChatMessage("\xC2\xA7" "cNo objective was found by the name '" + objName + "'");
+                return;
+            }
+
+            auto& score = sb.getOrCreateScore(playerName, objName);
+            if (args[1] == "set") {
+                score.points = amount;
+            } else if (args[1] == "add") {
+                score.increaseScore(amount);
+            } else { // remove
+                score.decreaseScore(amount);
+            }
+
+            // Broadcast S3C update
+            server->broadcastUpdateScore(playerName, objName, score.points, 0);
+
+            sender.addChatMessage("Set score of " + playerName + " for objective " + objName
+                + " to " + std::to_string(score.points));
+
         } else if (args[1] == "reset" && args.size() >= 3) {
-            sender.addChatMessage("Reset scores of '" + args[2] + "'");
+            const std::string& playerName = args[2];
+
+            // Broadcast S3C remove
+            server->broadcastRemoveScore(playerName);
+
+            sb.removePlayerScores(playerName);
+            sender.addChatMessage("Reset all scores of " + playerName);
+
+        } else {
+            sender.addChatMessage("\xC2\xA7" "cUsage: /scoreboard players <list|set|add|remove|reset>");
         }
+
     } else if (args[0] == "teams") {
         if (args.size() < 2) {
             sender.addChatMessage("\xC2\xA7" "cUsage: /scoreboard teams <list|add|remove|empty|join|leave|option>");
             return;
         }
+
         if (args[1] == "list") {
-            sender.addChatMessage("There are no teams");
+            auto names = sb.getTeamNames();
+            if (names.empty()) {
+                sender.addChatMessage("There are no teams");
+            } else {
+                sender.addChatMessage("Showing " + std::to_string(names.size()) + " team(s):");
+                for (const auto& n : names) {
+                    const auto* team = sb.getTeam(n);
+                    if (team) {
+                        sender.addChatMessage("- " + team->registeredName + " ("
+                            + team->displayName + ") " + std::to_string(team->members.size()) + " members");
+                    }
+                }
+            }
+
         } else if (args[1] == "add" && args.size() >= 3) {
-            sender.addChatMessage("Added team '" + args[2] + "'");
+            const std::string& teamName = args[2];
+            if (sb.getTeam(teamName)) {
+                sender.addChatMessage("\xC2\xA7" "cTeam '" + teamName + "' already exists");
+                return;
+            }
+            auto* team = sb.createTeam(teamName);
+            if (!team) return;
+
+            // Set display name if provided
+            if (args.size() > 3) {
+                std::string displayName;
+                for (size_t i = 3; i < args.size(); ++i) {
+                    if (i > 3) displayName += " ";
+                    displayName += args[i];
+                }
+                team->displayName = displayName;
+            }
+
+            // Broadcast S3E create
+            server->broadcastTeams(*team, 0);
+
+            sender.addChatMessage("Added new team '" + teamName + "' successfully");
+
         } else if (args[1] == "remove" && args.size() >= 3) {
-            sender.addChatMessage("Removed team '" + args[2] + "'");
+            const std::string& teamName = args[2];
+            const auto* team = sb.getTeam(teamName);
+            if (!team) {
+                sender.addChatMessage("\xC2\xA7" "cNo team was found by the name '" + teamName + "'");
+                return;
+            }
+
+            // Broadcast S3E remove (must broadcast before removing from data)
+            server->broadcastTeams(*team, 1);
+
+            sb.removeTeam(teamName);
+            sender.addChatMessage("Removed team '" + teamName + "'");
+
+        } else if (args[1] == "join" && args.size() >= 4) {
+            const std::string& teamName = args[2];
+            const auto* team = sb.getTeam(teamName);
+            if (!team) {
+                sender.addChatMessage("\xC2\xA7" "cNo team was found by the name '" + teamName + "'");
+                return;
+            }
+
+            // Add players (args[3] onwards) to team
+            std::vector<std::string> added;
+            for (size_t i = 3; i < args.size(); ++i) {
+                if (sb.addPlayerToTeam(args[i], teamName)) {
+                    added.push_back(args[i]);
+                }
+            }
+
+            // Re-fetch team pointer (may have reallocated)
+            team = sb.getTeam(teamName);
+            if (team && !added.empty()) {
+                // Broadcast S3E add players
+                server->broadcastTeams(*team, 3, added);
+            }
+
+            sender.addChatMessage("Added " + std::to_string(added.size()) + " player(s) to team '" + teamName + "'");
+
+        } else if (args[1] == "leave" && args.size() >= 3) {
+            // Remove players from their teams
+            for (size_t i = 2; i < args.size(); ++i) {
+                std::string curTeamName = sb.getPlayersTeam(args[i]);
+                if (!curTeamName.empty()) {
+                    const auto* team = sb.getTeam(curTeamName);
+                    sb.removePlayerFromTeams(args[i]);
+                    if (team) {
+                        // Broadcast S3E remove players
+                        server->broadcastTeams(*team, 4, {args[i]});
+                    }
+                }
+            }
+            sender.addChatMessage("Removed " + std::to_string(args.size() - 2) + " player(s) from their teams");
+
+        } else if (args[1] == "empty" && args.size() >= 3) {
+            const std::string& teamName = args[2];
+            const auto* team = sb.getTeam(teamName);
+            if (!team) {
+                sender.addChatMessage("\xC2\xA7" "cNo team was found by the name '" + teamName + "'");
+                return;
+            }
+            // Get members, remove them, broadcast
+            std::vector<std::string> members(team->members.begin(), team->members.end());
+            for (const auto& m : members) {
+                sb.removePlayerFromTeams(m);
+            }
+            // Re-fetch and broadcast
+            team = sb.getTeam(teamName);
+            if (team && !members.empty()) {
+                server->broadcastTeams(*team, 4, members);
+            }
+            sender.addChatMessage("Removed " + std::to_string(members.size()) + " player(s) from team '" + teamName + "'");
+
+        } else if (args[1] == "option" && args.size() >= 4) {
+            const std::string& teamName = args[2];
+            // Need mutable team pointer — cast away const (safe: we own the data)
+            auto* team = const_cast<ScorePlayerTeam*>(sb.getTeam(teamName));
+            if (!team) {
+                sender.addChatMessage("\xC2\xA7" "cNo team was found by the name '" + teamName + "'");
+                return;
+            }
+
+            const std::string& option = args[3];
+            if (option == "color" && args.size() >= 5) {
+                // Java: team prefix/suffix for color
+                // Map common color names to formatting codes
+                std::string colorCode;
+                if (args[4] == "red") colorCode = "\xC2\xA7""c";
+                else if (args[4] == "blue") colorCode = "\xC2\xA7""9";
+                else if (args[4] == "green") colorCode = "\xC2\xA7""a";
+                else if (args[4] == "yellow") colorCode = "\xC2\xA7""e";
+                else if (args[4] == "gold") colorCode = "\xC2\xA7""6";
+                else if (args[4] == "aqua") colorCode = "\xC2\xA7""b";
+                else if (args[4] == "dark_red") colorCode = "\xC2\xA7""4";
+                else if (args[4] == "dark_blue") colorCode = "\xC2\xA7""1";
+                else if (args[4] == "dark_green") colorCode = "\xC2\xA7""2";
+                else if (args[4] == "dark_aqua") colorCode = "\xC2\xA7""3";
+                else if (args[4] == "dark_purple") colorCode = "\xC2\xA7""5";
+                else if (args[4] == "light_purple") colorCode = "\xC2\xA7""d";
+                else if (args[4] == "white") colorCode = "\xC2\xA7""f";
+                else if (args[4] == "gray") colorCode = "\xC2\xA7""7";
+                else if (args[4] == "dark_gray") colorCode = "\xC2\xA7""8";
+                else if (args[4] == "black") colorCode = "\xC2\xA7""0";
+                else if (args[4] == "reset") colorCode = "";
+                else {
+                    sender.addChatMessage("\xC2\xA7" "cUnknown color: " + args[4]);
+                    return;
+                }
+                team->prefix = colorCode;
+                team->suffix = colorCode.empty() ? "" : "\xC2\xA7""r";
+                sender.addChatMessage("Team '" + teamName + "' color set to " + args[4]);
+            } else if (option == "friendlyfire" && args.size() >= 5) {
+                team->allowFriendlyFire = (args[4] == "true");
+                sender.addChatMessage("Team '" + teamName + "' friendly fire: " + args[4]);
+            } else if (option == "seeFriendlyInvisibles" && args.size() >= 5) {
+                team->canSeeFriendlyInvisibles = (args[4] == "true");
+                sender.addChatMessage("Team '" + teamName + "' see friendly invisibles: " + args[4]);
+            } else {
+                sender.addChatMessage("\xC2\xA7" "cUsage: /scoreboard teams option <team> <color|friendlyfire|seeFriendlyInvisibles> <value>");
+                return;
+            }
+
+            // Broadcast S3E update
+            server->broadcastTeams(*team, 2);
+
+        } else {
+            sender.addChatMessage("\xC2\xA7" "cUsage: /scoreboard teams <list|add|remove|empty|join|leave|option>");
         }
+    } else {
+        sender.addChatMessage("\xC2\xA7" "cUsage: /scoreboard <objectives|players|teams> ...");
     }
     std::cout << "[Server] " << sender.getCommandSenderName() << " used /scoreboard\n";
 }

@@ -123,9 +123,9 @@
 - ❌ No entity-to-client sync (no S0C/S0E/S12/S14 packets)
 
 ### Scoreboard
-- Headers + 270 lines of implementation
-- Score objectives, teams, display slots
-- ❌ Not wired to packets
+- ✅ **Scoreboard packet wiring** — S3B ScoreboardObjective, S3C UpdateScore, S3D DisplayScoreboard, S3E Teams
+- ✅ Score objectives, teams, display slots, player scores — full /scoreboard command with broadcast
+- ✅ Join sync — sendScoreboardState sends all objectives/scores/teams/display slots to joining players
 
 ### Statistics & Achievements
 - 159 lines of stat/achievement registration
@@ -561,3 +561,4 @@
 251. **Tile entity persistence** — ✅ Done (Java AnvilChunkLoader.writeChunkToNBT/readChunkFromNBT parity: saveTileEntitiesForChunk injects NBT compounds for 6 tile entity types — Chest, Furnace, Trap, Hopper, Cauldron, Sign — into chunk Level compound before region file write; loadTileEntitiesFromChunk parses TileEntities tag list on chunk load from disk; ChunkProviderServer.loadChunk reads from region file before generating; ItemStack NBT serialization with enchantments/RepairCost/display.Name)
 252. **Player inventory persistence** — ✅ Done (Java InventoryPlayer.writeToNBT/readFromNBT + EntityPlayer.writeEntityToNBT parity: Inventory tag list with mainInventory slots 0-35 + armorInventory slots 100-103, SelectedItemSlot, playerGameType, EnderItems tag list slots 0-26; readFromNBT clears then restores all 40 inventory slots + 27 ender chest slots; writeItemStackToNBT/readItemStackFromNBT with enchantments/RepairCost/display.Name)
 253. **Death inventory drops** — ✅ Done (Java EntityPlayer.onDeath + InventoryPlayer.dropAllItems parity: mainInventory[0-35] + armorInventory[0-3] dropped with func_146097_a circular scatter motion -sin(angle)*radius/cos(angle)*radius/0.2; XP orbs dropped level*7 capped 100; keepInventory gamerule check; /gamerule keepInventory command; NBT-preserved item drops via spawnItemDropStack + sendEntityMetadataItemStack; respawn clears potions + syncs XP + inventory to client; ender chest persists through death per Java)
+254. **Scoreboard packet wiring** — ✅ Done (Java ServerScoreboard parity: S3B ScoreboardObjective create/remove/update, S3C UpdateScore set/remove, S3D DisplayScoreboard slot assignment, S3E Teams create/remove/update/add players/remove players; broadcastScoreboardObjective/broadcastUpdateScore/broadcastRemoveScore/broadcastDisplayScoreboard/broadcastTeams methods; sendScoreboardState on player join sends all objectives+scores+display slots+teams; /scoreboard command fully wired to Scoreboard class with real data + packet broadcast)

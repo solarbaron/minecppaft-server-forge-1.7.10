@@ -496,6 +496,10 @@ void MinecraftServer::onPlayerJoined(Connection& joinedConn, PlayHandler& joined
             joinedHandler.sendChangeGameState(joinedConn, 8, world->getThunderingStrength());
         }
     }
+
+    // ─── Send current scoreboard state to joining player ─────────────────
+    // Java: ServerConfigurationManager.playerLoggedIn() → sends scoreboard packets
+    sendScoreboardState(joinedConn);
 }
 
 void MinecraftServer::onPlayerLeft(PlayHandler& leftHandler) {
@@ -800,6 +804,232 @@ void MinecraftServer::broadcastEffect(int32_t effectId, int32_t x, int32_t y, in
         if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
         auto copy = pkt;
         conn->sendPacket(std::move(copy));
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Scoreboard packet broadcasting — Java: ServerScoreboard
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Helper lambdas (reused across all scoreboard packet builders)
+namespace {
+    void sbWriteVarInt(std::vector<uint8_t>& buf, int32_t value) {
+        uint32_t uval = static_cast<uint32_t>(value);
+        do {
+            uint8_t b = uval & 0x7F;
+            uval >>= 7;
+            if (uval != 0) b |= 0x80;
+            buf.push_back(b);
+        } while (uval != 0);
+    }
+    void sbWriteString(std::vector<uint8_t>& buf, const std::string& s) {
+        sbWriteVarInt(buf, static_cast<int32_t>(s.size()));
+        buf.insert(buf.end(), s.begin(), s.end());
+    }
+    void sbWriteInt(std::vector<uint8_t>& buf, int32_t value) {
+        buf.push_back((value >> 24) & 0xFF);
+        buf.push_back((value >> 16) & 0xFF);
+        buf.push_back((value >> 8) & 0xFF);
+        buf.push_back(value & 0xFF);
+    }
+    void sbWriteShort(std::vector<uint8_t>& buf, int16_t value) {
+        buf.push_back((value >> 8) & 0xFF);
+        buf.push_back(value & 0xFF);
+    }
+    void sbWriteByte(std::vector<uint8_t>& buf, int8_t value) {
+        buf.push_back(static_cast<uint8_t>(value));
+    }
+
+    // Build S3B Scoreboard Objective packet
+    std::vector<uint8_t> buildS3B(const std::string& objName, const std::string& displayName, int8_t mode) {
+        std::vector<uint8_t> pkt;
+        sbWriteVarInt(pkt, 0x3B);
+        sbWriteString(pkt, objName);
+        sbWriteString(pkt, displayName);
+        sbWriteByte(pkt, mode);
+        return pkt;
+    }
+
+    // Build S3C Update Score packet (create/update)
+    std::vector<uint8_t> buildS3CUpdate(const std::string& itemName, const std::string& objName, int32_t value) {
+        std::vector<uint8_t> pkt;
+        sbWriteVarInt(pkt, 0x3C);
+        sbWriteString(pkt, itemName);
+        sbWriteByte(pkt, 0); // action = update
+        sbWriteString(pkt, objName);
+        sbWriteVarInt(pkt, value);
+        return pkt;
+    }
+
+    // Build S3C Update Score packet (remove all scores for a player)
+    std::vector<uint8_t> buildS3CRemove(const std::string& itemName) {
+        std::vector<uint8_t> pkt;
+        sbWriteVarInt(pkt, 0x3C);
+        sbWriteString(pkt, itemName);
+        sbWriteByte(pkt, 1); // action = remove
+        sbWriteString(pkt, ""); // empty objective = remove all
+        return pkt;
+    }
+
+    // Build S3D Display Scoreboard packet
+    std::vector<uint8_t> buildS3D(int8_t position, const std::string& objName) {
+        std::vector<uint8_t> pkt;
+        sbWriteVarInt(pkt, 0x3D);
+        sbWriteByte(pkt, position);
+        sbWriteString(pkt, objName);
+        return pkt;
+    }
+
+    // Build S3E Teams packet
+    std::vector<uint8_t> buildS3E(const std::string& teamName, int8_t mode,
+                                   const std::string& displayName = "",
+                                   const std::string& prefix = "",
+                                   const std::string& suffix = "",
+                                   int8_t friendlyFire = 3,
+                                   const std::vector<std::string>& players = {}) {
+        std::vector<uint8_t> pkt;
+        sbWriteVarInt(pkt, 0x3E);
+        sbWriteString(pkt, teamName);
+        sbWriteByte(pkt, mode);
+
+        // Mode 0 (create) and 2 (update) include team info
+        if (mode == 0 || mode == 2) {
+            sbWriteString(pkt, displayName);
+            sbWriteString(pkt, prefix);
+            sbWriteString(pkt, suffix);
+            sbWriteByte(pkt, friendlyFire);
+        }
+
+        // Mode 0 (create), 3 (add players), 4 (remove players) include player list
+        if (mode == 0 || mode == 3 || mode == 4) {
+            sbWriteShort(pkt, static_cast<int16_t>(players.size()));
+            for (const auto& p : players) {
+                sbWriteString(pkt, p);
+            }
+        }
+
+        return pkt;
+    }
+} // anonymous namespace
+
+void MinecraftServer::broadcastScoreboardObjective(const std::string& objName,
+                                                    const std::string& displayName,
+                                                    int8_t mode) {
+    auto pkt = buildS3B(objName, displayName, mode);
+    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    for (auto& conn : connections_) {
+        if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+        auto copy = pkt;
+        conn->sendPacket(std::move(copy));
+    }
+}
+
+void MinecraftServer::broadcastUpdateScore(const std::string& playerName,
+                                            const std::string& objName,
+                                            int32_t value, int8_t action) {
+    std::vector<uint8_t> pkt;
+    if (action == 0) {
+        pkt = buildS3CUpdate(playerName, objName, value);
+    } else {
+        pkt = buildS3CRemove(playerName);
+    }
+    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    for (auto& conn : connections_) {
+        if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+        auto copy = pkt;
+        conn->sendPacket(std::move(copy));
+    }
+}
+
+void MinecraftServer::broadcastRemoveScore(const std::string& playerName) {
+    auto pkt = buildS3CRemove(playerName);
+    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    for (auto& conn : connections_) {
+        if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+        auto copy = pkt;
+        conn->sendPacket(std::move(copy));
+    }
+}
+
+void MinecraftServer::broadcastDisplayScoreboard(int8_t position, const std::string& objName) {
+    auto pkt = buildS3D(position, objName);
+    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    for (auto& conn : connections_) {
+        if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+        auto copy = pkt;
+        conn->sendPacket(std::move(copy));
+    }
+}
+
+void MinecraftServer::broadcastTeams(const ScorePlayerTeam& team, int8_t mode,
+                                      const std::vector<std::string>& players) {
+    // For mode 0 (create) and 2 (update), include team info
+    // For mode 0, 3, 4, include player list
+    std::vector<std::string> playerList;
+    if (mode == 0) {
+        // Create: send all current members
+        playerList.assign(team.members.begin(), team.members.end());
+    } else if (mode == 3 || mode == 4) {
+        // Add/Remove: send the specified players
+        playerList = players;
+    }
+
+    auto pkt = buildS3E(team.registeredName, mode,
+                         team.displayName, team.prefix, team.suffix,
+                         static_cast<int8_t>(team.getFriendlyFlags()),
+                         playerList);
+
+    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    for (auto& conn : connections_) {
+        if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+        auto copy = pkt;
+        conn->sendPacket(std::move(copy));
+    }
+}
+
+void MinecraftServer::sendScoreboardState(Connection& conn) {
+    // Java: ServerScoreboard.func_96549_e — send all objectives, scores, display slots, teams
+    // to a single joining player.
+
+    // 1. Send all objectives (S3B mode=0 create) + their scores (S3C)
+    auto objNames = scoreboard_.getObjectiveNames();
+    for (const auto& name : objNames) {
+        const ScoreObjective* obj = scoreboard_.getObjective(name);
+        if (!obj) continue;
+
+        // S3B create
+        auto pktObj = buildS3B(obj->name, obj->displayName, 0);
+        conn.sendPacket(std::move(pktObj));
+
+        // S3C for all scores in this objective
+        auto scores = scoreboard_.getSortedScores(name);
+        for (const auto& score : scores) {
+            auto pktScore = buildS3CUpdate(score.playerName, score.objectiveName, score.points);
+            conn.sendPacket(std::move(pktScore));
+        }
+    }
+
+    // 2. Send display slots (S3D)
+    for (int8_t slot = 0; slot < 3; ++slot) {
+        std::string dispObj = scoreboard_.getDisplaySlot(slot);
+        if (!dispObj.empty()) {
+            auto pktDisp = buildS3D(slot, dispObj);
+            conn.sendPacket(std::move(pktDisp));
+        }
+    }
+
+    // 3. Send all teams (S3E mode=0 create)
+    auto teamNames = scoreboard_.getTeamNames();
+    for (const auto& name : teamNames) {
+        const ScorePlayerTeam* team = scoreboard_.getTeam(name);
+        if (!team) continue;
+
+        std::vector<std::string> members(team->members.begin(), team->members.end());
+        auto pktTeam = buildS3E(team->registeredName, 0,
+                                 team->displayName, team->prefix, team->suffix,
+                                 static_cast<int8_t>(team->getFriendlyFlags()),
+                                 members);
+        conn.sendPacket(std::move(pktTeam));
     }
 }
 
