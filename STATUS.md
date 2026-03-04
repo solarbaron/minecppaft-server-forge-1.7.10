@@ -281,7 +281,8 @@
 - **Structures** — ✅ Dungeons (cobblestone/mossy rooms with mob spawner); no villages, temples, strongholds
 - ~~**Trees/vegetation**~~ — ✅ Oak/birch/spruce/jungle/acacia/dark oak tree generation + flowers, tallgrass, sugar cane, pumpkin patches, clay deposits, cactus, dead bush, mushrooms, vines, lily pads
 - **Beach generation** — ✅ Sand beach at water edges
-- **Nether/End** — dimensions declared but not generated
+- ~~**Nether terrain**~~ — ✅ NetherGenerator with 5×17×5 density field, lava sea y=32, surface decoration (soul sand/gravel/bedrock), MapGenCavesHell, quartz ore, glowstone, fire, mushrooms
+- **End terrain** — dimension declared but not generated
 
 ---
 
@@ -562,3 +563,4 @@
 252. **Player inventory persistence** — ✅ Done (Java InventoryPlayer.writeToNBT/readFromNBT + EntityPlayer.writeEntityToNBT parity: Inventory tag list with mainInventory slots 0-35 + armorInventory slots 100-103, SelectedItemSlot, playerGameType, EnderItems tag list slots 0-26; readFromNBT clears then restores all 40 inventory slots + 27 ender chest slots; writeItemStackToNBT/readItemStackFromNBT with enchantments/RepairCost/display.Name)
 253. **Death inventory drops** — ✅ Done (Java EntityPlayer.onDeath + InventoryPlayer.dropAllItems parity: mainInventory[0-35] + armorInventory[0-3] dropped with func_146097_a circular scatter motion -sin(angle)*radius/cos(angle)*radius/0.2; XP orbs dropped level*7 capped 100; keepInventory gamerule check; /gamerule keepInventory command; NBT-preserved item drops via spawnItemDropStack + sendEntityMetadataItemStack; respawn clears potions + syncs XP + inventory to client; ender chest persists through death per Java)
 254. **Scoreboard packet wiring** — ✅ Done (Java ServerScoreboard parity: S3B ScoreboardObjective create/remove/update, S3C UpdateScore set/remove, S3D DisplayScoreboard slot assignment, S3E Teams create/remove/update/add players/remove players; broadcastScoreboardObjective/broadcastUpdateScore/broadcastRemoveScore/broadcastDisplayScoreboard/broadcastTeams methods; sendScoreboardState on player join sends all objectives+scores+display slots+teams; /scoreboard command fully wired to Scoreboard class with real data + packet broadcast)
+255. **Nether terrain generation** — ✅ Done (Java ChunkProviderHell parity: NetherGenerator with 7 NoiseGeneratorOctaves (16,16,8,4,4,10,16), 5×17×5 density field with Nether cosine profile + cubic falloff, trilinear 4×8×4 block interpolation to 128-height array, lava sea at y=32, replaceSurface soul sand/gravel/bedrock bands, MapGenCavesHell worm carving with lava adjacency check, quartz ore veins (16×13 y10-117), glowstone ceiling clusters (10×), fire (rand(rand(10)+1)+1), brown+red mushrooms; WorldServer dimension-1 wiring in World.cpp; biome=hell(8))

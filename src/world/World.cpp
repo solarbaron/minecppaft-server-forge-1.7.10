@@ -19,6 +19,7 @@
 #include "world/World.h"
 #include "world/Chunk.h"
 #include "worldgen/OverworldGenerator.h"
+#include "worldgen/NetherGenerator.h"
 #include "nbt/NBT.h"
 
 #include <algorithm>
@@ -257,8 +258,13 @@ WorldServer::WorldServer(int dimensionId, const std::string& worldName)
     : dimensionId_(dimensionId)
     , worldName_(worldName)
 {
-    // Create chunk provider with overworld terrain generator
-    auto generator = std::make_unique<OverworldGenerator>(42);  // seed = 42
+    // Create chunk provider with dimension-appropriate terrain generator
+    std::unique_ptr<IChunkGenerator> generator;
+    if (dimensionId == -1) {
+        generator = std::make_unique<NetherGenerator>(42);  // seed = 42
+    } else {
+        generator = std::make_unique<OverworldGenerator>(42);  // seed = 42
+    }
     chunkProvider_ = std::make_unique<ChunkProviderServer>(this, std::move(generator));
 }
 
