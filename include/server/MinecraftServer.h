@@ -258,6 +258,26 @@ public:
     mutable std::mutex hopperMutex_;
 
     /**
+     * Mob spawner tile entity storage.
+     * Java reference: TileEntityMobSpawner + MobSpawnerBaseLogic
+     * Spawns mobs periodically when a player is within activatingRange.
+     */
+    struct SpawnerData {
+        std::string entityId = "Pig";   // Java: mobID — entity name to spawn
+        int16_t spawnDelay = 20;        // Java: spawnDelay — current countdown (ticks)
+        int16_t minDelay = 200;         // Java: minSpawnDelay
+        int16_t maxDelay = 800;         // Java: maxSpawnDelay
+        int16_t spawnCount = 4;         // Java: spawnCount — entities per activation
+        int16_t maxNearby = 6;          // Java: maxNearbyEntities
+        int16_t activatingRange = 16;   // Java: activatingRangeFromPlayer
+        int16_t spawnRange = 4;         // Java: spawnRange (XZ half-extent)
+    };
+    SpawnerData& getOrCreateSpawner(int64_t posKey);
+    void tickMobSpawners();
+    std::map<int64_t, SpawnerData> spawnerStorage_;
+    mutable std::mutex spawnerMutex_;
+
+    /**
      * Save all world chunks to disk.\n     * Java reference: MinecraftServer.saveAllWorlds()\n     */
     void saveAllWorlds();
 

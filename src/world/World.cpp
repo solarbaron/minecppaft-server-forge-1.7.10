@@ -164,6 +164,13 @@ Chunk* ChunkProviderServer::loadChunk(int chunkX, int chunkZ) {
     if (!chunk) {
         if (generator_) {
             chunk = generator_->provideChunk(chunkX, chunkZ);
+            // Register any spawners from dungeon generation
+            if (chunk && !chunk->pendingSpawners.empty()) {
+                const auto& registrar = world_->getSpawnerRegistrar();
+                if (registrar) {
+                    registrar(*chunk);
+                }
+            }
         } else {
             // Empty chunk fallback
             chunk = std::make_unique<Chunk>(chunkX, chunkZ);

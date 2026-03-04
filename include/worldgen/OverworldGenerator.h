@@ -208,6 +208,20 @@ public:
                 }
                 // Place mob spawner at center (block 52)
                 blocks[(dx * 16 + dz) * 256 + dy] = MOB_SPAWNER;
+
+                // Pick random dungeon mob type — Java: WorldGenDungeons.func_76521_a()
+                // Vanilla 1.7.10: { "Skeleton", "Zombie", "Zombie", "Spider" }
+                // → 25% Skeleton, 50% Zombie, 25% Spider
+                static const char* const dungeonMobs[] = {
+                    "Skeleton", "Zombie", "Zombie", "Spider"
+                };
+                int32_t mobIdx = dungeonRng.nextInt(4);
+                Chunk::SpawnerInfo spawnerInfo;
+                spawnerInfo.x = chunkX * 16 + dx;
+                spawnerInfo.y = dy;
+                spawnerInfo.z = chunkZ * 16 + dz;
+                spawnerInfo.entityId = dungeonMobs[mobIdx];
+                chunk->pendingSpawners.push_back(std::move(spawnerInfo));
             }
         }
 

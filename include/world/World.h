@@ -352,6 +352,12 @@ public:
     void setTileEntityLoader(TileEntityLoader loader) { tileEntityLoader_ = std::move(loader); }
     const TileEntityLoader& getTileEntityLoader() const { return tileEntityLoader_; }
 
+    // ─── Spawner Registrar callback ───────────────────────────────────
+    // Called after chunk generation to register pending spawners from dungeons.
+    using SpawnerRegistrar = std::function<void(Chunk& chunk)>;
+    void setSpawnerRegistrar(SpawnerRegistrar reg) { spawnerRegistrar_ = std::move(reg); }
+    const SpawnerRegistrar& getSpawnerRegistrar() const { return spawnerRegistrar_; }
+
 private:
     int dimensionId_;
     std::string worldName_;
@@ -382,6 +388,7 @@ private:
 
     // Tile entity loader callback
     TileEntityLoader tileEntityLoader_;
+    SpawnerRegistrar spawnerRegistrar_;
 };
 
 } // namespace mccpp

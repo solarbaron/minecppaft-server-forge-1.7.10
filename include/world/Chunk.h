@@ -183,6 +183,14 @@ public:
     int64_t inhabitedTime = 0;
     bool isModified = false;  // Java: Chunk.isModified — set when block changes
 
+    // Spawner placements from world generation — consumed on chunk load
+    // to populate server spawnerStorage_ with correct mob types.
+    struct SpawnerInfo {
+        int32_t x, y, z;        // World coordinates
+        std::string entityId;   // e.g. "Zombie", "Skeleton", "Spider"
+    };
+    std::vector<SpawnerInfo> pendingSpawners;
+
     Chunk() = default;
     Chunk(int x, int z) : xPosition(x), zPosition(z) {
         biomes.fill(0);

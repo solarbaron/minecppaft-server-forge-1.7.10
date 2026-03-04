@@ -21,6 +21,7 @@
 #include "mechanics/FoodStats.h"
 #include "world/World.h"
 #include "redstone/Redstone.h"
+#include "entity/EntityList.h"
 
 #include <algorithm>
 #include <cstring>
@@ -86,6 +87,18 @@ bool MinecraftServer::init() {
     // populate the server's tile entity storage maps.
     overworld->setTileEntityLoader([this](const nbt::NBTTagCompound& levelTag) {
         loadTileEntitiesFromChunk(levelTag);
+    });
+
+    // Set spawner registrar callback so freshly-generated dungeon spawners
+    // create matching SpawnerData entries in the server's spawnerStorage_.
+    overworld->setSpawnerRegistrar([this](Chunk& chunk) {
+        for (auto& info : chunk.pendingSpawners) {
+            int64_t pk = packBlockPos(info.x, info.y, info.z);
+            std::lock_guard<std::mutex> lock(spawnerMutex_);
+            auto& sd = spawnerStorage_[pk];
+            sd.entityId = info.entityId;
+        }
+        chunk.pendingSpawners.clear();
     });
 
     worlds_.push_back(std::move(overworld));
@@ -308,6 +321,7 @@ void MinecraftServer::tick() {
     tickFurnaces();
     tickHoppers();
     tickBrewingStands();
+    tickMobSpawners();
     tickScheduledBlocks();
 
     // Tick world time — Java: WorldServer.tick()
@@ -1046,6 +1060,151 @@ MinecraftServer::DispenserData& MinecraftServer::getOrCreateDispenser(int64_t po
 MinecraftServer::HopperData& MinecraftServer::getOrCreateHopper(int64_t posKey) {
     std::lock_guard<std::mutex> lock(hopperMutex_);
     return hopperStorage_[posKey];
+}
+
+MinecraftServer::SpawnerData& MinecraftServer::getOrCreateSpawner(int64_t posKey) {
+    std::lock_guard<std::mutex> lock(spawnerMutex_);
+    return spawnerStorage_[posKey];
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Mob Spawner tile entity ticking — Java: MobSpawnerBaseLogic.updateSpawner()
+// Spawns mobs when a player is within activatingRange and spawnDelay reaches 0.
+// ═══════════════════════════════════════════════════════════════════════════
+void MinecraftServer::tickMobSpawners() {
+    static thread_local std::mt19937 rng(std::random_device{}());
+
+    // Snapshot spawner entries under lock
+    std::vector<std::pair<int64_t, SpawnerData*>> snapshot;
+    {
+        std::lock_guard<std::mutex> lock(spawnerMutex_);
+        snapshot.reserve(spawnerStorage_.size());
+        for (auto& [pk, sd] : spawnerStorage_) {
+            snapshot.emplace_back(pk, &sd);
+        }
+    }
+
+    if (snapshot.empty()) return;
+
+    // Unpack a block position key
+    auto unpackBlockPos = [](int64_t packed, int32_t& x, int32_t& y, int32_t& z) {
+        x = static_cast<int32_t>(packed >> 40);
+        z = static_cast<int32_t>((packed >> 20) & 0xFFFFF);
+        y = static_cast<int32_t>(packed & 0xFFFFF);
+        if (z & 0x80000) z |= static_cast<int32_t>(0xFFF00000);
+        if (y & 0x80000) y |= static_cast<int32_t>(0xFFF00000);
+    };
+
+    // Collect player positions for range check
+    std::vector<std::tuple<double, double, double>> playerPositions;
+    {
+        std::lock_guard<std::mutex> lock(connectionsMutex_);
+        for (auto& conn : connections_) {
+            if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+            auto handler = conn->getHandler();
+            auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+            if (!ph) continue;
+            playerPositions.emplace_back(ph->getPlayerX(), ph->getPlayerY(), ph->getPlayerZ());
+        }
+    }
+
+    for (auto& [pk, sd] : snapshot) {
+        int32_t bx, by, bz;
+        unpackBlockPos(pk, bx, by, bz);
+        double spawnerX = static_cast<double>(bx) + 0.5;
+        double spawnerY = static_cast<double>(by);
+        double spawnerZ = static_cast<double>(bz) + 0.5;
+
+        // Java: MobSpawnerBaseLogic.updateSpawner() — skip if no player within range
+        bool playerInRange = false;
+        double range = static_cast<double>(sd->activatingRange);
+        for (auto& [px, py, pz] : playerPositions) {
+            double dx = px - spawnerX;
+            double dy = py - spawnerY;
+            double dz = pz - spawnerZ;
+            if (dx * dx + dy * dy + dz * dz <= range * range) {
+                playerInRange = true;
+                break;
+            }
+        }
+        if (!playerInRange) continue;
+
+        // Decrement spawn delay
+        if (sd->spawnDelay > 0) {
+            --sd->spawnDelay;
+            continue;
+        }
+
+        // Resolve entity type ID from name
+        int32_t entityTypeId = EntityList::getIdByName(sd->entityId);
+        if (entityTypeId == 0) {
+            // Unknown entity — reset delay and skip
+            sd->spawnDelay = sd->maxDelay;
+            continue;
+        }
+
+        // Count nearby entities of same type for maxNearbyEntities cap
+        // Java: MobSpawnerBaseLogic checks AABB around spawner ±spawnRange
+        int nearbyCount = 0;
+        {
+            std::lock_guard<std::mutex> lock(mobEntitiesMutex_);
+            for (auto& mob : mobEntities_) {
+                if (mob.isDead) continue;
+                if (mob.mobType != static_cast<uint8_t>(entityTypeId)) continue;
+                double dx = mob.posX - spawnerX;
+                double dy = mob.posY - spawnerY;
+                double dz = mob.posZ - spawnerZ;
+                double dist2 = dx * dx + dy * dy + dz * dz;
+                double cap = static_cast<double>(sd->spawnRange) * 2.0;
+                if (dist2 <= cap * cap) {
+                    ++nearbyCount;
+                }
+            }
+        }
+
+        if (nearbyCount >= sd->maxNearby) {
+            // Too many nearby — reset delay
+            std::uniform_int_distribution<int16_t> delayDist(sd->minDelay, sd->maxDelay);
+            sd->spawnDelay = delayDist(rng);
+            continue;
+        }
+
+        // Spawn spawnCount entities — Java: MobSpawnerBaseLogic loop
+        bool spawned = false;
+        for (int16_t s = 0; s < sd->spawnCount; ++s) {
+            // Random position in spawnRange — Java: nextDouble() * spawnRange * 2 - spawnRange
+            std::uniform_real_distribution<double> posDist(
+                -static_cast<double>(sd->spawnRange),
+                 static_cast<double>(sd->spawnRange));
+            double sx = spawnerX + posDist(rng);
+            double sy = spawnerY + std::uniform_real_distribution<double>(-1.0, 1.0)(rng);
+            double sz = spawnerZ + posDist(rng);
+
+            // Basic ground check: don't spawn in solid blocks
+            int32_t checkX = static_cast<int32_t>(std::floor(sx));
+            int32_t checkY = static_cast<int32_t>(std::floor(sy));
+            int32_t checkZ = static_cast<int32_t>(std::floor(sz));
+            if (!worlds_.empty()) {
+                auto* block = worlds_[0]->getBlock(checkX, checkY, checkZ);
+                if (block && Block::getIdFromBlock(block) != 0) continue; // Solid
+                auto* above = worlds_[0]->getBlock(checkX, checkY + 1, checkZ);
+                if (above && Block::getIdFromBlock(above) != 0) continue; // Head blocked
+            }
+
+            summonMob(static_cast<uint8_t>(entityTypeId), sx, sy, sz);
+            spawned = true;
+        }
+
+        // Reset delay — Java: spawnDelay = randBetween(minDelay, maxDelay)
+        std::uniform_int_distribution<int16_t> delayDist(sd->minDelay, sd->maxDelay);
+        sd->spawnDelay = delayDist(rng);
+
+        // Spawn event particles if anything spawned
+        if (spawned) {
+            // Java: S2A particle packet around spawner (flame + smoke)
+            // TODO: send S2A particle packets to nearby players
+        }
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1881,6 +2040,31 @@ void MinecraftServer::saveTileEntitiesForChunk(nbt::NBTTagCompound& levelTag,
         }
     }
 
+    // ── Mob Spawners ──
+    {
+        std::lock_guard<std::mutex> lock(spawnerMutex_);
+        for (auto& [posKey, sd] : spawnerStorage_) {
+            int32_t x, y, z;
+            unpackBlockPos(posKey, x, y, z);
+            if (!inChunk(x, z)) continue;
+
+            auto te = std::make_unique<nbt::NBTTagCompound>();
+            te->setString("id", "MobSpawner");
+            te->setInteger("x", x);
+            te->setInteger("y", y);
+            te->setInteger("z", z);
+            te->setString("EntityId", sd.entityId);
+            te->setShort("Delay", sd.spawnDelay);
+            te->setShort("MinSpawnDelay", sd.minDelay);
+            te->setShort("MaxSpawnDelay", sd.maxDelay);
+            te->setShort("SpawnCount", sd.spawnCount);
+            te->setShort("MaxNearbyEntities", sd.maxNearby);
+            te->setShort("RequiredPlayerRange", sd.activatingRange);
+            te->setShort("SpawnRange", sd.spawnRange);
+            tileEntities->appendTag(std::move(te));
+        }
+    }
+
     levelTag.setTag("TileEntities", std::move(tileEntities));
 }
 
@@ -1997,6 +2181,25 @@ void MinecraftServer::loadTileEntitiesFromChunk(const nbt::NBTTagCompound& level
             sign.lines[1] = te->getString("Text2");
             sign.lines[2] = te->getString("Text3");
             sign.lines[3] = te->getString("Text4");
+        } else if (id == "MobSpawner") {
+            std::lock_guard<std::mutex> lock(spawnerMutex_);
+            auto& sd = spawnerStorage_[posKey];
+            sd.entityId = te->getString("EntityId");
+            if (sd.entityId.empty()) sd.entityId = "Pig"; // Java default
+            sd.spawnDelay = te->getShort("Delay");
+            sd.minDelay = te->getShort("MinSpawnDelay");
+            sd.maxDelay = te->getShort("MaxSpawnDelay");
+            sd.spawnCount = te->getShort("SpawnCount");
+            sd.maxNearby = te->getShort("MaxNearbyEntities");
+            sd.activatingRange = te->getShort("RequiredPlayerRange");
+            sd.spawnRange = te->getShort("SpawnRange");
+            // Apply Java defaults if values are zero (new/incomplete NBT)
+            if (sd.minDelay == 0) sd.minDelay = 200;
+            if (sd.maxDelay == 0) sd.maxDelay = 800;
+            if (sd.spawnCount == 0) sd.spawnCount = 4;
+            if (sd.maxNearby == 0) sd.maxNearby = 6;
+            if (sd.activatingRange == 0) sd.activatingRange = 16;
+            if (sd.spawnRange == 0) sd.spawnRange = 4;
         }
     }
 }
