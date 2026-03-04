@@ -101,6 +101,14 @@ int32_t RedstoneSignal::calculateSignal(int32_t x, int32_t y, int32_t z,
                 maxPower = MAX_POWER;
             }
         }
+        // Detector rail — provides power when entity on rail (meta bit 0x08)
+        // Java: BlockRailDetector.isProvidingWeakPower
+        if (blockId == 28) {
+            int32_t drMeta = getMeta(nx, y, nz);
+            if (drMeta & 0x08) {
+                maxPower = MAX_POWER;
+            }
+        }
 
         // Wire going up through adjacent block
         if (isSolid(nx, y, nz)) {
@@ -474,6 +482,12 @@ bool PistonMechanics::isIndirectlyPowered(int32_t x, int32_t y, int32_t z,
             blockId == 147 || blockId == 148) {
             int32_t pMeta = getMeta(nx, ny, nz);
             if (pMeta & 0x01) return true;
+        }
+
+        // Detector rail — provides power when entity on rail
+        if (blockId == 28) {
+            int32_t drMeta = getMeta(nx, ny, nz);
+            if (drMeta & 0x08) return true;
         }
     }
 

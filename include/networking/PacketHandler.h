@@ -1017,6 +1017,9 @@ private:
     // Pressure plate tracking — deactivate when player steps off
     int32_t pressurePlateX_ = INT_MIN, pressurePlateY_ = INT_MIN, pressurePlateZ_ = INT_MIN;
 
+    // Detector rail tracking — Java: BlockRailDetector.onEntityCollidedWithBlock
+    int32_t detectorRailX_ = INT_MIN, detectorRailY_ = INT_MIN, detectorRailZ_ = INT_MIN;
+
     // Game mode — Java: ItemInWorldManager.theGameType
     int32_t gameMode_ = 0;        // 0=Survival, 1=Creative, 2=Adventure, 3=Spectator
 

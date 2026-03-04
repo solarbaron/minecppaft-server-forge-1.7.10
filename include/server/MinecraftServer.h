@@ -576,6 +576,18 @@ public:
      */
     void playNoteBlock(int32_t x, int32_t y, int32_t z);
 
+    /**
+     * Tripwire hook chain update — Java: BlockTripWireHook.func_150136_a()
+     * Scans from a hook position along its facing direction for up to 42 blocks,
+     * looking for an opposing hook. Updates the connected/powered state of both
+     * hooks and all intermediate wire blocks. Called on hook/wire place or break.
+     * @param hookX,hookY,hookZ Position of the tripwire hook being updated
+     * @param isBeingRemoved True when called from block break (hook position is already air)
+     * @param blockMeta The metadata of the hook (direction + flags), needed when isBeingRemoved
+     */
+    void tripwireHookUpdate(int32_t hookX, int32_t hookY, int32_t hookZ,
+                            bool isBeingRemoved = false, int32_t blockMeta = -1);
+
     /** Get block ID at position, returns 0 if unloaded. */
     int32_t getBlockIdInWorld(int32_t x, int32_t y, int32_t z) const;
 

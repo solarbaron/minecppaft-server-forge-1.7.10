@@ -152,7 +152,8 @@
 - ✅ **Note blocks** — redstone activation, pitch cycle, instrument from block below
 - ✅ **Redstone lamps** — ON/OFF toggle from power state
 - ✅ **Power sources** — lever, button, pressure plate, redstone block, redstone torch, repeater, comparator
-- ❌ Tripwire / detector rail (need entity AABB detection)
+- ✅ Tripwire (hook + wire entity detection, redstone output)
+- ✅ Detector rail (entity detection, meta 0x08 power, scheduled tick re-poll)
 
 ### Tile Entities (with disk persistence)
 - 121 lines + 578-line header
@@ -565,3 +566,4 @@
 254. **Scoreboard packet wiring** — ✅ Done (Java ServerScoreboard parity: S3B ScoreboardObjective create/remove/update, S3C UpdateScore set/remove, S3D DisplayScoreboard slot assignment, S3E Teams create/remove/update/add players/remove players; broadcastScoreboardObjective/broadcastUpdateScore/broadcastRemoveScore/broadcastDisplayScoreboard/broadcastTeams methods; sendScoreboardState on player join sends all objectives+scores+display slots+teams; /scoreboard command fully wired to Scoreboard class with real data + packet broadcast)
 255. **Nether terrain generation** — ✅ Done (Java ChunkProviderHell parity: NetherGenerator with 7 NoiseGeneratorOctaves (16,16,8,4,4,10,16), 5×17×5 density field with Nether cosine profile + cubic falloff, trilinear 4×8×4 block interpolation to 128-height array, lava sea at y=32, replaceSurface soul sand/gravel/bedrock bands, MapGenCavesHell worm carving with lava adjacency check, quartz ore veins (16×13 y10-117), glowstone ceiling clusters (10×), fire (rand(rand(10)+1)+1), brown+red mushrooms; WorldServer dimension-1 wiring in World.cpp; biome=hell(8))
 256. **End terrain generation** — ✅ Done (Java ChunkProviderEnd parity: EndGenerator with 5 NoiseGeneratorOctaves (16,16,8,10,16), 3×33×3 density field, island shape function 100-sqrt(x²+z²)*8 clamped [-100,80], trilinear 8×4×8 block interpolation to 128-height array, end stone placement where density>0, biome=sky(9); WorldServer dimension 1 wiring in World.cpp)
+257. **Detector rail** — ✅ Done (Java BlockRailDetector parity: entity detection via player AABB intersection in PacketHandler, meta bit 0x08 powered state, click sound on activate/deactivate, redstoneNotifyNeighbors + block below, 20-tick scheduled re-poll for deactivation, power source in calculateSignal/isIndirectlyPowered/lamp/TNT/note block/repeater checks, placement redstone notify)

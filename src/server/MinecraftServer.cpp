@@ -4272,6 +4272,11 @@ void MinecraftServer::redstoneNotifyNeighbors(int32_t x, int32_t y, int32_t z) {
                          (adjMeta & 0x01)) powered = true;
                 // Daylight sensor — provides power based on world time
                 else if ((adjId == 151 || adjId == 178) && getDaylightSensorPower(adjId == 178) > 0) powered = true;
+                // Tripwire hook — provides power when powered (entity on wire)
+                else if (adjId == 131 && (adjMeta & 0x08)) powered = true;
+                // Detector rail — provides power when entity on rail (meta bit 0x08)
+                // Java: BlockRailDetector.isProvidingWeakPower
+                else if (adjId == 28 && (adjMeta & 0x08)) powered = true;
             }
             int32_t newLampId = powered ? mccpp::RedstoneBlocks::REDSTONE_LAMP_ON
                                         : mccpp::RedstoneBlocks::REDSTONE_LAMP_OFF;
@@ -4483,6 +4488,14 @@ void MinecraftServer::redstoneNotifyNeighbors(int32_t x, int32_t y, int32_t z) {
             if ((adjId == 151 || adjId == 178) && getDaylightSensorPower(adjId == 178) > 0) {
                 powered = true; break;
             }
+            // Tripwire hook — provides power when powered (entity on wire)
+            if (adjId == 131 && (adjMeta & 0x08)) {
+                powered = true; break;
+            }
+            // Detector rail — provides power when entity on rail
+            if (adjId == 28 && (adjMeta & 0x08)) {
+                powered = true; break;
+            }
         }
         if (powered) {
             // Java: onBlockDestroyedByPlayer(world, x,y,z, 1) → func_150114_a → spawn EntityTNTPrimed
@@ -4535,6 +4548,10 @@ void MinecraftServer::redstoneNotifyNeighbors(int32_t x, int32_t y, int32_t z) {
             if ((adjId == 70 || adjId == 72 || adjId == 147 || adjId == 148) &&
                 (adjMeta & 0x01)) { powered = true; break; }
             if ((adjId == 151 || adjId == 178) && getDaylightSensorPower(adjId == 178) > 0) { powered = true; break; }
+            // Tripwire hook — provides power when powered (entity on wire)
+            if (adjId == 131 && (adjMeta & 0x08)) { powered = true; break; }
+            // Detector rail — provides power when entity on rail
+            if (adjId == 28 && (adjMeta & 0x08)) { powered = true; break; }
         }
         if (powered) {
             playNoteBlock(nx, ny, nz);
@@ -4574,6 +4591,10 @@ void MinecraftServer::redstoneNotifyNeighbors(int32_t x, int32_t y, int32_t z) {
         if ((inputId == mccpp::RedstoneBlocks::STONE_BUTTON || inputId == mccpp::RedstoneBlocks::WOODEN_BUTTON)
             && (inputMeta & 0x08)) return true;
         if ((inputId == 151 || inputId == 178) && getDaylightSensorPower(inputId == 178) > 0) return true;
+        // Tripwire hook — provides power when powered
+        if (inputId == 131 && (inputMeta & 0x08)) return true;
+        // Detector rail — provides power when entity on rail
+        if (inputId == 28 && (inputMeta & 0x08)) return true;
         // Another repeater powering into this repeater's input
         if (inputId == mccpp::RedstoneBlocks::REDSTONE_REPEATER_ON) {
             int32_t otherFacing = inputMeta & 3;
@@ -5179,6 +5200,202 @@ void MinecraftServer::playNoteBlock(int32_t x, int32_t y, int32_t z) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Tripwire hook chain update — Java: BlockTripWireHook.func_150136_a()
+// Scans from hook along its facing direction for up to 42 blocks, finds
+// opposing hook, checks entity presence on wire, updates powered/connected.
+// ═══════════════════════════════════════════════════════════════════════════
+
+void MinecraftServer::tripwireHookUpdate(int32_t hookX, int32_t hookY, int32_t hookZ,
+                                          bool isBeingRemoved, int32_t blockMeta) {
+    if (worlds_.empty()) return;
+
+    // Get hook metadata — direction and current flags
+    int32_t hookId = getBlockIdInWorld(hookX, hookY, hookZ);
+    int32_t meta = blockMeta;
+    if (meta < 0) {
+        if (hookId != 131) return; // Not a hook
+        meta = getBlockMetaInWorld(hookX, hookY, hookZ);
+    }
+
+    // Java: BlockTripWireHook direction bits (0-3 in low 2 bits)
+    // 0=south(+Z), 1=west(-X), 2=north(-Z), 3=east(+X)
+    int32_t facing = meta & 0x03;
+
+    // Scan direction — the direction the hook faces (away from wall, into the wire chain)
+    // Java: Facing.offsetsXForSide[facing], Facing.offsetsZForSide[facing]
+    int32_t dx = 0, dz = 0;
+    switch (facing) {
+        case 0: dz =  1; break; // south → scan +Z
+        case 1: dx = -1; break; // west  → scan -X
+        case 2: dz = -1; break; // north → scan -Z
+        case 3: dx =  1; break; // east  → scan +X
+    }
+
+    // Scan up to 42 blocks (Java: MAX_TRIPWIRE_LENGTH = 42, exclusive, so 41 wire + 1 hook)
+    bool foundOpposingHook = false;
+    bool entityOnWire = false;
+    int32_t chainLength = 0;
+    int32_t opposingHookX = hookX, opposingHookZ = hookZ;
+
+    for (int32_t i = 1; i <= 42; ++i) {
+        int32_t scanX = hookX + dx * i;
+        int32_t scanZ = hookZ + dz * i;
+        int32_t scanId = getBlockIdInWorld(scanX, hookY, scanZ);
+
+        if (scanId == 131) {
+            // Found opposing hook — Java: check that it faces back toward us
+            int32_t otherMeta = getBlockMetaInWorld(scanX, hookY, scanZ);
+            int32_t otherFacing = otherMeta & 0x03;
+            // Opposing hook must face the opposite direction
+            // facing 0↔2 (south↔north), facing 1↔3 (west↔east)
+            if (otherFacing == ((facing + 2) & 0x03)) {
+                foundOpposingHook = true;
+                opposingHookX = scanX;
+                opposingHookZ = scanZ;
+                chainLength = i;
+            }
+            break; // Stop scanning regardless
+        }
+
+        if (scanId == 132) {
+            // Wire block — Java: BlockTripWire, check for entities
+            // Java: func_150140_e() — check if any entity intersects this wire block
+            // Check all connected players + mobs
+            {
+                std::lock_guard<std::mutex> lock(connectionsMutex_);
+                for (auto& conn : connections_) {
+                    if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                    auto handler = conn->getHandler();
+                    auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                    if (!ph || ph->isDead()) continue;
+                    double px = ph->getPlayerX();
+                    double py = ph->getPlayerY();
+                    double pz = ph->getPlayerZ();
+                    // Java: AxisAlignedBB.addCoord — wire hitbox is 0.0-1.0 X/Z, 0.09375-0.15625 Y
+                    // Check if player AABB intersects the wire block AABB
+                    // Player AABB: ±0.3 width, 0→1.8 height
+                    if (px + 0.3 > static_cast<double>(scanX) &&
+                        px - 0.3 < static_cast<double>(scanX) + 1.0 &&
+                        py + 1.8 > static_cast<double>(hookY) + 0.09375 &&
+                        py       < static_cast<double>(hookY) + 0.15625 &&
+                        pz + 0.3 > static_cast<double>(scanZ) &&
+                        pz - 0.3 < static_cast<double>(scanZ) + 1.0) {
+                        entityOnWire = true;
+                        break;
+                    }
+                }
+            }
+            if (!entityOnWire) {
+                std::lock_guard<std::mutex> lock(mobEntitiesMutex_);
+                for (auto& mob : mobEntities_) {
+                    if (mob.isDead) continue;
+                    // Mob hitbox: simplified ±0.3 width, 0→1.8 height
+                    double mx = mob.posX, my = mob.posY, mz = mob.posZ;
+                    if (mx + 0.3 > static_cast<double>(scanX) &&
+                        mx - 0.3 < static_cast<double>(scanX) + 1.0 &&
+                        my + 1.8 > static_cast<double>(hookY) + 0.09375 &&
+                        my       < static_cast<double>(hookY) + 0.15625 &&
+                        mz + 0.3 > static_cast<double>(scanZ) &&
+                        mz - 0.3 < static_cast<double>(scanZ) + 1.0) {
+                        entityOnWire = true;
+                        break;
+                    }
+                }
+            }
+            continue; // Keep scanning
+        }
+
+        // Any other block (including air) breaks the chain scan
+        break;
+    }
+
+    // ─── Update hook states ──────────────────────────────────────────────
+    // Java: BlockTripWireHook metadata bits:
+    //   bit 2 (0x04) = connected (has valid opposing hook + wire chain)
+    //   bit 3 (0x08) = powered (triggered — entity on wire)
+    // Only update if we have a valid chain
+    bool wasConnected = (meta & 0x04) != 0;
+    bool wasPowered   = (meta & 0x08) != 0;
+
+    bool nowConnected = foundOpposingHook;
+    bool nowPowered   = foundOpposingHook && entityOnWire;
+
+    // Update this hook's metadata
+    if (!isBeingRemoved) {
+        int32_t newMeta = (meta & 0x03); // Keep direction bits
+        if (nowConnected) newMeta |= 0x04;
+        if (nowPowered)   newMeta |= 0x08;
+
+        if (newMeta != meta) {
+            setBlockInWorld(hookX, hookY, hookZ, 131, newMeta);
+        }
+    }
+
+    // Update opposing hook's metadata
+    if (foundOpposingHook) {
+        int32_t otherMeta = getBlockMetaInWorld(opposingHookX, hookY, opposingHookZ);
+        int32_t newOtherMeta = (otherMeta & 0x03);
+        if (nowConnected && !isBeingRemoved) newOtherMeta |= 0x04;
+        if (nowPowered)   newOtherMeta |= 0x08;
+
+        if (newOtherMeta != otherMeta) {
+            setBlockInWorld(opposingHookX, hookY, opposingHookZ, 131, newOtherMeta);
+        }
+    }
+
+    // Update wire metadata — Java: BlockTripWire metadata bits:
+    //   bit 0 (0x01) = powered (entity on wire)
+    //   bit 2 (0x04) = connected (part of valid hook chain)
+    //   bit 6 (0x40) = disarmed (broken by shears, no trigger)
+    if (foundOpposingHook) {
+        for (int32_t i = 1; i < chainLength; ++i) {
+            int32_t wx = hookX + dx * i;
+            int32_t wz = hookZ + dz * i;
+            int32_t wireId = getBlockIdInWorld(wx, hookY, wz);
+            if (wireId != 132) continue;
+
+            int32_t wireMeta = getBlockMetaInWorld(wx, hookY, wz);
+            int32_t newWireMeta = wireMeta & ~0x05; // Clear powered + connected bits
+            if (nowConnected && !isBeingRemoved) newWireMeta |= 0x04; // connected
+            if (nowPowered)   newWireMeta |= 0x01; // powered
+
+            if (newWireMeta != wireMeta) {
+                setBlockInWorld(wx, hookY, wz, 132, newWireMeta);
+            }
+        }
+    }
+
+    // ─── Redstone notification ───────────────────────────────────────────
+    // Only notify if power state changed (rising or falling edge)
+    if (wasPowered != nowPowered || wasConnected != nowConnected) {
+        redstoneNotifyNeighbors(hookX, hookY, hookZ);
+        if (foundOpposingHook) {
+            redstoneNotifyNeighbors(opposingHookX, hookY, opposingHookZ);
+        }
+
+        // Java: BlockTripWireHook also notifies the block the hook is attached to
+        // The hook is on the wall at the opposite direction of its facing
+        int32_t attachX = hookX - dx;
+        int32_t attachZ = hookZ - dz;
+        redstoneNotifyNeighbors(attachX, hookY, attachZ);
+
+        if (foundOpposingHook) {
+            int32_t otherAttachX = opposingHookX + dx;
+            int32_t otherAttachZ = opposingHookZ + dz;
+            redstoneNotifyNeighbors(otherAttachX, hookY, otherAttachZ);
+        }
+    }
+
+    // Play activation sound — Java: "random.click"
+    if (wasPowered != nowPowered) {
+        float clickPitch = nowPowered ? 0.6f : 0.5f; // Java: powered=0.6, unpowered=0.5
+        broadcastSound("random.click",
+            static_cast<double>(hookX) + 0.5, static_cast<double>(hookY) + 0.5,
+            static_cast<double>(hookZ) + 0.5, 0.4f, clickPitch);
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Scheduled block ticks — Java: WorldServer.scheduleBlockUpdateWithPriority
 // Used for button auto-reset (20/30 ticks), repeater delay, etc.
 // ═══════════════════════════════════════════════════════════════════════════
@@ -5225,6 +5442,88 @@ void MinecraftServer::tickScheduledBlocks() {
                     static_cast<double>(tick.z) + 0.5,
                     0.3f, 0.5f); // Lower pitch for depress
                 redstoneNotifyNeighbors(tick.x, tick.y, tick.z);
+            }
+        }
+
+        // Java: BlockTripWire.updateTick — re-poll entity presence
+        // The wire schedules a tick when an entity triggers it; on expiry,
+        // re-check and update the connected hooks
+        if (tick.blockId == 132) {
+            // Scan all 4 directions for connected hooks, same as block break scan
+            for (int dir = 0; dir < 4; ++dir) {
+                int32_t hdx = 0, hdz = 0;
+                switch (dir) {
+                    case 0: hdz =  1; break;
+                    case 1: hdx = -1; break;
+                    case 2: hdz = -1; break;
+                    case 3: hdx =  1; break;
+                }
+                for (int32_t i = 1; i <= 42; ++i) {
+                    int32_t sx = tick.x + hdx * i;
+                    int32_t sz = tick.z + hdz * i;
+                    int32_t sid = getBlockIdInWorld(sx, tick.y, sz);
+                    if (sid == 131) {
+                        int32_t sm = getBlockMetaInWorld(sx, tick.y, sz);
+                        int32_t expectedFacing = (dir + 2) & 0x03;
+                        if ((sm & 0x03) == expectedFacing) {
+                            tripwireHookUpdate(sx, tick.y, sz);
+                        }
+                        break;
+                    }
+                    if (sid != 132) break;
+                }
+            }
+        }
+
+        // Java: BlockRailDetector.updateTick — re-poll entity presence
+        // tickRate = 20; if no entity remains, deactivate the rail
+        if (tick.blockId == 28) {
+            if (!worlds_.empty()) {
+                auto& world = worlds_[0];
+                int32_t meta = world->getBlockMetadata(tick.x, tick.y, tick.z);
+                if (meta & 0x08) {
+                    // Check if any player is still on this rail
+                    bool entityOnRail = false;
+                    double railMinX = static_cast<double>(tick.x);
+                    double railMaxX = railMinX + 1.0;
+                    double railMinZ = static_cast<double>(tick.z);
+                    double railMaxZ = railMinZ + 1.0;
+                    double railMinY = static_cast<double>(tick.y);
+                    double railMaxY = railMinY + 0.625; // Rail AABB height
+                    std::lock_guard<std::mutex> lock(connectionsMutex_);
+                    for (auto& conn : connections_) {
+                        if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                        auto handler = conn->getHandler();
+                        auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                        if (!ph || ph->isDead()) continue;
+                        double px = ph->getPlayerX();
+                        double py = ph->getPlayerY();
+                        double pz = ph->getPlayerZ();
+                        // Player AABB: 0.6 wide, 1.8 tall
+                        if (px + 0.3 > railMinX && px - 0.3 < railMaxX &&
+                            pz + 0.3 > railMinZ && pz - 0.3 < railMaxZ &&
+                            py + 1.8 > railMinY && py < railMaxY) {
+                            entityOnRail = true;
+                            break;
+                        }
+                    }
+                    if (entityOnRail) {
+                        // Still occupied — reschedule tick
+                        scheduleBlockTick(tick.x, tick.y, tick.z, 28, 20);
+                    } else {
+                        // Deactivate: clear power bit 0x08
+                        world->setBlockMetadata(tick.x, tick.y, tick.z, meta & ~0x08);
+                        broadcastBlockChange(tick.x, tick.y, tick.z, 28, meta & ~0x08);
+                        broadcastSound("random.click",
+                            static_cast<double>(tick.x) + 0.5,
+                            static_cast<double>(tick.y) + 0.5,
+                            static_cast<double>(tick.z) + 0.5,
+                            0.3f, 0.5f); // Lower pitch for depress
+                        redstoneNotifyNeighbors(tick.x, tick.y, tick.z);
+                        // Also notify block below — Java: notifyBlocksOfNeighborChange(x,y-1,z)
+                        redstoneNotifyNeighbors(tick.x, tick.y - 1, tick.z);
+                    }
+                }
             }
         }
 

@@ -1914,6 +1914,44 @@ void PlayHandler::handlePlayerPosition(const uint8_t* data, size_t length, Conne
         }
     }
 
+    // ─── Tripwire entity detection — Java: BlockTripWire.onEntityCollidedWithBlock ───
+    // Check if player intersects any tripwire wire block at foot level
+    {
+        int32_t twX = static_cast<int32_t>(std::floor(playerX_));
+        int32_t twY = static_cast<int32_t>(std::floor(playerY_));
+        int32_t twZ = static_cast<int32_t>(std::floor(playerZ_));
+        // Check the block at foot level
+        int32_t twId = server_.getBlockIdInWorld(twX, twY, twZ);
+        if (twId == 132) {
+            // Schedule a re-check tick (Java: world.scheduleBlockUpdate(x,y,z,this,10))
+            server_.scheduleBlockTick(twX, twY, twZ, 132, 10);
+            // Player is intersecting a tripwire — notify hooks in all 4 directions
+            for (int dir = 0; dir < 4; ++dir) {
+                int32_t hdx = 0, hdz = 0;
+                switch (dir) {
+                    case 0: hdz =  1; break;
+                    case 1: hdx = -1; break;
+                    case 2: hdz = -1; break;
+                    case 3: hdx =  1; break;
+                }
+                for (int32_t i = 1; i <= 42; ++i) {
+                    int32_t sx = twX + hdx * i;
+                    int32_t sz = twZ + hdz * i;
+                    int32_t sid = server_.getBlockIdInWorld(sx, twY, sz);
+                    if (sid == 131) {
+                        int32_t sm = server_.getBlockMetaInWorld(sx, twY, sz);
+                        int32_t expectedFacing = (dir + 2) & 0x03;
+                        if ((sm & 0x03) == expectedFacing) {
+                            server_.tripwireHookUpdate(sx, twY, sz);
+                        }
+                        break;
+                    }
+                    if (sid != 132) break;
+                }
+            }
+        }
+    }
+
     server_.broadcastPlayerPosition(*this);
     updateChunks(conn);
 }
@@ -1995,6 +2033,40 @@ void PlayHandler::handlePlayerPosAndLook(const uint8_t* data, size_t length, Con
             foodStats_.addExhaustion(dist * Exhaustion::SPRINT);
         } else {
             foodStats_.addExhaustion(dist * Exhaustion::WALK);
+        }
+    }
+
+    // ─── Tripwire entity detection — same as handlePlayerPosition ───
+    {
+        int32_t twX = static_cast<int32_t>(std::floor(playerX_));
+        int32_t twY = static_cast<int32_t>(std::floor(playerY_));
+        int32_t twZ = static_cast<int32_t>(std::floor(playerZ_));
+        int32_t twId = server_.getBlockIdInWorld(twX, twY, twZ);
+        if (twId == 132) {
+            server_.scheduleBlockTick(twX, twY, twZ, 132, 10);
+            for (int dir = 0; dir < 4; ++dir) {
+                int32_t hdx = 0, hdz = 0;
+                switch (dir) {
+                    case 0: hdz =  1; break;
+                    case 1: hdx = -1; break;
+                    case 2: hdz = -1; break;
+                    case 3: hdx =  1; break;
+                }
+                for (int32_t i = 1; i <= 42; ++i) {
+                    int32_t sx = twX + hdx * i;
+                    int32_t sz = twZ + hdz * i;
+                    int32_t sid = server_.getBlockIdInWorld(sx, twY, sz);
+                    if (sid == 131) {
+                        int32_t sm = server_.getBlockMetaInWorld(sx, twY, sz);
+                        int32_t expectedFacing = (dir + 2) & 0x03;
+                        if ((sm & 0x03) == expectedFacing) {
+                            server_.tripwireHookUpdate(sx, twY, sz);
+                        }
+                        break;
+                    }
+                    if (sid != 132) break;
+                }
+            }
         }
     }
 
@@ -2416,7 +2488,7 @@ void PlayHandler::handlePlayerDigging(const uint8_t* data, size_t length, Connec
             case 102: return {-1, 0, 0}; // glass pane
             case 119: return {-1, 0, 0}; // end portal
             case 120: return {-1, 0, 0}; // end portal frame
-            case 132: return {-1, 0, 0}; // tripwire
+            case 132: return {287, 1, 0}; // tripwire → string
             case 160: return {-1, 0, 0}; // stained glass pane
 
             // ─── Blocks that drop a DIFFERENT item ────────────────
@@ -2822,6 +2894,39 @@ void PlayHandler::handlePlayerDigging(const uint8_t* data, size_t length, Connec
                     static_cast<double>(blockX), static_cast<double>(cy),
                     static_cast<double>(blockZ),
                     brokenBlockId, 0, 1);
+            }
+        }
+        // Tripwire hook (131): disconnect chain on break
+        // Java: BlockTripWireHook.breakBlock → func_150136_a(world, x, y, z, block, meta)
+        if (brokenBlockId == 131) {
+            server_.tripwireHookUpdate(blockX, blockY, blockZ, true, brokenMeta);
+        }
+        // Tripwire wire (132): notify hooks in chain on break
+        // Java: BlockTripWire.breakBlock → func_150139_a(world, x, y, z, meta)
+        if (brokenBlockId == 132) {
+            // Scan all 4 horizontal directions for a hook that has this wire in its chain
+            for (int dir = 0; dir < 4; ++dir) {
+                int32_t hdx = 0, hdz = 0;
+                switch (dir) {
+                    case 0: hdz =  1; break;
+                    case 1: hdx = -1; break;
+                    case 2: hdz = -1; break;
+                    case 3: hdx =  1; break;
+                }
+                for (int32_t i = 1; i <= 42; ++i) {
+                    int32_t sx = blockX + hdx * i;
+                    int32_t sz = blockZ + hdz * i;
+                    int32_t sid = server_.getBlockIdInWorld(sx, blockY, sz);
+                    if (sid == 131) {
+                        int32_t sm = server_.getBlockMetaInWorld(sx, blockY, sz);
+                        int32_t expectedFacing = (dir + 2) & 0x03;
+                        if ((sm & 0x03) == expectedFacing) {
+                            server_.tripwireHookUpdate(sx, blockY, sz);
+                        }
+                        break;
+                    }
+                    if (sid != 132) break;
+                }
             }
         }
 
@@ -4933,6 +5038,7 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
                 case 321: break; // Paintings — entity, not block
                 case 389: placeBlockId = 140; break; // Flower pot item → flower pot block
                 case 397: placeBlockId = 144; break; // Skull item → skull block
+                case 287: placeBlockId = 132; break; // String → tripwire wire block
                 default: break;
             }
         }
@@ -5296,6 +5402,21 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
             break;
         }
 
+        // ─── Tripwire Hook — facing from clicked wall face ───────────
+        // Java: BlockTripWireHook.onBlockPlaced
+        // Meta 0-3 = direction: 0=south(+Z), 1=west(-X), 2=north(-Z), 3=east(+X)
+        // Must be placed on a wall face (2=north, 3=south, 4=west, 5=east)
+        case 131: {
+            switch (direction) {
+                case 2: meta = 2; break; // North face clicked → hook faces north
+                case 3: meta = 0; break; // South face clicked → hook faces south
+                case 4: meta = 1; break; // West face clicked → hook faces west
+                case 5: meta = 3; break; // East face clicked → hook faces east
+                default: meta = 0;
+            }
+            break;
+        }
+
         // ─── Colored blocks — metadata from item damage ──────────────
         // Java: ItemCloth, ItemBlock subclasses use item damage as block metadata
         case 35:  // Wool
@@ -5421,12 +5542,50 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
         placeBlockId == 93 || placeBlockId == 94 || placeBlockId == 149 ||
         placeBlockId == 150 || placeBlockId == 152 || placeBlockId == 123 ||
         placeBlockId == 124 || placeBlockId == 69 || placeBlockId == 77 ||
-        placeBlockId == 143) {
+        placeBlockId == 143 || placeBlockId == 131 || placeBlockId == 132 ||
+        placeBlockId == 28) {
         server_.redstoneNotifyNeighbors(placeX, placeY, placeZ);
     } else {
         // For any other block, check if adjacent to existing redstone wire/torch
         // (e.g., placing a solid block can connect/disconnect wire paths)
         server_.redstoneNotifyNeighbors(placeX, placeY, placeZ);
+    }
+
+    // ─── Tripwire hook/wire chain update on placement ────────────────
+    // Java: BlockTripWireHook.onBlockAdded → func_150136_a
+    if (placeBlockId == 131) {
+        // Placed a hook — scan for opposing hook
+        server_.tripwireHookUpdate(placeX, placeY, placeZ);
+    }
+    if (placeBlockId == 132) {
+        // Placed a wire — need to notify hooks in both directions (N-S and E-W)
+        // Scan all 4 horizontal directions for a hook that faces toward this wire
+        for (int dir = 0; dir < 4; ++dir) {
+            int32_t hdx = 0, hdz = 0;
+            switch (dir) {
+                case 0: hdz =  1; break; // south
+                case 1: hdx = -1; break; // west
+                case 2: hdz = -1; break; // north
+                case 3: hdx =  1; break; // east
+            }
+            // Scan up to 42 blocks for a hook facing this direction
+            for (int32_t i = 1; i <= 42; ++i) {
+                int32_t sx = placeX + hdx * i;
+                int32_t sz = placeZ + hdz * i;
+                int32_t sid = server_.getBlockIdInWorld(sx, placeY, sz);
+                if (sid == 131) {
+                    // Found a hook — check if it faces back toward us
+                    int32_t sm = server_.getBlockMetaInWorld(sx, placeY, sz);
+                    // Hook facing direction that would scan in the opposite direction
+                    int32_t expectedFacing = (dir + 2) & 0x03;
+                    if ((sm & 0x03) == expectedFacing) {
+                        server_.tripwireHookUpdate(sx, placeY, sz);
+                    }
+                    break;
+                }
+                if (sid != 132) break; // Chain broken
+            }
+        }
     }
 
     // Play place sound — Java: block.stepSound.getPlaceSound()
@@ -8072,6 +8231,49 @@ void PlayHandler::tickFood(Connection& conn) {
                     pressurePlateX_ = INT_MIN;
                     pressurePlateY_ = INT_MIN;
                     pressurePlateZ_ = INT_MIN;
+                }
+            }
+        }
+    }
+
+    // ─── Detector rail detection ─────────────────────────────────
+    // Java: BlockRailDetector.func_150054_a — detect entities on rail
+    // Meta bit 0x08 = powered state; when entity enters, activate and schedule 20-tick re-poll
+    {
+        auto* world = server_.getWorlds().empty() ? nullptr : server_.getWorlds()[0].get();
+        if (world) {
+            int32_t railX = static_cast<int32_t>(std::floor(playerX_));
+            int32_t railY = static_cast<int32_t>(std::floor(playerY_));
+            int32_t railZ = static_cast<int32_t>(std::floor(playerZ_));
+
+            Block* railBlock = world->getBlock(railX, railY, railZ);
+            int32_t railBlockId = railBlock ? Block::getIdFromBlock(railBlock) : 0;
+
+            bool isOnRail = (railBlockId == 28);
+
+            if (isOnRail) {
+                int32_t meta = world->getBlockMetadata(railX, railY, railZ);
+                if ((meta & 0x08) == 0) {
+                    // Activate: set bit 0x08
+                    world->setBlockMetadata(railX, railY, railZ, meta | 0x08);
+                    server_.broadcastBlockChange(railX, railY, railZ, 28, meta | 0x08);
+                    server_.broadcastSound("random.click", railX + 0.5, railY + 0.5, railZ + 0.5, 0.3f, 0.6f);
+                    // Trigger redstone propagation
+                    server_.redstoneNotifyNeighbors(railX, railY, railZ);
+                    // Also notify block below — Java: notifyBlocksOfNeighborChange(x,y-1,z)
+                    server_.redstoneNotifyNeighbors(railX, railY - 1, railZ);
+                }
+                // Schedule re-check tick (Java: tickRate = 20)
+                server_.scheduleBlockTick(railX, railY, railZ, 28, 20);
+                // Track current rail position
+                detectorRailX_ = railX;
+                detectorRailY_ = railY;
+                detectorRailZ_ = railZ;
+            } else {
+                if (detectorRailX_ != INT_MIN) {
+                    detectorRailX_ = INT_MIN;
+                    detectorRailY_ = INT_MIN;
+                    detectorRailZ_ = INT_MIN;
                 }
             }
         }
