@@ -6878,6 +6878,110 @@ void MinecraftServer::tickMobs() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Drop container contents on block break
+// Java reference: BlockContainer.breakBlock() → InventoryHelper.dropInventoryItems()
+// ═══════════════════════════════════════════════════════════════════════════
+
+void MinecraftServer::dropContainerContents(int32_t x, int32_t y, int32_t z, int32_t blockId) {
+    int64_t key = packBlockPos(x, y, z);
+    double dx = static_cast<double>(x) + 0.5;
+    double dy = static_cast<double>(y) + 0.5;
+    double dz = static_cast<double>(z) + 0.5;
+
+    // Helper lambda: drop a single optional ItemStack
+    auto dropSlot = [&](const std::optional<ItemStack>& slot) {
+        if (slot && slot->getStackSize() > 0) {
+            spawnItemDrop(dx, dy, dz, slot->getItemId(), slot->getDamage(), slot->getStackSize());
+        }
+    };
+
+    switch (blockId) {
+        // Chest / Trapped Chest — 27 slots
+        case 54:
+        case 146: {
+            std::lock_guard<std::mutex> lock(chestMutex_);
+            auto it = chestStorage_.find(key);
+            if (it != chestStorage_.end()) {
+                for (auto& slot : it->second) {
+                    dropSlot(slot);
+                    slot = std::nullopt;
+                }
+                chestStorage_.erase(it);
+            }
+            break;
+        }
+        // Furnace / Lit Furnace — 3 slots (input, fuel, output)
+        case 61:
+        case 62: {
+            std::lock_guard<std::mutex> lock(furnaceMutex_);
+            auto it = furnaceStorage_.find(key);
+            if (it != furnaceStorage_.end()) {
+                for (auto& slot : it->second.slots) {
+                    dropSlot(slot);
+                    slot = std::nullopt;
+                }
+                furnaceStorage_.erase(it);
+            }
+            break;
+        }
+        // Dispenser — 9 slots
+        case 23: {
+            std::lock_guard<std::mutex> lock(dispenserMutex_);
+            auto it = dispenserStorage_.find(key);
+            if (it != dispenserStorage_.end()) {
+                for (auto& slot : it->second.slots) {
+                    dropSlot(slot);
+                    slot = std::nullopt;
+                }
+                dispenserStorage_.erase(it);
+            }
+            break;
+        }
+        // Dropper — 9 slots (same storage as dispenser)
+        case 158: {
+            std::lock_guard<std::mutex> lock(dispenserMutex_);
+            auto it = dispenserStorage_.find(key);
+            if (it != dispenserStorage_.end()) {
+                for (auto& slot : it->second.slots) {
+                    dropSlot(slot);
+                    slot = std::nullopt;
+                }
+                dispenserStorage_.erase(it);
+            }
+            break;
+        }
+        // Hopper — 5 slots
+        case 154: {
+            std::lock_guard<std::mutex> lock(hopperMutex_);
+            auto it = hopperStorage_.find(key);
+            if (it != hopperStorage_.end()) {
+                for (auto& slot : it->second.slots) {
+                    dropSlot(slot);
+                    slot = std::nullopt;
+                }
+                hopperStorage_.erase(it);
+            }
+            break;
+        }
+        // Brewing Stand — 4 slots (3 potions + 1 ingredient)
+        case 117: {
+            std::lock_guard<std::mutex> lock(brewingStandMutex_);
+            auto it = brewingStandStorage_.find(key);
+            if (it != brewingStandStorage_.end()) {
+                for (auto& slot : it->second.slots) {
+                    dropSlot(slot);
+                    slot = std::nullopt;
+                }
+                brewingStandStorage_.erase(it);
+            }
+            break;
+        }
+        default:
+            break;
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Chest tile entity storage
 // Java reference: TileEntityChest — simplified to in-memory per-position storage
 // ═══════════════════════════════════════════════════════════════════════════

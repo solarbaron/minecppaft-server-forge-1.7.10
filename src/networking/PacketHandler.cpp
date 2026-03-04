@@ -2569,6 +2569,11 @@ void PlayHandler::handlePlayerDigging(const uint8_t* data, size_t length, Connec
         if (gameMode_ == 1) {
             // ─── CREATIVE: instant break ──────────────────────────
             // Java: ItemInWorldManager.onBlockClicked → isCreative → tryHarvestBlock
+
+            // ─── Container content drops — Java: BlockContainer.breakBlock() ─────
+            // Drop all items stored inside the container before removing the block
+            server_.dropContainerContents(blockX, blockY, blockZ, brokenBlockId);
+
             world->setBlock(blockX, blockY, blockZ, Block::getBlockById(0));
             world->setBlockMetadata(blockX, blockY, blockZ, 0);
             server_.broadcastBlockChange(blockX, blockY, blockZ, 0, 0);
@@ -2616,6 +2621,10 @@ void PlayHandler::handlePlayerDigging(const uint8_t* data, size_t length, Connec
             float hardness = existingBlock->getHardness();
             if (hardness == 0.0f) {
                 // Instant-break blocks (hardness 0) — same as creative path
+
+                // ─── Container content drops — Java: BlockContainer.breakBlock() ─────
+                server_.dropContainerContents(blockX, blockY, blockZ, brokenBlockId);
+
                 world->setBlock(blockX, blockY, blockZ, Block::getBlockById(0));
                 world->setBlockMetadata(blockX, blockY, blockZ, 0);
                 server_.broadcastBlockChange(blockX, blockY, blockZ, 0, 0);
@@ -2725,6 +2734,10 @@ void PlayHandler::handlePlayerDigging(const uint8_t* data, size_t length, Connec
             sendBlockChange(conn, blockX, blockY, blockZ, brokenBlockId, brokenMeta);
             return;
         }
+
+        // ─── Container content drops — Java: BlockContainer.breakBlock() ─────
+        // Drop all items stored inside the container before removing the block
+        server_.dropContainerContents(blockX, blockY, blockZ, brokenBlockId);
 
         // Break the block
         world->setBlock(blockX, blockY, blockZ, Block::getBlockById(0));
@@ -4905,6 +4918,42 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
                 case 389: placeBlockId = 140; break; // Flower pot item → flower pot block
                 case 397: placeBlockId = 144; break; // Skull item → skull block
                 default: break;
+            }
+        }
+    }
+
+    // ─── Chest placement restriction — prevent triple chests ─────────
+    // Java: BlockChest.canPlaceBlockAt() + isDoubleChest()
+    // A chest can only be placed if it won't create a triple chest.
+    // Rule: an adjacent chest (same type) is OK only if that adjacent chest
+    //       doesn't already have another adjacent chest of the same type.
+    if (placeBlockId == 54 || placeBlockId == 146) {
+        int32_t chestTypeId = placeBlockId; // 54=chest, 146=trapped chest
+        // Check all 4 horizontal neighbors
+        const int32_t dx[] = {-1, 1, 0, 0};
+        const int32_t dz[] = {0, 0, -1, 1};
+        for (int dir = 0; dir < 4; ++dir) {
+            int32_t nx = placeX + dx[dir];
+            int32_t nz = placeZ + dz[dir];
+            Block* neighborBlock = world->getBlock(nx, placeY, nz);
+            if (!neighborBlock || Block::getIdFromBlock(neighborBlock) != chestTypeId) continue;
+            // Found an adjacent chest of the same type — check if it's already a double
+            // Java: isDoubleChest() — check the adjacent chest's 4 neighbors
+            //       (excluding the placement position) for another chest
+            for (int dir2 = 0; dir2 < 4; ++dir2) {
+                int32_t nnx = nx + dx[dir2];
+                int32_t nnz = nz + dz[dir2];
+                // Skip the position we're trying to place at
+                if (nnx == placeX && nnz == placeZ) continue;
+                Block* nn = world->getBlock(nnx, placeY, nnz);
+                if (nn && Block::getIdFromBlock(nn) == chestTypeId) {
+                    // Adjacent chest already has a partner → would create triple chest
+                    // Cancel placement — send block correction to client
+                    sendBlockChange(conn, placeX, placeY, placeZ,
+                        Block::getIdFromBlock(world->getBlock(placeX, placeY, placeZ)),
+                        world->getBlockMetadata(placeX, placeY, placeZ));
+                    return;
+                }
             }
         }
     }

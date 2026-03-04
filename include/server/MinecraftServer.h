@@ -969,6 +969,15 @@ public:
      */
     static int32_t getXPSplit(int32_t xpAmount);
 
+    /**
+     * Drop all items from a container tile entity at the given position.
+     * Java reference: BlockContainer.breakBlock() → InventoryHelper.dropInventoryItems()
+     * Handles: chest(54/146), furnace(61/62), dispenser(23), dropper(158),
+     *          hopper(154), brewing stand(117).
+     * Also removes the tile entity data from storage after dropping.
+     */
+    void dropContainerContents(int32_t x, int32_t y, int32_t z, int32_t blockId);
+
 private:
     // ─── Chest storage (in-memory tile entities) ─────────────────────
     // Key: packed position (x << 40 | (z & 0xFFFFF) << 20 | (y & 0xFFFFF))
