@@ -282,7 +282,7 @@
 - ~~**Trees/vegetation**~~ — ✅ Oak/birch/spruce/jungle/acacia/dark oak tree generation + flowers, tallgrass, sugar cane, pumpkin patches, clay deposits, cactus, dead bush, mushrooms, vines, lily pads
 - **Beach generation** — ✅ Sand beach at water edges
 - ~~**Nether terrain**~~ — ✅ NetherGenerator with 5×17×5 density field, lava sea y=32, surface decoration (soul sand/gravel/bedrock), MapGenCavesHell, quartz ore, glowstone, fire, mushrooms
-- **End terrain** — dimension declared but not generated
+- ~~**End terrain**~~ — ✅ EndGenerator with 3×33×3 density field, island shape function (100-sqrt(x²+z²)*8), end stone, biome=sky(9)
 
 ---
 
@@ -564,3 +564,4 @@
 253. **Death inventory drops** — ✅ Done (Java EntityPlayer.onDeath + InventoryPlayer.dropAllItems parity: mainInventory[0-35] + armorInventory[0-3] dropped with func_146097_a circular scatter motion -sin(angle)*radius/cos(angle)*radius/0.2; XP orbs dropped level*7 capped 100; keepInventory gamerule check; /gamerule keepInventory command; NBT-preserved item drops via spawnItemDropStack + sendEntityMetadataItemStack; respawn clears potions + syncs XP + inventory to client; ender chest persists through death per Java)
 254. **Scoreboard packet wiring** — ✅ Done (Java ServerScoreboard parity: S3B ScoreboardObjective create/remove/update, S3C UpdateScore set/remove, S3D DisplayScoreboard slot assignment, S3E Teams create/remove/update/add players/remove players; broadcastScoreboardObjective/broadcastUpdateScore/broadcastRemoveScore/broadcastDisplayScoreboard/broadcastTeams methods; sendScoreboardState on player join sends all objectives+scores+display slots+teams; /scoreboard command fully wired to Scoreboard class with real data + packet broadcast)
 255. **Nether terrain generation** — ✅ Done (Java ChunkProviderHell parity: NetherGenerator with 7 NoiseGeneratorOctaves (16,16,8,4,4,10,16), 5×17×5 density field with Nether cosine profile + cubic falloff, trilinear 4×8×4 block interpolation to 128-height array, lava sea at y=32, replaceSurface soul sand/gravel/bedrock bands, MapGenCavesHell worm carving with lava adjacency check, quartz ore veins (16×13 y10-117), glowstone ceiling clusters (10×), fire (rand(rand(10)+1)+1), brown+red mushrooms; WorldServer dimension-1 wiring in World.cpp; biome=hell(8))
+256. **End terrain generation** — ✅ Done (Java ChunkProviderEnd parity: EndGenerator with 5 NoiseGeneratorOctaves (16,16,8,10,16), 3×33×3 density field, island shape function 100-sqrt(x²+z²)*8 clamped [-100,80], trilinear 8×4×8 block interpolation to 128-height array, end stone placement where density>0, biome=sky(9); WorldServer dimension 1 wiring in World.cpp)

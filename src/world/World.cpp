@@ -20,6 +20,7 @@
 #include "world/Chunk.h"
 #include "worldgen/OverworldGenerator.h"
 #include "worldgen/NetherGenerator.h"
+#include "worldgen/EndGenerator.h"
 #include "nbt/NBT.h"
 
 #include <algorithm>
@@ -262,6 +263,8 @@ WorldServer::WorldServer(int dimensionId, const std::string& worldName)
     std::unique_ptr<IChunkGenerator> generator;
     if (dimensionId == -1) {
         generator = std::make_unique<NetherGenerator>(42);  // seed = 42
+    } else if (dimensionId == 1) {
+        generator = std::make_unique<EndGenerator>(42);  // seed = 42
     } else {
         generator = std::make_unique<OverworldGenerator>(42);  // seed = 42
     }
