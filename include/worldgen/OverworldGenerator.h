@@ -24,6 +24,7 @@
 #include "worldgen/ChunkProviderGenerate.h"
 #include "worldgen/NoiseGeneratorOctaves.h"
 #include "worldgen/MapGenCaves.h"
+#include "worldgen/MapGenMineshaft.h"
 #include "worldgen/WorldGenOre.h"
 #include "worldgen/WorldGenTrees.h"
 
@@ -35,7 +36,7 @@ namespace mccpp {
 
 class OverworldGenerator : public IChunkGenerator {
 public:
-    explicit OverworldGenerator(int64_t seed) : seed_(seed) {
+    explicit OverworldGenerator(int64_t seed) : seed_(seed), mineshaftGen_(seed) {
         ChunkProviderGenerate::Config cfg;
         cfg.worldSeed = seed;
         cfg.mapFeaturesEnabled = false;
@@ -120,6 +121,11 @@ public:
         // Java reference: ChunkProviderGenerate.provideChunk → caveGenerator.generate
         caveGen_.generate(seed_, chunkX, chunkZ, blocks.data(),
             [](int32_t /*x*/, int32_t /*z*/) -> int32_t { return GRASS; });
+
+        // ── Step 6.5: Mineshaft generation ──
+        // Java reference: MapGenMineshaft — abandoned mine corridors
+        mineshaftGen_.generate(seed_, chunkX, chunkZ, blocks.data(), meta.data(),
+                              chunk->pendingSpawners);
 
         // ── Step 7: Bedrock ──
         placeBedrock(chunkX, chunkZ, blocks.data());
@@ -732,7 +738,8 @@ public:
 private:
     int64_t seed_;
     ChunkProviderGenerate terrain_;
-    MapGenCaves caveGen_;   // Cave carver
+    MapGenCaves caveGen_;       // Cave carver
+    MapGenMineshaft mineshaftGen_;  // Mineshaft structure generator
     std::unique_ptr<NoiseGeneratorOctaves> noiseGen1_;  // lower density
     std::unique_ptr<NoiseGeneratorOctaves> noiseGen2_;  // upper density
     std::unique_ptr<NoiseGeneratorOctaves> noiseGen3_;  // interpolation
