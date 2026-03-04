@@ -954,9 +954,14 @@ private:
     std::optional<ItemStack> workbenchResult_;   // Crafting output slot
 
     // ─── Chest container ───
-    // Pointer to server-side chest storage (owned by MinecraftServer::chestStorage_)
+    // Pointer(s) to server-side chest storage (owned by MinecraftServer::chestStorage_)
+    // For double chests, chestInventory_ = upper/left half, chestInventory2_ = lower/right half
+    // Java: InventoryLargeChest merges two TileEntityChest inventories
     std::array<std::optional<ItemStack>, 27>* chestInventory_ = nullptr;
+    std::array<std::optional<ItemStack>, 27>* chestInventory2_ = nullptr; // nullptr if single chest
+    int32_t chestSlotCount_ = 27; // 27 for single, 54 for double
     int32_t openChestX_ = 0, openChestY_ = 0, openChestZ_ = 0;
+    int32_t openChest2X_ = 0, openChest2Y_ = 0, openChest2Z_ = 0; // second half position
     bool isEnderChest_ = false; // true when chestInventory_ points to enderChestInventory_
     bool isTrappedChest_ = false; // true when chest is a trapped chest (redstone output)
 

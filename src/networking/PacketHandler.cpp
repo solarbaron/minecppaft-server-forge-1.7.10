@@ -1368,10 +1368,16 @@ void PlayHandler::closeOpenWindow(Connection& conn) {
         // Java: TileEntityChest.closeInventory → World.notifyBlocksOfNeighborChange
         if (isTrappedChest_) {
             server_.redstoneNotifyNeighbors(openChestX_, openChestY_, openChestZ_);
-            // Also notify block below (Java: trapped chest powers block beneath)
             server_.redstoneNotifyNeighbors(openChestX_, openChestY_ - 1, openChestZ_);
+            // Double trapped chest: also notify second half
+            if (chestInventory2_) {
+                server_.redstoneNotifyNeighbors(openChest2X_, openChest2Y_, openChest2Z_);
+                server_.redstoneNotifyNeighbors(openChest2X_, openChest2Y_ - 1, openChest2Z_);
+            }
         }
         chestInventory_ = nullptr;
+        chestInventory2_ = nullptr;
+        chestSlotCount_ = 27;
         isEnderChest_ = false;
         isTrappedChest_ = false;
     }
@@ -1394,7 +1400,8 @@ void PlayHandler::closeOpenWindow(Connection& conn) {
 }
 
 void PlayHandler::openChest(Connection& conn, int32_t blockX, int32_t blockY, int32_t blockZ) {
-    // Java: EntityPlayerMP.displayGUIChest → S2D OpenWindow type 0 "minecraft:container"
+    // Java: BlockChest.onBlockActivated → getInventory → InventoryLargeChest
+    // Detect adjacent chest of same type for double chest
     if (openWindowId_ > 0) {
         closeOpenWindow(conn);
     }
@@ -1403,33 +1410,110 @@ void PlayHandler::openChest(Connection& conn, int32_t blockX, int32_t blockY, in
     if (nextWindowId_ > 100) nextWindowId_ = 1;
     openWindowType_ = 0; // generic container (chest)
 
-    // Get or create chest storage
-    chestInventory_ = &server_.getOrCreateChest(blockX, blockY, blockZ);
-    openChestX_ = blockX; openChestY_ = blockY; openChestZ_ = blockZ;
+    int32_t blockId = server_.getBlockIdInWorld(blockX, blockY, blockZ);
 
-    // Send S2D OpenWindow (type 0 = generic, 27 slots = 3 rows)
-    sendOpenWindow(conn, openWindowId_, 0, "Chest", 27);
-
-    // Send window contents — 63 slots (27 chest + 27 main inv + 9 hotbar)
-    std::vector<uint8_t> pkt;
-    writeVarInt(pkt, ClientboundPacket::WindowItems);
-    writeByte(pkt, static_cast<uint8_t>(openWindowId_));
-    writeShort(pkt, 63); // 63 slots total
-
-    // Slots 0-26: chest contents
-    for (int i = 0; i < 27; ++i) {
-        writeItemStack(pkt, (*chestInventory_)[i]);
+    // Check all 4 cardinal directions for adjacent chest of same block ID
+    // Java: BlockChest.getInventory() checks -X, +X, -Z, +Z
+    // Order: -X/-Z = upper half (left), +X/+Z = lower half (right)
+    int32_t adjX = 0, adjY = blockY, adjZ = 0;
+    bool foundAdj = false;
+    // Check -X
+    if (server_.getBlockIdInWorld(blockX - 1, blockY, blockZ) == blockId) {
+        adjX = blockX - 1; adjZ = blockZ; foundAdj = true;
     }
-    // Slots 27-53: main inventory (player slots 9-35)
-    for (int i = 9; i < 36; ++i) {
-        writeItemStack(pkt, inventory_.getStackInSlot(i));
+    // Check +X
+    else if (server_.getBlockIdInWorld(blockX + 1, blockY, blockZ) == blockId) {
+        adjX = blockX + 1; adjZ = blockZ; foundAdj = true;
     }
-    // Slots 54-62: hotbar (player slots 0-8)
-    for (int i = 0; i < 9; ++i) {
-        writeItemStack(pkt, inventory_.getStackInSlot(i));
+    // Check -Z
+    else if (server_.getBlockIdInWorld(blockX, blockY, blockZ - 1) == blockId) {
+        adjX = blockX; adjZ = blockZ - 1; foundAdj = true;
+    }
+    // Check +Z
+    else if (server_.getBlockIdInWorld(blockX, blockY, blockZ + 1) == blockId) {
+        adjX = blockX; adjZ = blockZ + 1; foundAdj = true;
     }
 
-    conn.sendPacket(std::move(pkt));
+    if (foundAdj) {
+        // Double chest detected
+        // Java: InventoryLargeChest puts lower coord first (upper half)
+        // -X or -Z position = upper, this position = lower
+        // +X or +Z position = lower, this position = upper
+        int32_t upperX, upperZ, lowerX, lowerZ;
+        if (adjX < blockX || adjZ < blockZ) {
+            // Adjacent is at -X or -Z → adjacent is upper, this is lower
+            upperX = adjX; upperZ = adjZ;
+            lowerX = blockX; lowerZ = blockZ;
+        } else {
+            // Adjacent is at +X or +Z → this is upper, adjacent is lower
+            upperX = blockX; upperZ = blockZ;
+            lowerX = adjX; lowerZ = adjZ;
+        }
+
+        chestInventory_ = &server_.getOrCreateChest(upperX, blockY, upperZ);
+        chestInventory2_ = &server_.getOrCreateChest(lowerX, blockY, lowerZ);
+        chestSlotCount_ = 54;
+        openChestX_ = upperX; openChestY_ = blockY; openChestZ_ = upperZ;
+        openChest2X_ = lowerX; openChest2Y_ = blockY; openChest2Z_ = lowerZ;
+
+        // Send S2D OpenWindow (type 0 = generic, 54 slots = 6 rows)
+        sendOpenWindow(conn, openWindowId_, 0, "Large Chest", 54);
+
+        // Send window contents — 90 slots (54 chest + 27 main inv + 9 hotbar)
+        std::vector<uint8_t> pkt;
+        writeVarInt(pkt, ClientboundPacket::WindowItems);
+        writeByte(pkt, static_cast<uint8_t>(openWindowId_));
+        writeShort(pkt, 90); // 90 slots total
+
+        // Slots 0-26: upper chest
+        for (int i = 0; i < 27; ++i) {
+            writeItemStack(pkt, (*chestInventory_)[i]);
+        }
+        // Slots 27-53: lower chest
+        for (int i = 0; i < 27; ++i) {
+            writeItemStack(pkt, (*chestInventory2_)[i]);
+        }
+        // Slots 54-80: main inventory (player slots 9-35)
+        for (int i = 9; i < 36; ++i) {
+            writeItemStack(pkt, inventory_.getStackInSlot(i));
+        }
+        // Slots 81-89: hotbar (player slots 0-8)
+        for (int i = 0; i < 9; ++i) {
+            writeItemStack(pkt, inventory_.getStackInSlot(i));
+        }
+
+        conn.sendPacket(std::move(pkt));
+    } else {
+        // Single chest
+        chestInventory_ = &server_.getOrCreateChest(blockX, blockY, blockZ);
+        chestInventory2_ = nullptr;
+        chestSlotCount_ = 27;
+        openChestX_ = blockX; openChestY_ = blockY; openChestZ_ = blockZ;
+
+        // Send S2D OpenWindow (type 0 = generic, 27 slots = 3 rows)
+        sendOpenWindow(conn, openWindowId_, 0, "Chest", 27);
+
+        // Send window contents — 63 slots (27 chest + 27 main inv + 9 hotbar)
+        std::vector<uint8_t> pkt;
+        writeVarInt(pkt, ClientboundPacket::WindowItems);
+        writeByte(pkt, static_cast<uint8_t>(openWindowId_));
+        writeShort(pkt, 63); // 63 slots total
+
+        // Slots 0-26: chest contents
+        for (int i = 0; i < 27; ++i) {
+            writeItemStack(pkt, (*chestInventory_)[i]);
+        }
+        // Slots 27-53: main inventory (player slots 9-35)
+        for (int i = 9; i < 36; ++i) {
+            writeItemStack(pkt, inventory_.getStackInSlot(i));
+        }
+        // Slots 54-62: hotbar (player slots 0-8)
+        for (int i = 0; i < 9; ++i) {
+            writeItemStack(pkt, inventory_.getStackInSlot(i));
+        }
+
+        conn.sendPacket(std::move(pkt));
+    }
 
     // Play chest open sound
     server_.broadcastSound("random.chestopen",
@@ -5588,30 +5672,41 @@ void PlayHandler::handleClickWindow(const uint8_t* data, size_t length, Connecti
     }
 
     // ═══════════════════════════════════════════════════════════════════
-    // Chest (generic container) window handler
+    // Chest (generic container) window handler — supports single (27) and double (54) chests
+    // Java: ContainerChest — slot layout adapts to chestSlotCount_
     // ═══════════════════════════════════════════════════════════════════
     if (windowId > 0 && windowId == openWindowId_ && openWindowType_ == 0 && chestInventory_) {
-        // Chest slot layout (Java: ContainerChest, 3 rows):
-        //   0-26    = chest slots
-        //   27-53   = main inventory (player slots 9-35)
-        //   54-62   = hotbar (player slots 0-8)
+        // Chest slot layout (Java: ContainerChest):
+        //   Single: 0-26 = chest, 27-53 = main inv, 54-62 = hotbar
+        //   Double: 0-53 = chest (0-26 upper, 27-53 lower), 54-80 = main inv, 81-89 = hotbar
+        const int32_t N = chestSlotCount_; // 27 or 54
+        const int32_t totalSlots = N + 36; // chest + 27 main inv + 9 hotbar
 
         auto getChestSlotRef = [&](int16_t s) -> std::optional<ItemStack>* {
-            if (s >= 0 && s < 27) return &(*chestInventory_)[s];
+            if (s >= 0 && s < N) {
+                if (s < 27) return &(*chestInventory_)[s];
+                if (chestInventory2_ && s < 54) return &(*chestInventory2_)[s - 27];
+            }
             return nullptr;
         };
         auto getInvSlotForChest = [&](int16_t s) -> int32_t {
-            if (s >= 27 && s <= 53) return s - 27 + 9;  // main inv: 9-35
-            if (s >= 54 && s <= 62) return s - 54;       // hotbar: 0-8
+            if (s >= N && s < N + 27) return s - N + 9;      // main inv: 9-35
+            if (s >= N + 27 && s < N + 36) return s - N - 27; // hotbar: 0-8
             return -1;
         };
         auto syncChestWindow = [&]() {
+            // Sync chest slots
             for (int i = 0; i < 27; ++i)
                 sendSetSlot(conn, openWindowId_, static_cast<int16_t>(i), (*chestInventory_)[i]);
+            if (chestInventory2_) {
+                for (int i = 0; i < 27; ++i)
+                    sendSetSlot(conn, openWindowId_, static_cast<int16_t>(27 + i), (*chestInventory2_)[i]);
+            }
+            // Sync player inventory
             for (int i = 9; i < 36; ++i)
-                sendSetSlot(conn, openWindowId_, static_cast<int16_t>(i + 18), inventory_.getStackInSlot(i));
+                sendSetSlot(conn, openWindowId_, static_cast<int16_t>(N + i - 9), inventory_.getStackInSlot(i));
             for (int i = 0; i < 9; ++i)
-                sendSetSlot(conn, openWindowId_, static_cast<int16_t>(54 + i), inventory_.getStackInSlot(i));
+                sendSetSlot(conn, openWindowId_, static_cast<int16_t>(N + 27 + i), inventory_.getStackInSlot(i));
             sendSetSlot(conn, -1, -1, cursorItem_);
         };
 
@@ -5635,7 +5730,7 @@ void PlayHandler::handleClickWindow(const uint8_t* data, size_t length, Connecti
                 return;
             }
 
-            if (slotId < 0 || slotId > 62) { sendConfirm(false); return; }
+            if (slotId < 0 || slotId >= totalSlots) { sendConfirm(false); return; }
 
             std::optional<ItemStack>* chestRef = getChestSlotRef(slotId);
             int32_t invIdx = (chestRef == nullptr) ? getInvSlotForChest(slotId) : -1;

@@ -157,7 +157,7 @@
 ### Tile Entities
 - 121 lines + 578-line header
 - Furnace, Chest, Beacon, Brewing Stand, etc. declared
-- ✅ **Chest** — in-memory per-position storage (27 slots), S2D OpenWindow + ClickWindow
+- ✅ **Chest** — in-memory per-position storage (27 slots), S2D OpenWindow + ClickWindow, **double chest** (adjacent detection, 54-slot InventoryLargeChest merge)
 - ✅ **Furnace** — in-memory smelting with Java-parity tick/canSmelt/smeltItem, S2D type 2, S31 progress
 - ✅ **Ender Chest** — per-player 27-slot storage, block 130 interception
 - ✅ **Signs** — per-position text storage, C12 UpdateSign handler, S33 broadcast
@@ -555,3 +555,4 @@
 245. **Respawn safe spawn + damage cascade fix** — ✅ Done (respawn now uses getSpawnX/Y/Z with safe-Y scan upward for air gap; dead_ guards between all env damage types prevent cascade in single tick; gameMode_ in respawn packet; reset fireTicks/airSupply/fallDistance on respawn)
 246. **Enchanting table C11 handler** — ✅ Done (Java ContainerEnchantment.enchantItem parity: 24 enchantments with weights/min-max levels/applicability, buildEnchantmentList with modified enchantability + weighted random selection + canApplyTogether conflict resolution, enchanted book 340→403 with random skip, XP cost via addExperienceLevel, slot 0 click handler with calcItemStackEnchantability level recalculation, close drops enchantSlotItem_, random.levelup sound)
 247. **Anvil container logic** — ✅ Done (Java ContainerRepair parity: updateAnvilOutput with 3 repair modes — material 25%/material, item merge 12% durability bonus, enchanted book weight-to-cost mapping; rename cost 7/stack×5, XP cap 40 "Too Expensive!", rename-only 39 cap, repair cost escalation +2; click handler: input/output/inventory slots, XP deduction, material consumption, shift-click; MC|ItemName plugin message handler; getIsRepairable + canApplyEnchantment helpers; NBT RepairCost + display.Name serialization)
+248. **Double chest** — ✅ Done (Java BlockChest.getInventory + InventoryLargeChest parity: adjacent same-type chest detection in 4 cardinal directions, upper/lower half ordering by -X/-Z = upper, 54-slot "Large Chest" S2D OpenWindow, 90-slot S30 WindowItems, dynamic click handler with chestSlotCount_ 27/54, close handler clears both halves, double trapped chest redstone notification)
