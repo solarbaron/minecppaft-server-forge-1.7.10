@@ -366,6 +366,12 @@ public:
                                 int16_t itemId, int8_t stackSize, int16_t damage);
 
     /**
+     * Send entity metadata with a full ItemStack (including NBT) at DataWatcher slot 10.
+     * Java reference: S1CPacketEntityMetadata — used for death drops with enchantments.
+     */
+    void sendEntityMetadataItemStack(Connection& conn, int32_t entityId, const ItemStack& stack);
+
+    /**
      * Send collect item animation (item flies to player).
      * Java reference: S0DPacketCollectItem
      */

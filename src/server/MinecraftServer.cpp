@@ -1821,6 +1821,64 @@ int32_t MinecraftServer::spawnItemDrop(double x, double y, double z,
     return eid;
 }
 
+int32_t MinecraftServer::spawnItemDropStack(double x, double y, double z, const ItemStack& stack,
+                                             double motionX, double motionY, double motionZ) {
+    // Java reference: EntityPlayer.func_146097_a → entityDropItem → new EntityItem
+    // Spawns a dropped item with full NBT (enchantments, custom name, etc.)
+    if (stack.isEmpty() || stack.getItemId() == 0) return -1;
+
+    int32_t eid = nextItemEntityId_.fetch_add(1, std::memory_order_relaxed);
+
+    EntityItem entity;
+    entity.entityId = eid;
+    entity.itemId = stack.getItemId();
+    entity.itemMeta = stack.getDamage();
+    entity.stackSize = stack.getStackSize();
+    // Java: EntityPlayer.func_146097_a — spawn at player pos, Y + 0.5 (eye height offset)
+    entity.posX = x;
+    entity.posY = y;
+    entity.posZ = z;
+    entity.motionX = motionX;
+    entity.motionY = motionY;
+    entity.motionZ = motionZ;
+    entity.rotationYaw = static_cast<float>(std::rand() % 360);
+    entity.onGround = false;
+    entity.isDead = false;
+    entity.age = 0;
+    entity.delayBeforeCanPickup = 40;  // Java: EntityItem pickup delay = 40 ticks (2 seconds) for death drops
+
+    // Broadcast spawn to all players
+    {
+        std::lock_guard<std::mutex> lock(connectionsMutex_);
+        for (auto& conn : connections_) {
+            if (conn->isConnected() && conn->getState() == ConnectionState::Play) {
+                auto handler = conn->getHandler();
+                auto* playHandler = dynamic_cast<PlayHandler*>(handler.get());
+                if (playHandler) {
+                    // S0E SpawnObject: type=2 (Item), data=1 (velocity present)
+                    playHandler->sendSpawnObject(*conn, eid, 2,
+                        entity.posX, entity.posY, entity.posZ,
+                        entity.rotationYaw, 0.0f, 1,
+                        entity.motionX, entity.motionY, entity.motionZ);
+                    // S1C EntityMetadata with full ItemStack NBT at slot 10
+                    playHandler->sendEntityMetadataItemStack(*conn, eid, stack);
+                }
+            }
+        }
+    }
+
+    // Store in tracked entities
+    {
+        std::lock_guard<std::mutex> lock(itemEntitiesMutex_);
+        DroppedItem di;
+        di.entity = entity;
+        di.spawnTick = tickCount_.load(std::memory_order_relaxed);
+        itemEntities_.push_back(std::move(di));
+    }
+
+    return eid;
+}
+
 void MinecraftServer::tickItemEntities() {
     // Tick all tracked item entities
     std::lock_guard<std::mutex> lock(itemEntitiesMutex_);

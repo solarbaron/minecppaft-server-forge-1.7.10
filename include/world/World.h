@@ -254,6 +254,10 @@ public:
     int64_t getSeed() const { return seed_; }
     void setSeed(int64_t seed) { seed_ = seed; }
 
+    // ─── Game rules ────────────────────────────────────────────────────
+    // Java: GameRules "keepInventory" — if true, inventory/XP are kept on death
+    bool keepInventory = false;
+
     // ─── Weather ────────────────────────────────────────────────────────
     bool isRaining() const { return raining_; }
     bool isThundering() const { return thundering_; }

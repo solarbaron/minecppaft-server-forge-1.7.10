@@ -1813,6 +1813,22 @@ void PlayHandler::sendEntityMetadataItem(Connection& conn, int32_t entityId,
     conn.sendPacket(std::move(pkt));
 }
 
+void PlayHandler::sendEntityMetadataItemStack(Connection& conn, int32_t entityId, const ItemStack& stack) {
+    // Java reference: S1CPacketEntityMetadata + DataWatcher serialization
+    // DataWatcher slot 10, type 5 (ItemStack) — with full NBT data
+    std::vector<uint8_t> pkt;
+    writeVarInt(pkt, ClientboundPacket::EntityMetadata);
+    writeInt(pkt, entityId);
+    // DataWatcher entry: type=5 (ItemStack), index=10
+    // Header byte = (type << 5) | (index & 0x1F) = (5 << 5) | 10 = 0xAA
+    writeByte(pkt, 0xAA);
+    // Reuse writeItemStack which handles NBT serialization (enchantments, names, etc.)
+    std::optional<ItemStack> optStack = stack;
+    writeItemStack(pkt, optStack);
+    writeByte(pkt, 0x7F); // DataWatcher terminator
+    conn.sendPacket(std::move(pkt));
+}
+
 void PlayHandler::sendCollectItem(Connection& conn, int32_t collectedEntityId, int32_t collectorEntityId) {
     // Java reference: S0DPacketCollectItem.writePacketData()
     // Format: Int collectedEntityId, Int collectorEntityId
@@ -7226,6 +7242,15 @@ void PlayHandler::handleClientStatus(const uint8_t* data, size_t length, Connect
         // Send full health
         sendUpdateHealth(conn, health_, foodStats_.getFoodLevel(), foodStats_.getSaturationLevel());
 
+        // Clear potion effects on respawn — Java: EntityLivingBase.clearActivePotions()
+        clearPotionEffects(conn);
+
+        // Reset XP on respawn (already cleared in applyDamage, but ensure client sync)
+        sendSetExperience(conn, experienceBar_, experienceLevel_, experienceTotal_);
+
+        // Sync inventory to client (may be empty after death drops, or retained if keepInventory)
+        sendWindowItems(conn);
+
         // Re-broadcast spawn to other players
         server_.onPlayerJoined(conn, *this);
 
@@ -7313,6 +7338,58 @@ void PlayHandler::applyDamage(float amount) {
     foodStats_.addExhaustion(Exhaustion::DAMAGE);
     if (health_ <= 0.0f) {
         dead_ = true;
+
+        // ─── Death drops ──────────────────────────────────────────────
+        // Java reference: EntityPlayer.onDeath() → InventoryPlayer.dropAllItems()
+        // Check keepInventory gamerule from overworld
+        bool keepInv = false;
+        auto* overworld = server_.getWorlds().empty() ? nullptr : server_.getWorlds()[0].get();
+        if (overworld) {
+            keepInv = overworld->keepInventory;
+        }
+
+        if (!keepInv) {
+            // ── Drop all inventory items ──────────────────────────────
+            // Java: InventoryPlayer.dropAllItems() → EntityPlayer.func_146097_a(item, true, false)
+            // Iterates mainInventory[0..35] + armorInventory[0..3] (indices 0-39)
+            // Note: Java does NOT check gameMode — creative players drop too
+            for (int32_t i = 0; i < InventoryPlayer::TOTAL_SIZE; ++i) {
+                auto stack = inventory_.getStackInSlot(i);
+                if (!stack || stack->isEmpty()) continue;
+
+                // Java: func_146097_a with bl=true — circular random scatter
+                // float f2 = rand.nextFloat() * 0.5f;
+                // float f3 = rand.nextFloat() * PI * 2.0f;
+                // motionX = -sin(f3) * f2, motionZ = cos(f3) * f2, motionY = 0.2f
+                float f2 = static_cast<float>(std::rand()) / RAND_MAX * 0.5f;
+                float f3 = static_cast<float>(std::rand()) / RAND_MAX * 3.14159265f * 2.0f;
+                double mx = static_cast<double>(-std::sin(f3) * f2);
+                double my = 0.2;
+                double mz = static_cast<double>(std::cos(f3) * f2);
+
+                server_.spawnItemDropStack(playerX_, playerY_, playerZ_, *stack, mx, my, mz);
+                inventory_.setInventorySlotContents(i, std::nullopt);
+            }
+
+            // Note: Java's EntityPlayer.onDeath() does NOT drop ender chest contents.
+            // Ender chest persists through death in vanilla 1.7.10.
+
+            // ── Drop XP orbs ──────────────────────────────────────────
+            // Java: EntityPlayer.getExperiencePoints() = level * 7, capped at 100
+            int32_t xpToDrop = experienceLevel_ * 7;
+            if (xpToDrop > 100) xpToDrop = 100;
+            if (xpToDrop > 0) {
+                server_.spawnXPOrbs(playerX_, playerY_, playerZ_, xpToDrop);
+            }
+
+            // Reset XP — Java: EntityPlayer.onDeath() sets score, then addScore
+            resetExperience();
+
+            std::cout << "[Combat] " << playerName_ << " died — dropped inventory ("
+                      << InventoryPlayer::TOTAL_SIZE << " slots)\n";
+        } else {
+            std::cout << "[Combat] " << playerName_ << " died — keepInventory is ON, items retained\n";
+        }
     }
 }
 

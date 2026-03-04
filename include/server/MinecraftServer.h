@@ -281,6 +281,14 @@ public:
                           int32_t blockId, int32_t metadata, int32_t count = 1);
 
     /**
+     * Spawn a dropped item entity from an ItemStack (preserves NBT: enchantments, names, etc.)
+     * Java reference: EntityPlayer.func_146097_a — drops individual item stacks on death
+     * @param motionX,motionY,motionZ custom velocity (Java: random ±0.1, 0.2, ±0.1)
+     */
+    int32_t spawnItemDropStack(double x, double y, double z, const ItemStack& stack,
+                               double motionX = 0.0, double motionY = 0.2, double motionZ = 0.0);
+
+    /**
      * Tick all item entities (physics, despawn, pickup).
      * Called from the main server tick.
      */
