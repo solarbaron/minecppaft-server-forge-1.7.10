@@ -154,7 +154,7 @@
 - ✅ **Power sources** — lever, button, pressure plate, redstone block, redstone torch, repeater, comparator
 - ❌ Tripwire / detector rail (need entity AABB detection)
 
-### Tile Entities
+### Tile Entities (with disk persistence)
 - 121 lines + 578-line header
 - Furnace, Chest, Beacon, Brewing Stand, etc. declared
 - ✅ **Chest** — in-memory per-position storage (27 slots), S2D OpenWindow + ClickWindow, **double chest** (adjacent detection, 54-slot InventoryLargeChest merge)
@@ -558,3 +558,4 @@
 248. **Double chest** — ✅ Done (Java BlockChest.getInventory + InventoryLargeChest parity: adjacent same-type chest detection in 4 cardinal directions, upper/lower half ordering by -X/-Z = upper, 54-slot "Large Chest" S2D OpenWindow, 90-slot S30 WindowItems, dynamic click handler with chestSlotCount_ 27/54, close handler clears both halves, double trapped chest redstone notification)
 249. **Container break drops** — ✅ Done (Java BlockContainer.breakBlock → InventoryHelper.dropInventoryItems parity: chest/trapped chest 54/146 27 slots, furnace 61/62 3 slots, dispenser 23 9 slots, dropper 158 9 slots, hopper 154 5 slots, brewing stand 117 4 slots; drops all items + removes tile entity data from storage; integrated into all 3 break paths: creative, instant-break, survival)
 250. **Chest placement restriction** — ✅ Done (Java BlockChest.canPlaceBlockAt + isDoubleChest parity: prevents triple chests by checking adjacent same-type chest neighbors for existing double-chest pairs; applies to both chest 54 and trapped chest 146; sends block correction on rejection)
+251. **Tile entity persistence** — ✅ Done (Java AnvilChunkLoader.writeChunkToNBT/readChunkFromNBT parity: saveTileEntitiesForChunk injects NBT compounds for 6 tile entity types — Chest, Furnace, Trap, Hopper, Cauldron, Sign — into chunk Level compound before region file write; loadTileEntitiesFromChunk parses TileEntities tag list on chunk load from disk; ChunkProviderServer.loadChunk reads from region file before generating; ItemStack NBT serialization with enchantments/RepairCost/display.Name)

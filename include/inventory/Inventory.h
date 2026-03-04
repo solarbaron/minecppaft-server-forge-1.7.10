@@ -540,4 +540,106 @@ private:
     InventoryCraftResult craftResult_;       // Crafting output
 };
 
+// ═══════════════════════════════════════════════════════════════════════════
+// ItemStack NBT Serialization Helpers
+// Java reference: ItemStack.writeToNBT() / ItemStack.loadItemStackFromNBT()
+// ═══════════════════════════════════════════════════════════════════════════
+
+} // namespace mccpp
+
+// Include NBT after all type definitions to avoid circular includes
+#include "nbt/NBT.h"
+
+namespace mccpp {
+
+/**
+ * Serialize an ItemStack to an NBT compound, including a Slot byte.
+ * Java reference: ItemStack.writeToNBT(NBTTagCompound)
+ */
+inline std::unique_ptr<nbt::NBTTagCompound> writeItemStackToNBT(const ItemStack& stack, int8_t slotIndex) {
+    auto tag = std::make_unique<nbt::NBTTagCompound>();
+    tag->setByte("Slot", slotIndex);
+    tag->setShort("id", static_cast<int16_t>(stack.getItemId()));
+    tag->setByte("Count", static_cast<int8_t>(stack.getStackSize()));
+    tag->setShort("Damage", static_cast<int16_t>(stack.getDamage()));
+
+    // Serialize tag compound (enchantments, repair cost, display name)
+    bool hasTag = stack.hasEnchantments() || stack.getRepairCost() != 0 || stack.hasCustomName();
+    if (hasTag) {
+        auto stackTag = std::make_unique<nbt::NBTTagCompound>();
+
+        // Enchantments — Java: ench tag list of {id:short, lvl:short}
+        if (stack.hasEnchantments()) {
+            auto enchList = std::make_unique<nbt::NBTTagList>();
+            for (auto& e : stack.getEnchantments()) {
+                auto enchTag = std::make_unique<nbt::NBTTagCompound>();
+                enchTag->setShort("id", e.id);
+                enchTag->setShort("lvl", e.level);
+                enchList->appendTag(std::move(enchTag));
+            }
+            stackTag->setTag("ench", std::move(enchList));
+        }
+
+        // Repair cost
+        if (stack.getRepairCost() != 0) {
+            stackTag->setInteger("RepairCost", stack.getRepairCost());
+        }
+
+        // Display name — Java: display.Name
+        if (stack.hasCustomName()) {
+            auto displayTag = std::make_unique<nbt::NBTTagCompound>();
+            displayTag->setString("Name", stack.getCustomName());
+            stackTag->setTag("display", std::move(displayTag));
+        }
+
+        tag->setTag("tag", std::move(stackTag));
+    }
+
+    return tag;
+}
+
+/**
+ * Deserialize an ItemStack from an NBT compound.
+ * Java reference: ItemStack.loadItemStackFromNBT(NBTTagCompound)
+ */
+inline std::optional<ItemStack> readItemStackFromNBT(const nbt::NBTTagCompound& tag) {
+    int16_t id = tag.getShort("id");
+    int8_t count = tag.getByte("Count");
+    int16_t damage = tag.getShort("Damage");
+
+    if (id == 0 || count <= 0) return std::nullopt;
+
+    ItemStack stack(static_cast<int32_t>(id), static_cast<int32_t>(count), static_cast<int32_t>(damage));
+
+    // Read tag compound
+    auto* stackTag = tag.getCompoundTag("tag");
+    if (stackTag) {
+        // Enchantments
+        auto* enchList = stackTag->getTagList("ench", static_cast<int>(nbt::TagType::Compound));
+        if (enchList) {
+            for (int32_t i = 0; i < enchList->tagCount(); ++i) {
+                auto* enchTag = enchList->getCompoundTagAt(i);
+                if (enchTag) {
+                    int16_t enchId = enchTag->getShort("id");
+                    int16_t enchLvl = enchTag->getShort("lvl");
+                    stack.addEnchantment(enchId, enchLvl);
+                }
+            }
+        }
+
+        // Repair cost
+        if (stackTag->hasKey("RepairCost", static_cast<int>(nbt::TagType::Int))) {
+            stack.setRepairCost(stackTag->getInteger("RepairCost"));
+        }
+
+        // Display name
+        auto* displayTag = stackTag->getCompoundTag("display");
+        if (displayTag && displayTag->hasKey("Name")) {
+            stack.setCustomName(displayTag->getString("Name"));
+        }
+    }
+
+    return stack;
+}
+
 } // namespace mccpp

@@ -126,13 +126,46 @@ Chunk* ChunkProviderServer::loadChunk(int chunkX, int chunkZ) {
         }
     }
 
-    // Not loaded — generate new chunk
+    // ── Try loading from disk (region file) ──
     std::unique_ptr<Chunk> chunk;
-    if (generator_) {
-        chunk = generator_->provideChunk(chunkX, chunkZ);
-    } else {
-        // Empty chunk fallback
-        chunk = std::make_unique<Chunk>(chunkX, chunkZ);
+    std::string worldDir = world_->getWorldName();
+    int32_t regionX = chunkX >> 5;
+    int32_t regionZ = chunkZ >> 5;
+    std::string regionPath = worldDir + "/region/r." +
+        std::to_string(regionX) + "." + std::to_string(regionZ) + ".mca";
+
+    if (std::filesystem::exists(regionPath)) {
+        RegionFile region(regionPath);
+        int32_t localX = chunkX & 31;
+        int32_t localZ = chunkZ & 31;
+        auto chunkData = region.readChunkData(localX, localZ);
+        if (chunkData && !chunkData->empty()) {
+            // Deserialize NBT
+            auto rootTag = nbt::deserializeNBT(chunkData->data(), chunkData->size());
+            if (rootTag) {
+                auto* levelTag = rootTag->getCompoundTag("Level");
+                if (levelTag) {
+                    chunk = Chunk::readFromNBT(*levelTag);
+                    if (chunk) {
+                        // Load tile entities via callback
+                        const auto& loader = world_->getTileEntityLoader();
+                        if (loader) {
+                            loader(*levelTag);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Fall back to generation if not on disk ──
+    if (!chunk) {
+        if (generator_) {
+            chunk = generator_->provideChunk(chunkX, chunkZ);
+        } else {
+            // Empty chunk fallback
+            chunk = std::make_unique<Chunk>(chunkX, chunkZ);
+        }
     }
 
     // Initialize sky light + block light after terrain generation

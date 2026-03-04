@@ -261,6 +261,18 @@ public:
     void saveAllWorlds();
 
     /**
+     * Inject tile entity NBT data for a chunk into its Level compound.
+     * Java reference: AnvilChunkLoader.writeChunkToNBT() — TileEntities section
+     */
+    void saveTileEntitiesForChunk(nbt::NBTTagCompound& levelTag, int chunkX, int chunkZ);
+
+    /**
+     * Load tile entity data from a chunk's Level compound into server storage maps.
+     * Java reference: AnvilChunkLoader.readChunkFromNBT() — TileEntities section
+     */
+    void loadTileEntitiesFromChunk(const nbt::NBTTagCompound& levelTag);
+
+    /**
      * Spawn a dropped item entity at the given position.
      * Broadcasts S0E + S1C to all connected players.
      * Returns the entity ID of the spawned item.

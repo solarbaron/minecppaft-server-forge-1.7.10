@@ -24,6 +24,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <filesystem>
 #include <iostream>
 #include <random>
 #include <set>
@@ -80,6 +81,13 @@ bool MinecraftServer::init() {
     // Java reference: MinecraftServer.h() — creates WorldServer for each dimension
     auto overworld = std::make_unique<WorldServer>(0, "world");
     overworld->initialize();
+
+    // Set the tile entity loader callback so that chunks loaded from disk
+    // populate the server's tile entity storage maps.
+    overworld->setTileEntityLoader([this](const nbt::NBTTagCompound& levelTag) {
+        loadTileEntitiesFromChunk(levelTag);
+    });
+
     worlds_.push_back(std::move(overworld));
 
     return true;
@@ -1394,13 +1402,373 @@ void MinecraftServer::createExplosion(double x, double y, double z, float power,
 
 void MinecraftServer::saveAllWorlds() {
     // Java reference: MinecraftServer.saveAllWorlds()
+    // We inline the chunk-save loop here (instead of delegating to WorldServer::saveAllChunks)
+    // so that we can inject tile entity NBT into each chunk's Level compound before serialization.
     std::cout << "[Server] Saving world data...\n";
+
     for (auto& world : worlds_) {
-        if (world) {
-            world->saveAllChunks();
+        if (!world) continue;
+
+        auto* provider = world->getChunkProvider();
+        if (!provider) continue;
+
+        auto chunks = provider->getLoadedChunks();
+        if (chunks.empty()) continue;
+
+        std::string worldDir = world->getWorldName();
+        std::string regionDir = worldDir + "/region";
+        std::filesystem::create_directories(regionDir);
+
+        // Cache open region files by region key
+        std::unordered_map<int64_t, std::unique_ptr<RegionFile>> regionCache;
+        auto getRegion = [&](int32_t chunkX, int32_t chunkZ) -> RegionFile* {
+            int32_t regionX = chunkX >> 5;
+            int32_t regionZ = chunkZ >> 5;
+            int64_t key = (static_cast<int64_t>(regionX) << 32) | (static_cast<uint32_t>(regionZ));
+            auto it = regionCache.find(key);
+            if (it != regionCache.end()) return it->second.get();
+            std::string path = regionDir + "/r." + std::to_string(regionX) + "." + std::to_string(regionZ) + ".mca";
+            auto region = std::make_unique<RegionFile>(path);
+            RegionFile* ptr = region.get();
+            regionCache[key] = std::move(region);
+            return ptr;
+        };
+
+        int saved = 0;
+        for (Chunk* chunk : chunks) {
+            if (!chunk || !chunk->needsSaving()) continue;
+
+            // Serialize chunk to NBT
+            auto nbtTag = chunk->writeToNBT();
+            if (!nbtTag) continue;
+
+            // ── Inject tile entity data into the Level compound ──
+            saveTileEntitiesForChunk(*nbtTag, chunk->xPosition, chunk->zPosition);
+
+            // Wrap in root compound with "Level" key (Anvil format)
+            nbt::NBTTagCompound root;
+            auto levelPtr = std::unique_ptr<nbt::NBTBase>(
+                new nbt::NBTTagCompound(std::move(*nbtTag)));
+            root.setTag("Level", std::move(levelPtr));
+
+            // Serialize NBT to bytes
+            auto bytes = nbt::serializeNBT(root);
+            if (bytes.empty()) continue;
+
+            // Write to region file (handles compression)
+            RegionFile* region = getRegion(chunk->xPosition, chunk->zPosition);
+            int32_t localX = chunk->xPosition & 31;
+            int32_t localZ = chunk->zPosition & 31;
+            if (region && region->writeChunkData(localX, localZ, bytes)) {
+                chunk->isModified = false;
+                ++saved;
+            }
+        }
+
+        if (saved > 0) {
+            std::cout << "[World] Saved " << saved << " chunk(s) for dimension "
+                      << world->getDimensionId() << "\n";
         }
     }
+
     std::cout << "[Server] World data saved.\n";
+}
+
+// ─── Tile Entity Save ────────────────────────────────────────────────────
+// Java reference: AnvilChunkLoader.writeChunkToNBT() — TileEntities section
+
+void MinecraftServer::saveTileEntitiesForChunk(nbt::NBTTagCompound& levelTag,
+                                                int chunkX, int chunkZ) {
+    // Compute block coordinate range for this chunk
+    int32_t minX = chunkX * 16;
+    int32_t maxX = minX + 15;
+    int32_t minZ = chunkZ * 16;
+    int32_t maxZ = minZ + 15;
+
+    auto tileEntities = std::make_unique<nbt::NBTTagList>();
+
+    // Helper: unpack a block position key created by packBlockPos()
+    auto unpackBlockPos = [](int64_t packed, int32_t& x, int32_t& y, int32_t& z) {
+        x = static_cast<int32_t>(packed >> 40);
+        z = static_cast<int32_t>((packed >> 20) & 0xFFFFF);
+        y = static_cast<int32_t>(packed & 0xFFFFF);
+        // Sign-extend the 20-bit fields
+        if (z & 0x80000) z |= static_cast<int32_t>(0xFFF00000);
+        if (y & 0x80000) y |= static_cast<int32_t>(0xFFF00000);
+    };
+
+    auto inChunk = [&](int32_t x, int32_t z) {
+        return x >= minX && x <= maxX && z >= minZ && z <= maxZ;
+    };
+
+    // ── Chests ──
+    {
+        std::lock_guard<std::mutex> lock(chestMutex_);
+        for (auto& [posKey, slots] : chestStorage_) {
+            int32_t x, y, z;
+            unpackBlockPos(posKey, x, y, z);
+            if (!inChunk(x, z)) continue;
+
+            auto te = std::make_unique<nbt::NBTTagCompound>();
+            te->setString("id", "Chest");
+            te->setInteger("x", x);
+            te->setInteger("y", y);
+            te->setInteger("z", z);
+
+            auto items = std::make_unique<nbt::NBTTagList>();
+            for (int8_t i = 0; i < 27; ++i) {
+                if (slots[i]) {
+                    items->appendTag(writeItemStackToNBT(*slots[i], i));
+                }
+            }
+            te->setTag("Items", std::move(items));
+            tileEntities->appendTag(std::move(te));
+        }
+    }
+
+    // ── Furnaces ──
+    {
+        std::lock_guard<std::mutex> lock(furnaceMutex_);
+        for (auto& [posKey, furnace] : furnaceStorage_) {
+            int32_t x, y, z;
+            unpackBlockPos(posKey, x, y, z);
+            if (!inChunk(x, z)) continue;
+
+            auto te = std::make_unique<nbt::NBTTagCompound>();
+            te->setString("id", "Furnace");
+            te->setInteger("x", x);
+            te->setInteger("y", y);
+            te->setInteger("z", z);
+            te->setShort("BurnTime", static_cast<int16_t>(furnace.furnaceBurnTime));
+            te->setShort("CookTime", static_cast<int16_t>(furnace.furnaceCookTime));
+
+            auto items = std::make_unique<nbt::NBTTagList>();
+            for (int8_t i = 0; i < 3; ++i) {
+                if (furnace.slots[i]) {
+                    items->appendTag(writeItemStackToNBT(*furnace.slots[i], i));
+                }
+            }
+            te->setTag("Items", std::move(items));
+            tileEntities->appendTag(std::move(te));
+        }
+    }
+
+    // ── Dispensers / Droppers (Java tile entity ID = "Trap") ──
+    {
+        std::lock_guard<std::mutex> lock(dispenserMutex_);
+        for (auto& [posKey, disp] : dispenserStorage_) {
+            int32_t x, y, z;
+            unpackBlockPos(posKey, x, y, z);
+            if (!inChunk(x, z)) continue;
+
+            auto te = std::make_unique<nbt::NBTTagCompound>();
+            te->setString("id", "Trap");
+            te->setInteger("x", x);
+            te->setInteger("y", y);
+            te->setInteger("z", z);
+
+            auto items = std::make_unique<nbt::NBTTagList>();
+            for (int8_t i = 0; i < 9; ++i) {
+                if (disp.slots[i]) {
+                    items->appendTag(writeItemStackToNBT(*disp.slots[i], i));
+                }
+            }
+            te->setTag("Items", std::move(items));
+            tileEntities->appendTag(std::move(te));
+        }
+    }
+
+    // ── Hoppers ──
+    {
+        std::lock_guard<std::mutex> lock(hopperMutex_);
+        for (auto& [posKey, hopper] : hopperStorage_) {
+            int32_t x, y, z;
+            unpackBlockPos(posKey, x, y, z);
+            if (!inChunk(x, z)) continue;
+
+            auto te = std::make_unique<nbt::NBTTagCompound>();
+            te->setString("id", "Hopper");
+            te->setInteger("x", x);
+            te->setInteger("y", y);
+            te->setInteger("z", z);
+            te->setInteger("TransferCooldown", hopper.transferCooldown);
+
+            auto items = std::make_unique<nbt::NBTTagList>();
+            for (int8_t i = 0; i < 5; ++i) {
+                if (hopper.slots[i]) {
+                    items->appendTag(writeItemStackToNBT(*hopper.slots[i], i));
+                }
+            }
+            te->setTag("Items", std::move(items));
+            tileEntities->appendTag(std::move(te));
+        }
+    }
+
+    // ── Brewing Stands (Java tile entity ID = "Cauldron") ──
+    {
+        std::lock_guard<std::mutex> lock(brewingStandMutex_);
+        for (auto& [posKey, brew] : brewingStandStorage_) {
+            int32_t x, y, z;
+            unpackBlockPos(posKey, x, y, z);
+            if (!inChunk(x, z)) continue;
+
+            auto te = std::make_unique<nbt::NBTTagCompound>();
+            te->setString("id", "Cauldron");
+            te->setInteger("x", x);
+            te->setInteger("y", y);
+            te->setInteger("z", z);
+            te->setInteger("BrewTime", brew.brewTime);
+
+            auto items = std::make_unique<nbt::NBTTagList>();
+            for (int8_t i = 0; i < 4; ++i) {
+                if (brew.slots[i]) {
+                    items->appendTag(writeItemStackToNBT(*brew.slots[i], i));
+                }
+            }
+            te->setTag("Items", std::move(items));
+            tileEntities->appendTag(std::move(te));
+        }
+    }
+
+    // ── Signs ──
+    {
+        std::lock_guard<std::mutex> lock(signsMutex_);
+        for (auto& [posKey, sign] : signs_) {
+            int32_t x, y, z;
+            unpackBlockPos(posKey, x, y, z);
+            if (!inChunk(x, z)) continue;
+
+            auto te = std::make_unique<nbt::NBTTagCompound>();
+            te->setString("id", "Sign");
+            te->setInteger("x", x);
+            te->setInteger("y", y);
+            te->setInteger("z", z);
+            te->setString("Text1", sign.lines[0]);
+            te->setString("Text2", sign.lines[1]);
+            te->setString("Text3", sign.lines[2]);
+            te->setString("Text4", sign.lines[3]);
+            tileEntities->appendTag(std::move(te));
+        }
+    }
+
+    levelTag.setTag("TileEntities", std::move(tileEntities));
+}
+
+// ─── Tile Entity Load ────────────────────────────────────────────────────
+// Java reference: AnvilChunkLoader.readChunkFromNBT() — TileEntities section
+
+void MinecraftServer::loadTileEntitiesFromChunk(const nbt::NBTTagCompound& levelTag) {
+    auto* teList = levelTag.getTagList("TileEntities",
+                                        static_cast<int>(nbt::TagType::Compound));
+    if (!teList || teList->tagCount() == 0) return;
+
+    for (int32_t i = 0; i < teList->tagCount(); ++i) {
+        auto* te = teList->getCompoundTagAt(i);
+        if (!te) continue;
+
+        std::string id = te->getString("id");
+        int32_t x = te->getInteger("x");
+        int32_t y = te->getInteger("y");
+        int32_t z = te->getInteger("z");
+        int64_t posKey = packBlockPos(x, y, z);
+
+        if (id == "Chest" || id == "TrappedChest") {
+            auto* items = te->getTagList("Items",
+                                          static_cast<int>(nbt::TagType::Compound));
+            if (!items) continue;
+
+            std::lock_guard<std::mutex> lock(chestMutex_);
+            auto& slots = chestStorage_[posKey];
+            slots.fill(std::nullopt);
+            for (int32_t j = 0; j < items->tagCount(); ++j) {
+                auto* itemTag = items->getCompoundTagAt(j);
+                if (!itemTag) continue;
+                int8_t slot = itemTag->getByte("Slot");
+                if (slot >= 0 && slot < 27) {
+                    slots[slot] = readItemStackFromNBT(*itemTag);
+                }
+            }
+        } else if (id == "Furnace") {
+            auto* items = te->getTagList("Items",
+                                          static_cast<int>(nbt::TagType::Compound));
+            std::lock_guard<std::mutex> lock(furnaceMutex_);
+            auto& furnace = furnaceStorage_[posKey];
+            furnace.slots[0] = std::nullopt;
+            furnace.slots[1] = std::nullopt;
+            furnace.slots[2] = std::nullopt;
+            furnace.furnaceBurnTime = static_cast<int32_t>(te->getShort("BurnTime"));
+            furnace.furnaceCookTime = static_cast<int32_t>(te->getShort("CookTime"));
+            if (items) {
+                for (int32_t j = 0; j < items->tagCount(); ++j) {
+                    auto* itemTag = items->getCompoundTagAt(j);
+                    if (!itemTag) continue;
+                    int8_t slot = itemTag->getByte("Slot");
+                    if (slot >= 0 && slot < 3) {
+                        furnace.slots[slot] = readItemStackFromNBT(*itemTag);
+                    }
+                }
+            }
+        } else if (id == "Trap") {
+            // Dispenser / Dropper
+            auto* items = te->getTagList("Items",
+                                          static_cast<int>(nbt::TagType::Compound));
+            if (!items) continue;
+
+            std::lock_guard<std::mutex> lock(dispenserMutex_);
+            auto& disp = dispenserStorage_[posKey];
+            disp.slots.fill(std::nullopt);
+            for (int32_t j = 0; j < items->tagCount(); ++j) {
+                auto* itemTag = items->getCompoundTagAt(j);
+                if (!itemTag) continue;
+                int8_t slot = itemTag->getByte("Slot");
+                if (slot >= 0 && slot < 9) {
+                    disp.slots[slot] = readItemStackFromNBT(*itemTag);
+                }
+            }
+        } else if (id == "Hopper") {
+            auto* items = te->getTagList("Items",
+                                          static_cast<int>(nbt::TagType::Compound));
+            if (!items) continue;
+
+            std::lock_guard<std::mutex> lock(hopperMutex_);
+            auto& hopper = hopperStorage_[posKey];
+            hopper.slots.fill(std::nullopt);
+            hopper.transferCooldown = te->getInteger("TransferCooldown");
+            for (int32_t j = 0; j < items->tagCount(); ++j) {
+                auto* itemTag = items->getCompoundTagAt(j);
+                if (!itemTag) continue;
+                int8_t slot = itemTag->getByte("Slot");
+                if (slot >= 0 && slot < 5) {
+                    hopper.slots[slot] = readItemStackFromNBT(*itemTag);
+                }
+            }
+        } else if (id == "Cauldron") {
+            // Brewing Stand
+            auto* items = te->getTagList("Items",
+                                          static_cast<int>(nbt::TagType::Compound));
+            std::lock_guard<std::mutex> lock(brewingStandMutex_);
+            auto& brew = brewingStandStorage_[posKey];
+            brew.slots.fill(std::nullopt);
+            brew.brewTime = te->getInteger("BrewTime");
+            if (items) {
+                for (int32_t j = 0; j < items->tagCount(); ++j) {
+                    auto* itemTag = items->getCompoundTagAt(j);
+                    if (!itemTag) continue;
+                    int8_t slot = itemTag->getByte("Slot");
+                    if (slot >= 0 && slot < 4) {
+                        brew.slots[slot] = readItemStackFromNBT(*itemTag);
+                    }
+                }
+            }
+        } else if (id == "Sign") {
+            std::lock_guard<std::mutex> lock(signsMutex_);
+            auto& sign = signs_[posKey];
+            sign.lines[0] = te->getString("Text1");
+            sign.lines[1] = te->getString("Text2");
+            sign.lines[2] = te->getString("Text3");
+            sign.lines[3] = te->getString("Text4");
+        }
+    }
 }
 
 int32_t MinecraftServer::spawnItemDrop(double x, double y, double z,

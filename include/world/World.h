@@ -24,6 +24,7 @@
 #pragma once
 
 #include "world/Chunk.h"
+#include "nbt/NBT.h"
 
 #include <atomic>
 #include <cstdint>
@@ -340,6 +341,13 @@ public:
      */
     void saveAllChunks();
 
+    // ─── Tile Entity Loader callback ───────────────────────────────────
+    // Called during chunk load with the Level NBT compound so the server
+    // can populate its tile-entity storage maps.
+    using TileEntityLoader = std::function<void(const nbt::NBTTagCompound& levelTag)>;
+    void setTileEntityLoader(TileEntityLoader loader) { tileEntityLoader_ = std::move(loader); }
+    const TileEntityLoader& getTileEntityLoader() const { return tileEntityLoader_; }
+
 private:
     int dimensionId_;
     std::string worldName_;
@@ -367,6 +375,9 @@ private:
     float prevRainingStrength_ = 0.0f;
     float thunderingStrength_ = 0.0f;
     float prevThunderingStrength_ = 0.0f;
+
+    // Tile entity loader callback
+    TileEntityLoader tileEntityLoader_;
 };
 
 } // namespace mccpp
