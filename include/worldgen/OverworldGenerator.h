@@ -24,9 +24,11 @@
 #include "worldgen/ChunkProviderGenerate.h"
 #include "worldgen/NoiseGeneratorOctaves.h"
 #include "worldgen/MapGenCaves.h"
+#include "worldgen/MapGenRavine.h"
 #include "worldgen/MapGenMineshaft.h"
 #include "worldgen/MapGenScatteredFeature.h"
 #include "worldgen/MapGenStronghold.h"
+#include "worldgen/MapGenVillage.h"
 #include "worldgen/WorldGenOre.h"
 #include "worldgen/WorldGenTrees.h"
 
@@ -38,7 +40,7 @@ namespace mccpp {
 
 class OverworldGenerator : public IChunkGenerator {
 public:
-    explicit OverworldGenerator(int64_t seed) : seed_(seed), mineshaftGen_(seed), scatteredGen_(seed), strongholdGen_(seed) {
+    explicit OverworldGenerator(int64_t seed) : seed_(seed), mineshaftGen_(seed), scatteredGen_(seed), strongholdGen_(seed), villageGen_(seed) {
         ChunkProviderGenerate::Config cfg;
         cfg.worldSeed = seed;
         cfg.mapFeaturesEnabled = false;
@@ -124,6 +126,24 @@ public:
         caveGen_.generate(seed_, chunkX, chunkZ, blocks.data(),
             [](int32_t /*x*/, int32_t /*z*/) -> int32_t { return GRASS; });
 
+        // ── Step 6.1: Ravine generation ──
+        // Java reference: ChunkProviderGenerate.provideChunk → ravineGenerator.generate
+        // Ravines carve after caves, before structures (same as Java ordering)
+        {
+            auto getBiomeTop = [](int32_t /*x*/, int32_t /*z*/) -> int32_t { return GRASS; };
+            for (int32_t rx = chunkX - 8; rx <= chunkX + 8; ++rx) {
+                for (int32_t rz = chunkZ - 8; rz <= chunkZ + 8; ++rz) {
+                    auto mods = ravineGen_.generateForChunk(
+                        seed_, rx, rz, chunkX, chunkZ, blocks.data(), getBiomeTop);
+                    for (const auto& mod : mods) {
+                        if (mod.index >= 0 && mod.index < 65536) {
+                            blocks[mod.index] = mod.blockId;
+                        }
+                    }
+                }
+            }
+        }
+
         // ── Step 6.5: Mineshaft generation ──
         // Java reference: MapGenMineshaft — abandoned mine corridors
         mineshaftGen_.generate(seed_, chunkX, chunkZ, blocks.data(), meta.data(),
@@ -137,6 +157,11 @@ public:
         // Java reference: MapGenStronghold + StructureStrongholdPieces
         strongholdGen_.generate(seed_, chunkX, chunkZ, blocks.data(), meta.data(),
                                chunk->pendingSpawners, chunk->pendingChests);
+
+        // ── Step 6.8: Village generation ──
+        // Java reference: MapGenVillage + StructureVillagePieces
+        villageGen_.generate(seed_, chunkX, chunkZ, blocks.data(), meta.data(),
+                            chunk->pendingSpawners, chunk->pendingChests);
 
         // ── Step 7: Bedrock ──
         placeBedrock(chunkX, chunkZ, blocks.data());
@@ -750,9 +775,11 @@ private:
     int64_t seed_;
     ChunkProviderGenerate terrain_;
     MapGenCaves caveGen_;       // Cave carver
+    MapGenRavine ravineGen_;    // Ravine carver
     MapGenMineshaft mineshaftGen_;  // Mineshaft structure generator
     MapGenScatteredFeature scatteredGen_;  // Scattered feature generator (temples, huts)
     MapGenStronghold strongholdGen_;  // Stronghold structure generator
+    MapGenVillage villageGen_;         // Village structure generator
     std::unique_ptr<NoiseGeneratorOctaves> noiseGen1_;  // lower density
     std::unique_ptr<NoiseGeneratorOctaves> noiseGen2_;  // upper density
     std::unique_ptr<NoiseGeneratorOctaves> noiseGen3_;  // interpolation
