@@ -16,7 +16,7 @@
 - **Login** — offline-mode auth, MD5-based UUID generation, LoginSuccess packet
 - **Play State Transition** — Login→Play state change, handler swap
 - **Play Packets Handled:** KeepAlive (echo), ChatMessage (with `/` command dispatch), Player/PlayerPosition/PlayerLook/PlayerPosAndLook, ClientSettings, PluginMessage (silently consumed), PlayerAbilities, PlayerDigging (instant break), PlayerBlockPlace (block placement), CreativeInventory (C10, slot set + item drop), ClickWindow (C0E, modes 0-4 with cursor tracking), CloseWindow (drops cursor item)
-- **Play Packets Silently Consumed:** HeldItemChange, Animation, EntityAction, ConfirmTransaction, UpdateSign, UseEntity, SteerVehicle, TabComplete, EnchantItem, ClientStatus
+- **Play Packets Silently Consumed:** HeldItemChange, Animation, EntityAction, ConfirmTransaction, UpdateSign, UseEntity, SteerVehicle, TabComplete, ClientStatus
 
 ### Login Sequence (sent to client on join)
 - S01 JoinGame (entity ID, gamemode, dimension, difficulty, max players, level type)
@@ -166,7 +166,7 @@
 - ✅ **Dropper** — per-position 9-slot storage, S2D type 6
 - ✅ **Hopper** — per-position storage, S2D type 9, 5 slots, **automated item transfer** (8-tick pull/push to chest/hopper)
 - ✅ **Beacon** — S2D type 7, S31 properties (power/effects)
-- ✅ **Enchanting Table** — S2D type 4, bookshelf counting, S31 enchantment levels
+- ✅ **Enchanting Table** — S2D type 4, bookshelf counting, S31 enchantment levels, **C11 EnchantItem handler** (24 vanilla enchantments, weighted random selection, conflict resolution, enchanted book support, XP cost, click handler for slot 0)
 - ✅ **Anvil** — S2D type 8, repair/rename GUI
 - ✅ **Brewing Stand** — per-position 4-slot storage, S2D type 5, S31 brew time, **automated brewing** (400-tick timer, 12 ingredients, 7 effect potions + extend/amplify/splash/corrupt)
 
@@ -552,3 +552,5 @@
 242. **Throwable-vs-mob collision** — ✅ Done (Java EntitySnowball/EntityEgg/EntityEnderPearl.onImpact: snowball 0-damage hurt anim for all mobs + 3 damage to Blazes with full death handling (blaze rod drops with Looting, 10 XP, mob.blaze.death, S13 DestroyEntities), egg 0-damage knockback + 1/8 chicken spawn, ender pearl teleport thrower to mob hit position with 5 fall damage; 20 mob-type hurt sounds for snowball hits)
 243. **Mining ore XP drops fix** — ✅ Done (Java BlockOre.dropBlockAsItemWithChance → dropXpOnBlockBreak: added Silk Touch guard (no XP when mining ore itself), added mob spawner 52 XP 15+rand(15)+rand(15), changed from addExperience() to spawnXPOrbs() at block position per Java parity; coal 0-2, diamond/emerald 3-7, lapis/quartz 2-5, redstone 1-5)
 244. **Furnace smelting XP drops** — ✅ Done (Java SlotFurnace.onCrafting + FurnaceRecipes.getSmeltingExperience: XP orbs spawn at player position when taking items from furnace output slot; 20 recipe XP values — iron 0.7, gold/diamond/emerald 1.0, food 0.35, glass/stone/netherrack/coal-ore 0.1, charcoal 0.15, lapis/quartz/cactus-dye 0.2, clay-ball 0.3, redstone 0.7; probabilistic fractional XP calculation per Java)
+245. **Respawn safe spawn + damage cascade fix** — ✅ Done (respawn now uses getSpawnX/Y/Z with safe-Y scan upward for air gap; dead_ guards between all env damage types prevent cascade in single tick; gameMode_ in respawn packet; reset fireTicks/airSupply/fallDistance on respawn)
+246. **Enchanting table C11 handler** — ✅ Done (Java ContainerEnchantment.enchantItem parity: 24 enchantments with weights/min-max levels/applicability, buildEnchantmentList with modified enchantability + weighted random selection + canApplyTogether conflict resolution, enchanted book 340→403 with random skip, XP cost via addExperienceLevel, slot 0 click handler with calcItemStackEnchantability level recalculation, close drops enchantSlotItem_, random.levelup sound)

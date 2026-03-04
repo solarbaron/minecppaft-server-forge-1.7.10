@@ -893,6 +893,7 @@ private:
     void handleEntityAction(const uint8_t* data, size_t length, Connection& conn);
     void handleTabComplete(const uint8_t* data, size_t length, Connection& conn);
     void handleCreativeInventory(const uint8_t* data, size_t length, Connection& conn);
+    void handleEnchantItem(const uint8_t* data, size_t length, Connection& conn);
 
     MinecraftServer& server_;
     std::string playerName_;
@@ -968,6 +969,8 @@ private:
     // Java: ContainerEnchantment fields
     int32_t enchantTableX_ = 0, enchantTableY_ = 0, enchantTableZ_ = 0;
     int enchantLevels_[3] = {0, 0, 0};
+    int bookshelfCount_ = 0;  // Java: ContainerEnchantment bookshelf count (cached)
+    std::optional<ItemStack> enchantSlotItem_;  // Java: ContainerEnchantment.tableInventory slot 0
 
 public:
     // Accessors for server-side furnace ticking

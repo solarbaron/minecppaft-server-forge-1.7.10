@@ -700,7 +700,7 @@ void PlayHandler::handlePacket(int32_t packetId,
             handleSteerVehicle(data, length, conn);
             break;
         case ServerboundPacket::EnchantItem:
-            // Silently consume unimplemented packets
+            handleEnchantItem(data, length, conn);
             break;
         default:
             std::cerr << "[Play] Unknown packet 0x" << std::hex << packetId
@@ -1253,6 +1253,15 @@ void PlayHandler::closeOpenWindow(Connection& conn) {
             }
         }
         workbenchResult_ = std::nullopt;
+    }
+
+    // Enchanting table: drop item from slot 0
+    // Java: ContainerEnchantment.onContainerClosed → dropPlayerItemWithRandomChoice
+    if (openWindowId_ == 10 && enchantSlotItem_) {
+        server_.spawnItemDrop(playerX_, playerY_ + 1.5, playerZ_,
+            enchantSlotItem_->getItemId(), enchantSlotItem_->getDamage(),
+            enchantSlotItem_->getStackSize());
+        enchantSlotItem_ = std::nullopt;
     }
 
     // Chest/Ender Chest: clear pointer + play close sound
@@ -3387,6 +3396,7 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
 
     if (clickedBlockId == 116 && !isSneaking_) {
         openWindowId_ = 10; // Use unique window ID for enchanting
+        openWindowType_ = 4; // Enchanting table window type
         enchantTableX_ = blockX;
         enchantTableY_ = static_cast<int32_t>(blockY);
         enchantTableZ_ = blockZ;
@@ -3424,15 +3434,11 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
         }
         if (bookshelfCount > 15) bookshelfCount = 15;
 
-        // Generate 3 enchantment levels (simplified Java: EnchantmentHelper.calcItemStackEnchantability)
-        std::mt19937 rng(std::random_device{}());
-        for (int i = 0; i < 3; ++i) {
-            int base = 1 + (bookshelfCount > 0 ? std::uniform_int_distribution<>(0, bookshelfCount)(rng) : 0)
-                         + (bookshelfCount > 0 ? std::uniform_int_distribution<>(0, bookshelfCount)(rng) : 0);
-            int level = static_cast<int>(base * (1.0f + static_cast<float>(i) / 3.0f));
-            if (level < i + 1) level = i + 1;
-            enchantLevels_[i] = level;
-        }
+        // Generate 3 enchantment levels — Java: EnchantmentHelper.calcItemStackEnchantability
+        // Levels are 0 initially (no item placed yet). Recalculated when item enters slot 0.
+        enchantSlotItem_ = std::nullopt;
+        bookshelfCount_ = bookshelfCount;
+        for (int i = 0; i < 3; ++i) enchantLevels_[i] = 0;
 
         // Send S2D OpenWindow (type 4 = enchanting table)
         {
@@ -5790,6 +5796,212 @@ void PlayHandler::handleClickWindow(const uint8_t* data, size_t length, Connecti
         return;
     }
 
+    // ═══════════════════════════════════════════════════════════════════
+    // Enchanting table window handler
+    // ═══════════════════════════════════════════════════════════════════
+    if (windowId > 0 && windowId == openWindowId_ && openWindowType_ == 4) {
+        // Enchanting table slot layout (Java: ContainerEnchantment):
+        //   0       = enchanting slot (single item)
+        //   1-27    = main inventory (player slots 9-35)
+        //   28-36   = hotbar (player slots 0-8)
+
+        auto syncEnchantWindow = [&]() {
+            sendSetSlot(conn, openWindowId_, 0, enchantSlotItem_);
+            for (int i = 9; i < 36; ++i)
+                sendSetSlot(conn, openWindowId_, static_cast<int16_t>(i - 8), inventory_.getStackInSlot(i));
+            for (int i = 0; i < 9; ++i)
+                sendSetSlot(conn, openWindowId_, static_cast<int16_t>(28 + i), inventory_.getStackInSlot(i));
+            sendSetSlot(conn, -1, -1, cursorItem_);
+            // Send enchantment levels
+            for (int i = 0; i < 3; ++i) {
+                std::vector<uint8_t> propPkt;
+                writeVarInt(propPkt, ClientboundPacket::WindowProperty);
+                writeByte(propPkt, static_cast<uint8_t>(openWindowId_));
+                writeShort(propPkt, static_cast<int16_t>(i));
+                writeShort(propPkt, static_cast<int16_t>(enchantLevels_[i]));
+                conn.sendPacket(std::move(propPkt));
+            }
+        };
+
+        // Java: calcItemStackEnchantability — recalculate levels when item enters slot 0
+        auto recalcEnchantLevels = [&]() {
+            if (!enchantSlotItem_) {
+                for (int i = 0; i < 3; ++i) enchantLevels_[i] = 0;
+                return;
+            }
+            int itemId = enchantSlotItem_->getItemId();
+            // Only enchantable items get levels
+            // Check if already enchanted (can't re-enchant)
+            if (enchantSlotItem_->hasEnchantments() && itemId != 340) {
+                for (int i = 0; i < 3; ++i) enchantLevels_[i] = 0;
+                return;
+            }
+            std::mt19937 rng(std::random_device{}());
+            int bs = bookshelfCount_;
+            if (bs > 15) bs = 15;
+            for (int slot = 0; slot < 3; ++slot) {
+                int base = std::uniform_int_distribution<>(1, 8)(rng) +
+                           (bs >> 1) +
+                           std::uniform_int_distribution<>(0, bs)(rng);
+                int level;
+                if (slot == 0) level = std::max(base / 3, 1);
+                else if (slot == 1) level = base * 2 / 3 + 1;
+                else level = std::max(base, bs * 2);
+                enchantLevels_[slot] = level;
+            }
+        };
+
+        if (mode == 0 && (button == 0 || button == 1)) {
+            if (slotId == -999) {
+                if (cursorItem_) {
+                    if (button == 0) {
+                        server_.spawnItemDrop(playerX_, playerY_ + 1.5, playerZ_,
+                            cursorItem_->getItemId(), cursorItem_->getDamage(), cursorItem_->getStackSize());
+                        cursorItem_ = std::nullopt;
+                    } else {
+                        server_.spawnItemDrop(playerX_, playerY_ + 1.5, playerZ_,
+                            cursorItem_->getItemId(), cursorItem_->getDamage(), 1);
+                        int32_t rem = cursorItem_->getStackSize() - 1;
+                        if (rem <= 0) cursorItem_ = std::nullopt;
+                        else cursorItem_->setStackSize(rem);
+                    }
+                }
+                sendConfirm(true);
+                syncEnchantWindow();
+                return;
+            }
+
+            if (slotId < 0 || slotId > 36) { sendConfirm(false); return; }
+
+            // Slot 0 = enchanting slot
+            if (slotId == 0) {
+                // Left click: swap cursor ↔ enchant slot
+                // Only allow enchantable, un-enchanted items or books (max stack 1)
+                if (button == 0) {
+                    auto old = enchantSlotItem_;
+                    enchantSlotItem_ = cursorItem_;
+                    cursorItem_ = old;
+                    // Enchant slot only holds 1 item
+                    if (enchantSlotItem_ && enchantSlotItem_->getStackSize() > 1) {
+                        // Put excess back on cursor
+                        int32_t excess = enchantSlotItem_->getStackSize() - 1;
+                        enchantSlotItem_->setStackSize(1);
+                        if (!cursorItem_) {
+                            cursorItem_ = ItemStack(enchantSlotItem_->getItemId(), excess, enchantSlotItem_->getDamage());
+                        } else {
+                            cursorItem_->setStackSize(cursorItem_->getStackSize() + excess);
+                        }
+                    }
+                } else {
+                    // Right click: place 1 from cursor or pick up
+                    if (cursorItem_ && !enchantSlotItem_) {
+                        enchantSlotItem_ = ItemStack(cursorItem_->getItemId(), 1, cursorItem_->getDamage());
+                        if (cursorItem_->hasEnchantments()) {
+                            for (auto& e : cursorItem_->getEnchantments())
+                                enchantSlotItem_->addEnchantment(e.id, e.level);
+                        }
+                        int32_t rem = cursorItem_->getStackSize() - 1;
+                        if (rem <= 0) cursorItem_ = std::nullopt;
+                        else cursorItem_->setStackSize(rem);
+                    } else if (!cursorItem_ && enchantSlotItem_) {
+                        cursorItem_ = enchantSlotItem_;
+                        enchantSlotItem_ = std::nullopt;
+                    }
+                }
+                recalcEnchantLevels();
+                sendConfirm(true);
+                syncEnchantWindow();
+                return;
+            }
+
+            // Slots 1-36 = player inventory
+            int32_t invIdx = -1;
+            if (slotId >= 1 && slotId <= 27) invIdx = slotId - 1 + 9;   // main inv: 9-35
+            if (slotId >= 28 && slotId <= 36) invIdx = slotId - 28;     // hotbar: 0-8
+            if (invIdx < 0) { sendConfirm(false); return; }
+
+            auto slotStack = inventory_.getStackInSlot(invIdx);
+            if (button == 0) {
+                inventory_.setInventorySlotContents(invIdx, cursorItem_);
+                cursorItem_ = slotStack;
+            } else {
+                if (cursorItem_ && !slotStack) {
+                    ItemStack placed(cursorItem_->getItemId(), 1, cursorItem_->getDamage());
+                    inventory_.setInventorySlotContents(invIdx, placed);
+                    int32_t rem = cursorItem_->getStackSize() - 1;
+                    if (rem <= 0) cursorItem_ = std::nullopt;
+                    else cursorItem_->setStackSize(rem);
+                } else if (cursorItem_ && slotStack &&
+                           cursorItem_->getItemId() == slotStack->getItemId() &&
+                           cursorItem_->getDamage() == slotStack->getDamage()) {
+                    int32_t newSize = slotStack->getStackSize() + 1;
+                    if (newSize <= 64) {
+                        slotStack->setStackSize(newSize);
+                        inventory_.setInventorySlotContents(invIdx, slotStack);
+                        int32_t rem = cursorItem_->getStackSize() - 1;
+                        if (rem <= 0) cursorItem_ = std::nullopt;
+                        else cursorItem_->setStackSize(rem);
+                    }
+                } else if (!cursorItem_ && slotStack) {
+                    int32_t half = (slotStack->getStackSize() + 1) / 2;
+                    int32_t remaining = slotStack->getStackSize() - half;
+                    cursorItem_ = ItemStack(slotStack->getItemId(), half, slotStack->getDamage());
+                    if (remaining <= 0) inventory_.setInventorySlotContents(invIdx, std::nullopt);
+                    else {
+                        slotStack->setStackSize(remaining);
+                        inventory_.setInventorySlotContents(invIdx, slotStack);
+                    }
+                } else if (!cursorItem_ && !slotStack) {
+                    // Nothing
+                } else {
+                    inventory_.setInventorySlotContents(invIdx, cursorItem_);
+                    cursorItem_ = slotStack;
+                }
+            }
+            sendConfirm(true);
+            syncEnchantWindow();
+            return;
+        }
+
+        // Shift-click in enchanting window
+        if (mode == 1 && (button == 0 || button == 1)) {
+            if (slotId == 0 && enchantSlotItem_) {
+                // Shift-click enchant slot → move to inventory
+                ItemStack stack = *enchantSlotItem_;
+                if (inventory_.addItemStackToInventory(stack)) {
+                    enchantSlotItem_ = std::nullopt;
+                    recalcEnchantLevels();
+                }
+            } else if (slotId >= 1 && slotId <= 36) {
+                // Shift-click inventory → try to place in enchant slot if empty and enchantable
+                int32_t invIdx = (slotId >= 28) ? (slotId - 28) : (slotId - 1 + 9);
+                auto stack = inventory_.getStackInSlot(invIdx);
+                if (stack && !enchantSlotItem_) {
+                    enchantSlotItem_ = ItemStack(stack->getItemId(), 1, stack->getDamage());
+                    if (stack->hasEnchantments()) {
+                        for (auto& e : stack->getEnchantments())
+                            enchantSlotItem_->addEnchantment(e.id, e.level);
+                    }
+                    int32_t rem = stack->getStackSize() - 1;
+                    if (rem <= 0) inventory_.setInventorySlotContents(invIdx, std::nullopt);
+                    else {
+                        stack->setStackSize(rem);
+                        inventory_.setInventorySlotContents(invIdx, stack);
+                    }
+                    recalcEnchantLevels();
+                }
+            }
+            sendConfirm(true);
+            syncEnchantWindow();
+            return;
+        }
+
+        // Other modes — confirm and sync
+        sendConfirm(true);
+        syncEnchantWindow();
+        return;
+    }
+
     if (!container_ || windowId != 0) {
         sendConfirm(false);
         return;
@@ -7344,5 +7556,444 @@ void PlayHandler::tickPotionEffects(Connection& conn) {
     }
 }
 
+
 } // namespace mccpp
+
+
+// ═══════════════════════════════════════════════════════════════════════
+// C11 EnchantItem — Java: ContainerEnchantment.enchantItem()
+// Full 1:1 parity with Java 1.7.10 enchantment mechanics
+// ═══════════════════════════════════════════════════════════════════════
+namespace {
+
+// ─── Enchantment type categories (Java: EnumEnchantmentType) ─────────
+enum class EnchType {
+    ARMOR, ARMOR_FEET, ARMOR_HEAD, ARMOR_TORSO,
+    WEAPON, DIGGER, BOW, FISHING_ROD, BREAKABLE
+};
+
+// ─── Enchantment conflict group IDs ─────────────────────────────────
+// Same group = can't coexist (except PROT_FEATHER which is special)
+enum class ConflictGroup {
+    NONE,           // No conflicts beyond self
+    PROTECTION,     // Protection types (0-4) conflict with each other (except feather+X)
+    DAMAGE,         // Sharpness/Smite/Bane conflict with each other
+    LOOT_SILK,      // Looting/Fortune/LuckOfSea share silk-touch conflict
+    SILK_TOUCH      // Silk Touch conflicts with Fortune
+};
+
+struct EnchantmentDef {
+    int id;
+    int weight;
+    int maxLevel;
+    EnchType type;
+    ConflictGroup conflict;
+    int subtype;  // Protection subtype (0-4), Damage subtype (0-2), Loot sub (0=weapon,1=digger,2=fish)
+
+    // Java: getMinEnchantability(level) / getMaxEnchantability(level)
+    int getMinEnchantability(int level) const {
+        switch (id) {
+            // Protection variants: baseEnch[sub] + (level-1) * levelEnch[sub]
+            case 0: return 1 + (level - 1) * 11;    // Protection:        base=1,  level=11
+            case 1: return 10 + (level - 1) * 8;    // Fire Protection:   base=10, level=8
+            case 2: return 5 + (level - 1) * 6;     // Feather Falling:   base=5,  level=6
+            case 3: return 5 + (level - 1) * 8;     // Blast Protection:  base=5,  level=8
+            case 4: return 3 + (level - 1) * 6;     // Proj. Protection:  base=3,  level=6
+            case 5: return 10 * level;               // Respiration
+            case 6: return 1;                        // Aqua Affinity
+            case 7: return 10 + 20 * (level - 1);   // Thorns
+            // Damage variants: baseEnch[sub] + (level-1) * levelEnch[sub]
+            case 16: return 1 + (level - 1) * 11;   // Sharpness
+            case 17: return 5 + (level - 1) * 8;    // Smite
+            case 18: return 5 + (level - 1) * 8;    // Bane of Arthropods
+            case 19: return 5 + 20 * (level - 1);   // Knockback
+            case 20: return 10 + 20 * (level - 1);  // Fire Aspect
+            case 21: return 15 + (level - 1) * 9;   // Looting
+            case 32: return 1 + 10 * (level - 1);   // Efficiency
+            case 33: return 15;                      // Silk Touch
+            case 34: return 5 + (level - 1) * 8;    // Unbreaking
+            case 35: return 15 + (level - 1) * 9;   // Fortune
+            case 48: return 1 + (level - 1) * 10;   // Power
+            case 49: return 12 + (level - 1) * 20;  // Punch
+            case 50: return 20;                      // Flame
+            case 51: return 20;                      // Infinity
+            case 61: return 15 + (level - 1) * 9;   // Luck of the Sea
+            case 62: return 15 + (level - 1) * 9;   // Lure
+            default: return 1 + level * 10;          // Fallback
+        }
+    }
+
+    int getMaxEnchantability(int level) const {
+        switch (id) {
+            // Protection: min + thresholdEnch[sub]
+            case 0: return getMinEnchantability(level) + 20;
+            case 1: return getMinEnchantability(level) + 12;
+            case 2: return getMinEnchantability(level) + 10;
+            case 3: return getMinEnchantability(level) + 12;
+            case 4: return getMinEnchantability(level) + 15;
+            case 5: return getMinEnchantability(level) + 30;   // Respiration
+            case 6: return getMinEnchantability(level) + 40;   // Aqua Affinity
+            case 7: return (1 + level * 10) + 50;              // Thorns: super.getMinEnch + 50
+            case 16: return getMinEnchantability(level) + 20;  // Sharpness
+            case 17: return getMinEnchantability(level) + 20;  // Smite
+            case 18: return getMinEnchantability(level) + 20;  // Bane
+            case 19: return (1 + level * 10) + 50;             // Knockback: super.getMinEnch + 50
+            case 20: return (1 + level * 10) + 50;             // Fire Aspect
+            case 21: return (1 + level * 10) + 50;             // Looting
+            case 32: return (1 + level * 10) + 50;             // Efficiency: super.getMinEnch + 50
+            case 33: return (1 + level * 10) + 50;             // Silk Touch
+            case 34: return (1 + level * 10) + 50;             // Unbreaking
+            case 35: return (1 + level * 10) + 50;             // Fortune
+            case 48: return getMinEnchantability(level) + 15;  // Power
+            case 49: return getMinEnchantability(level) + 25;  // Punch
+            case 50: return 50;                                // Flame
+            case 51: return 50;                                // Infinity
+            case 61: return (1 + level * 10) + 50;             // Luck of the Sea
+            case 62: return (1 + level * 10) + 50;             // Lure
+            default: return getMinEnchantability(level) + 5;
+        }
+    }
+};
+
+// All 24 vanilla 1.7.10 enchantments
+static const EnchantmentDef ALL_ENCHANTS[] = {
+    // id, weight, maxLvl, type, conflict, subtype
+    { 0, 10, 4, EnchType::ARMOR,        ConflictGroup::PROTECTION, 0},  // Protection
+    { 1,  5, 4, EnchType::ARMOR,        ConflictGroup::PROTECTION, 1},  // Fire Protection
+    { 2,  5, 4, EnchType::ARMOR_FEET,   ConflictGroup::PROTECTION, 2},  // Feather Falling
+    { 3,  2, 4, EnchType::ARMOR,        ConflictGroup::PROTECTION, 3},  // Blast Protection
+    { 4,  5, 4, EnchType::ARMOR,        ConflictGroup::PROTECTION, 4},  // Projectile Protection
+    { 5,  2, 3, EnchType::ARMOR_HEAD,   ConflictGroup::NONE,       0},  // Respiration
+    { 6,  2, 1, EnchType::ARMOR_HEAD,   ConflictGroup::NONE,       0},  // Aqua Affinity
+    { 7,  1, 3, EnchType::ARMOR_TORSO,  ConflictGroup::NONE,       0},  // Thorns
+    {16, 10, 5, EnchType::WEAPON,       ConflictGroup::DAMAGE,     0},  // Sharpness
+    {17,  5, 5, EnchType::WEAPON,       ConflictGroup::DAMAGE,     1},  // Smite
+    {18,  5, 5, EnchType::WEAPON,       ConflictGroup::DAMAGE,     2},  // Bane of Arthropods
+    {19,  5, 2, EnchType::WEAPON,       ConflictGroup::NONE,       0},  // Knockback
+    {20,  2, 2, EnchType::WEAPON,       ConflictGroup::NONE,       0},  // Fire Aspect
+    {21,  2, 3, EnchType::WEAPON,       ConflictGroup::LOOT_SILK,  0},  // Looting
+    {32, 10, 5, EnchType::DIGGER,       ConflictGroup::NONE,       0},  // Efficiency
+    {33,  1, 1, EnchType::DIGGER,       ConflictGroup::SILK_TOUCH, 0},  // Silk Touch
+    {34,  5, 3, EnchType::BREAKABLE,    ConflictGroup::NONE,       0},  // Unbreaking
+    {35,  2, 3, EnchType::DIGGER,       ConflictGroup::LOOT_SILK,  1},  // Fortune
+    {48, 10, 5, EnchType::BOW,          ConflictGroup::NONE,       0},  // Power
+    {49,  2, 2, EnchType::BOW,          ConflictGroup::NONE,       0},  // Punch
+    {50,  2, 1, EnchType::BOW,          ConflictGroup::NONE,       0},  // Flame
+    {51,  1, 1, EnchType::BOW,          ConflictGroup::NONE,       0},  // Infinity
+    {61,  2, 3, EnchType::FISHING_ROD,  ConflictGroup::NONE,       0},  // Luck of the Sea
+    {62,  2, 3, EnchType::FISHING_ROD,  ConflictGroup::NONE,       0},  // Lure
+};
+static constexpr int NUM_ENCHANTS = sizeof(ALL_ENCHANTS) / sizeof(ALL_ENCHANTS[0]);
+
+// Java: EnumEnchantmentType.canEnchantItem(Item)
+// Maps item ID → which EnchType categories it belongs to
+static bool canEnchantType(EnchType type, int itemId, bool isBook) {
+    if (isBook) return true;  // Books accept all enchantments
+
+    // Breakable = any damageable item
+    if (type == EnchType::BREAKABLE) {
+        // Check if item is damageable (tools, weapons, armor, bow, shears, fishing rod, flint&steel)
+        // Simplified: any item with max durability > 0
+        return mccpp::PlayHandler::getMaxDurability(itemId) > 0;
+    }
+
+    // Armor types
+    auto isHelmet = [](int id) { return id==298||id==302||id==306||id==310||id==314; };
+    auto isChest  = [](int id) { return id==299||id==303||id==307||id==311||id==315; };
+    auto isLegs   = [](int id) { return id==300||id==304||id==308||id==312||id==316; };
+    auto isBoots  = [](int id) { return id==301||id==305||id==309||id==313||id==317; };
+    auto isArmor  = [&](int id) { return isHelmet(id)||isChest(id)||isLegs(id)||isBoots(id); };
+    // Swords
+    auto isSword  = [](int id) { return id==268||id==272||id==267||id==276||id==283; };
+    // Tools (pick, axe, shovel, hoe)
+    auto isTool   = [](int id) {
+        // Picks: 270,274,257,278,285  Axes: 271,275,258,279,286
+        // Shovels: 269,273,256,277,284  Hoes: 290-294
+        return (id>=256 && id<=258) || (id>=269 && id<=271) || (id>=273 && id<=279) ||
+               (id>=284 && id<=286) || (id>=290 && id<=294);
+    };
+
+    switch (type) {
+        case EnchType::ARMOR:      return isArmor(itemId);
+        case EnchType::ARMOR_FEET: return isBoots(itemId);
+        case EnchType::ARMOR_HEAD: return isHelmet(itemId);
+        case EnchType::ARMOR_TORSO:return isChest(itemId);
+        case EnchType::WEAPON:     return isSword(itemId);
+        case EnchType::DIGGER:     return isTool(itemId);
+        case EnchType::BOW:        return itemId == 261;
+        case EnchType::FISHING_ROD:return itemId == 346;
+        default: return false;
+    }
+}
+
+// Java: canApplyTogether — check if two enchantments can coexist
+static bool canApplyTogether(const EnchantmentDef& a, const EnchantmentDef& b) {
+    if (a.id == b.id) return false;  // Same enchantment = never
+
+    // Protection types: conflict with each other, EXCEPT Feather Falling (sub=2) can coexist with any other prot
+    if (a.conflict == ConflictGroup::PROTECTION && b.conflict == ConflictGroup::PROTECTION) {
+        if (a.subtype == b.subtype) return false;
+        return (a.subtype == 2 || b.subtype == 2);
+    }
+
+    // Damage types: Sharpness/Smite/Bane conflict with each other
+    if (a.conflict == ConflictGroup::DAMAGE && b.conflict == ConflictGroup::DAMAGE) {
+        return false;
+    }
+
+    // Silk Touch + Fortune conflict
+    if ((a.conflict == ConflictGroup::SILK_TOUCH && b.conflict == ConflictGroup::LOOT_SILK) ||
+        (a.conflict == ConflictGroup::LOOT_SILK  && b.conflict == ConflictGroup::SILK_TOUCH)) {
+        return false;
+    }
+
+    return true;
+}
+
+// Java: Item.getItemEnchantability()
+static int getItemEnchantability(int itemId) {
+    // Swords/Tools: material enchantability
+    // Wood: 15, Stone: 5, Iron: 14, Diamond: 10, Gold: 22
+    switch (itemId) {
+        // Wood tools/swords
+        case 268: case 269: case 270: case 271: case 290: return 15;
+        // Stone tools/swords
+        case 272: case 273: case 274: case 275: case 291: return 5;
+        // Iron tools/swords
+        case 256: case 257: case 258: case 267: case 292: return 14;
+        // Diamond tools/swords
+        case 276: case 277: case 278: case 279: case 293: return 10;
+        // Gold tools/swords
+        case 283: case 284: case 285: case 286: case 294: return 22;
+        // Leather armor
+        case 298: case 299: case 300: case 301: return 15;
+        // Chain armor
+        case 302: case 303: case 304: case 305: return 12;
+        // Iron armor
+        case 306: case 307: case 308: case 309: return 9;
+        // Diamond armor
+        case 310: case 311: case 312: case 313: return 10;
+        // Gold armor
+        case 314: case 315: case 316: case 317: return 25;
+        // Book (340), Bow (261), Fishing Rod (346)
+        case 340: case 261: case 346: return 1;
+        default: return 0;
+    }
+}
+
+// Java: Item.isItemEnchantable() — can the item be enchanted at all?
+static bool isItemEnchantable(int itemId) {
+    return getItemEnchantability(itemId) > 0;
+}
+
+struct EnchantResult {
+    int id;
+    int level;
+    int weight;
+};
+
+// Java: EnchantmentHelper.mapEnchantmentData(modifiedLevel, itemStack)
+// Returns all enchantments that qualify for the given modified level
+static std::vector<EnchantResult> mapEnchantmentData(int modifiedLevel, int itemId) {
+    std::vector<EnchantResult> result;
+    bool isBook = (itemId == 340);
+
+    for (int i = 0; i < NUM_ENCHANTS; ++i) {
+        const auto& e = ALL_ENCHANTS[i];
+        if (!canEnchantType(e.type, itemId, isBook)) continue;
+
+        // Find the highest level that fits within the enchantability range
+        for (int lvl = e.maxLevel; lvl >= 1; --lvl) {
+            if (modifiedLevel >= e.getMinEnchantability(lvl) &&
+                modifiedLevel <= e.getMaxEnchantability(lvl)) {
+                result.push_back({e.id, lvl, e.weight});
+                break;  // Only keep highest qualifying level
+            }
+        }
+    }
+    return result;
+}
+
+// Java: EnchantmentHelper.calcItemStackEnchantability(random, slot, bookshelfCount, item)
+static int calcItemStackEnchantability(std::mt19937& rng, int slot, int bookshelfCount, int itemId) {
+    int enchantability = getItemEnchantability(itemId);
+    if (enchantability <= 0) return 0;
+    if (bookshelfCount > 15) bookshelfCount = 15;
+
+    int base = std::uniform_int_distribution<>(1, 8)(rng) +
+               (bookshelfCount >> 1) +
+               std::uniform_int_distribution<>(0, bookshelfCount)(rng);
+
+    if (slot == 0) return std::max(base / 3, 1);
+    if (slot == 1) return base * 2 / 3 + 1;
+    return std::max(base, bookshelfCount * 2);
+}
+
+// Java: EnchantmentHelper.buildEnchantmentList(random, itemStack, enchantLevel)
+static std::vector<EnchantResult> buildEnchantmentList(std::mt19937& rng, int itemId, int enchantLevel) {
+    int enchantability = getItemEnchantability(itemId);
+    if (enchantability <= 0) return {};
+
+    // Modify enchantability: add random bonus
+    enchantability /= 2;
+    int bonus = 1 + std::uniform_int_distribution<>(0, (enchantability >> 1))(rng) +
+                    std::uniform_int_distribution<>(0, (enchantability >> 1))(rng);
+    int modifiedLevel = bonus + enchantLevel;
+
+    // Random modifier: ±15% (Java: (float + float - 1.0) * 0.15)
+    float f = (std::uniform_real_distribution<float>(0.0f, 1.0f)(rng) +
+               std::uniform_real_distribution<float>(0.0f, 1.0f)(rng) - 1.0f) * 0.15f;
+    modifiedLevel = static_cast<int>(static_cast<float>(modifiedLevel) * (1.0f + f) + 0.5f);
+    if (modifiedLevel < 1) modifiedLevel = 1;
+
+    // Get all qualifying enchantments
+    auto pool = mapEnchantmentData(modifiedLevel, itemId);
+    if (pool.empty()) return {};
+
+    // Weighted random selection of first enchantment
+    auto weightedSelect = [&](std::vector<EnchantResult>& p) -> EnchantResult {
+        int totalWeight = 0;
+        for (auto& e : p) totalWeight += e.weight;
+        if (totalWeight <= 0) return p[0];
+        int roll = std::uniform_int_distribution<>(0, totalWeight - 1)(rng);
+        for (auto& e : p) {
+            roll -= e.weight;
+            if (roll < 0) return e;
+        }
+        return p.back();
+    };
+
+    std::vector<EnchantResult> result;
+    result.push_back(weightedSelect(pool));
+
+    // Try to add more enchantments (Java: while random.nextInt(50) <= modifiedLevel)
+    for (int i = modifiedLevel; std::uniform_int_distribution<>(0, 49)(rng) <= i; i >>= 1) {
+        // Remove incompatible enchantments from pool
+        auto it = pool.begin();
+        while (it != pool.end()) {
+            bool compatible = true;
+            for (auto& existing : result) {
+                // Find the EnchantmentDef for both
+                const EnchantmentDef* existDef = nullptr;
+                const EnchantmentDef* candidateDef = nullptr;
+                for (int j = 0; j < NUM_ENCHANTS; ++j) {
+                    if (ALL_ENCHANTS[j].id == existing.id) existDef = &ALL_ENCHANTS[j];
+                    if (ALL_ENCHANTS[j].id == it->id) candidateDef = &ALL_ENCHANTS[j];
+                }
+                if (existDef && candidateDef && !canApplyTogether(*existDef, *candidateDef)) {
+                    compatible = false;
+                    break;
+                }
+            }
+            if (!compatible) it = pool.erase(it);
+            else ++it;
+        }
+        if (pool.empty()) break;
+        result.push_back(weightedSelect(pool));
+    }
+
+    return result;
+}
+
+} // anonymous namespace
+
+namespace mccpp {
+
+// ─── C11 EnchantItem ─────────────────────────────────────────────────
+// Java: ContainerEnchantment.enchantItem(EntityPlayer, int buttonId)
+// Packet format: 1 byte windowId + 1 byte button (0, 1, or 2)
+void PlayHandler::handleEnchantItem(const uint8_t* data, size_t length, Connection& conn) {
+    if (length < 2) return;
+
+    int8_t windowId = static_cast<int8_t>(data[0]);
+    int8_t button   = static_cast<int8_t>(data[1]);
+
+    // Validate: must be our enchanting window
+    if (windowId != openWindowId_ || openWindowId_ != 10) return;
+    if (button < 0 || button > 2) return;
+
+    // Check: enchanting levels must be valid
+    int requiredLevel = enchantLevels_[button];
+    if (requiredLevel <= 0) return;
+
+    // Check: item must be in the enchanting slot
+    if (!enchantSlotItem_) return;
+
+    // Check: player has enough XP (or is in Creative mode)
+    if (gameMode_ != 1 && experienceLevel_ < requiredLevel) return;
+
+    // ─── Build enchantment list (Java: EnchantmentHelper.buildEnchantmentList) ───
+    std::mt19937 rng(std::random_device{}());
+    auto enchants = buildEnchantmentList(rng, enchantSlotItem_->getItemId(), requiredLevel);
+    if (enchants.empty()) return;
+
+    bool isBook = (enchantSlotItem_->getItemId() == 340);
+
+    // ─── Deduct XP (Java: entityPlayer.addExperienceLevel(-this.enchantLevels[n])) ───
+    if (gameMode_ != 1) {
+        experienceLevel_ -= requiredLevel;
+        if (experienceLevel_ < 0) experienceLevel_ = 0;
+        experienceBar_ = 0.0f;
+        // Recalculate total XP from level (simplified)
+        experienceTotal_ = 0;
+        for (int i = 0; i < experienceLevel_; ++i) {
+            if (i >= 30) experienceTotal_ += 62 + (i - 30) * 7;
+            else if (i >= 15) experienceTotal_ += 17 + (i - 15) * 3;
+            else experienceTotal_ += 7 + i * 2;
+        }
+        sendSetExperience(conn, experienceBar_, experienceLevel_, experienceTotal_);
+    }
+
+    // ─── Convert book → enchanted book if needed ───
+    if (isBook) {
+        enchantSlotItem_->setItemId(403);  // 403 = enchanted_book
+    }
+
+    // ─── Apply enchantments ───
+    // Java: For books, skip one random enchantment if list.size() > 1
+    int skipIndex = -1;
+    if (isBook && enchants.size() > 1) {
+        skipIndex = std::uniform_int_distribution<>(0, static_cast<int>(enchants.size()) - 1)(rng);
+    }
+
+    for (int i = 0; i < static_cast<int>(enchants.size()); ++i) {
+        if (isBook && i == skipIndex) continue;
+        enchantSlotItem_->addEnchantment(enchants[i].id, enchants[i].level);
+    }
+
+    // ─── Recalculate enchantment levels (since item changed) ───
+    // Java: this.onCraftMatrixChanged(this.tableInventory)
+    // After enchanting, the levels should be recalculated for the new item state
+    // Since the item is now enchanted, isItemEnchantable returns false → levels become 0
+    for (int i = 0; i < 3; ++i) enchantLevels_[i] = 0;
+
+    // Send updated enchantment levels
+    for (int i = 0; i < 3; ++i) {
+        std::vector<uint8_t> propPkt;
+        writeVarInt(propPkt, ClientboundPacket::WindowProperty);
+        writeByte(propPkt, static_cast<uint8_t>(openWindowId_));
+        writeShort(propPkt, static_cast<int16_t>(i));
+        writeShort(propPkt, static_cast<int16_t>(enchantLevels_[i]));
+        conn.sendPacket(std::move(propPkt));
+    }
+
+    // ─── Sync enchanting slot and inventory to client ───
+    sendSetSlot(conn, openWindowId_, 0, enchantSlotItem_);
+    // Sync player inventory (slots 1-36 in enchanting window = player inv)
+    for (int i = 9; i < 36; ++i)
+        sendSetSlot(conn, openWindowId_, static_cast<int16_t>(i - 8), inventory_.getStackInSlot(i));
+    for (int i = 0; i < 9; ++i)
+        sendSetSlot(conn, openWindowId_, static_cast<int16_t>(28 + i), inventory_.getStackInSlot(i));
+    sendSetSlot(conn, -1, -1, cursorItem_);
+
+    // Play enchanting sound — Java: "random.enchant" at table position
+    server_.broadcastSound("random.levelup",
+        static_cast<double>(enchantTableX_) + 0.5,
+        static_cast<double>(enchantTableY_) + 0.5,
+        static_cast<double>(enchantTableZ_) + 0.5,
+        1.0f, 1.0f);
+}
+
+} // namespace mccpp
+
 
