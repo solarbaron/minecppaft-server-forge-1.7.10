@@ -24,6 +24,7 @@
 #include "entity/EntityList.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <iostream>
@@ -158,7 +159,7 @@ void MinecraftServer::run() {
 
     // Close all connections
     {
-        std::lock_guard<std::mutex> lock(connectionsMutex_);
+        std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
         for (auto& conn : connections_) {
             conn->disconnect("Server shutting down");
         }
@@ -173,18 +174,18 @@ void MinecraftServer::stop() {
 }
 
 int MinecraftServer::getOnlinePlayerCount() const {
-    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
     return static_cast<int>(std::count_if(connections_.begin(), connections_.end(),
         [](const auto& c) { return c->getState() == ConnectionState::Play; }));
 }
 
 void MinecraftServer::addConnection(std::shared_ptr<Connection> conn) {
-    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
     connections_.push_back(std::move(conn));
 }
 
 void MinecraftServer::removeConnection(Connection* conn) {
-    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
     connections_.erase(
         std::remove_if(connections_.begin(), connections_.end(),
             [conn](const auto& c) { return c.get() == conn; }),
@@ -199,7 +200,7 @@ void MinecraftServer::tick() {
 
     // Clean up dead connections
     {
-        std::lock_guard<std::mutex> lock(connectionsMutex_);
+        std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
         connections_.erase(
             std::remove_if(connections_.begin(), connections_.end(),
                 [](const auto& c) { return !c->isConnected(); }),
@@ -211,7 +212,7 @@ void MinecraftServer::tick() {
     // Java reference: NetHandlerPlayServer.update() — sends S00PacketKeepAlive
     // every 15 seconds (300 ticks). Client must respond within 30s or gets kicked.
     if (ticks > 0 && ticks % 300 == 0) {
-        std::lock_guard<std::mutex> lock(connectionsMutex_);
+        std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
         for (auto& conn : connections_) {
             if (conn->isConnected() && conn->getState() == ConnectionState::Play) {
                 auto handler = conn->getHandler();
@@ -236,7 +237,7 @@ void MinecraftServer::tick() {
 
         if (changes.rainStarted || changes.rainStopped ||
             changes.rainStrengthChanged || changes.thunderStrengthChanged) {
-            std::lock_guard<std::mutex> lock(connectionsMutex_);
+            std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
             for (auto& conn : connections_) {
                 if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
                 auto handler = conn->getHandler();
@@ -269,7 +270,7 @@ void MinecraftServer::tick() {
             // Approximate Java's per-active-chunk iteration:
             //   Java iterates ~441 chunks (21×21 view), each with 1/100000 chance.
             //   We sample around each player's loaded chunk area.
-            std::lock_guard<std::mutex> connLock(connectionsMutex_);
+            std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
             for (auto& conn : connections_) {
                 if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
                 auto handler = conn->getHandler();
@@ -359,7 +360,7 @@ void MinecraftServer::tick() {
     // Tick food/hunger for all play-state players
     // Java reference: EntityPlayer.onUpdate() → FoodStats.onUpdate()
     {
-        std::lock_guard<std::mutex> lock(connectionsMutex_);
+        std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
         for (auto& conn : connections_) {
             if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
             auto handler = conn->getHandler();
@@ -378,7 +379,7 @@ void MinecraftServer::tick() {
         int64_t totalWorldTime = world->getTotalWorldTime();
         int64_t worldTime = world->getWorldTime();
 
-        std::lock_guard<std::mutex> lock(connectionsMutex_);
+        std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
         for (auto& conn : connections_) {
             if (conn->isConnected() && conn->getState() == ConnectionState::Play) {
                 auto handler = conn->getHandler();
@@ -397,7 +398,7 @@ void MinecraftServer::tick() {
 
     // Periodic status logging (every 6000 ticks = 5 minutes)
     if (ticks > 0 && ticks % 6000 == 0) {
-        std::lock_guard<std::mutex> lock(connectionsMutex_);
+        std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
         std::cout << "[Server] Tick " << ticks
                   << " | Connections: " << connections_.size() << "\n";
     }
@@ -413,7 +414,7 @@ void MinecraftServer::onClientAccepted(int fd, const std::string& address, uint1
 void MinecraftServer::broadcastChatMessage(const std::string& message) {
     // Java reference: PlayerList.sendChatMsg(IChatComponent)
     // Send to all players in Play state
-    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
     for (auto& conn : connections_) {
         if (conn->isConnected() && conn->getState() == ConnectionState::Play) {
             auto handler = conn->getHandler();
@@ -428,7 +429,7 @@ void MinecraftServer::broadcastChatMessage(const std::string& message) {
 void MinecraftServer::broadcastBlockChange(int32_t x, int32_t y, int32_t z,
                                             int32_t blockId, int32_t metadata) {
     // Java reference: WorldServer.markBlockForUpdate() → S23PacketBlockChange
-    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
     for (auto& conn : connections_) {
         if (conn->isConnected() && conn->getState() == ConnectionState::Play) {
             auto handler = conn->getHandler();
@@ -445,7 +446,7 @@ void MinecraftServer::onPlayerJoined(Connection& joinedConn, PlayHandler& joined
     // 1. Send existing players to the new player (SpawnPlayer + PlayerListItem)
     // 2. Send the new player to all existing players
 
-    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
     for (auto& conn : connections_) {
         if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
         auto handler = conn->getHandler();
@@ -521,7 +522,7 @@ void MinecraftServer::onPlayerLeft(PlayHandler& leftHandler) {
     // Broadcast DestroyEntities + PlayerListItem(offline) to all remaining players
     std::vector<int32_t> destroyIds = { leftHandler.getEntityId() };
 
-    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
     for (auto& conn : connections_) {
         if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
         auto handler = conn->getHandler();
@@ -554,7 +555,7 @@ void MinecraftServer::broadcastPlayerPosition(PlayHandler& movedHandler) {
     bool forceTeleport = (dx < -128 || dx > 127 || dy < -128 || dy > 127 || dz < -128 || dz > 127)
                          || (movedHandler.ticksSinceLastTeleport_++ >= 400);
 
-    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
     for (auto& conn : connections_) {
         if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
         auto handler = conn->getHandler();
@@ -596,7 +597,7 @@ void MinecraftServer::broadcastPlayerPosition(PlayHandler& movedHandler) {
 void MinecraftServer::broadcastSound(const std::string& soundName, double x, double y, double z,
                                       float volume, float pitch) {
     // Java reference: WorldServer.playSoundEffect() → sends S29PacketSoundEffect to all players
-    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
     for (auto& conn : connections_) {
         if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
         auto handler = conn->getHandler();
@@ -615,7 +616,7 @@ int64_t MinecraftServer::getWorldTime() const {
 void MinecraftServer::broadcastTimeUpdate() {
     int64_t age = getWorldAge();
     int64_t time = getWorldTime();
-    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
     for (auto& conn : connections_) {
         if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
         auto handler = conn->getHandler();
@@ -677,7 +678,7 @@ void MinecraftServer::setSignText(int32_t x, int32_t y, int32_t z,
     writeString(pkt, l3);
     writeString(pkt, l4);
 
-    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
     for (auto& conn : connections_) {
         if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
         auto copy = pkt; // copy for each connection
@@ -777,7 +778,7 @@ void MinecraftServer::broadcastParticle(const std::string& particleName,
     writeFloat(pkt, speed);
     writeInt(pkt, count);
 
-    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
     for (auto& conn : connections_) {
         if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
         auto copy = pkt;
@@ -813,7 +814,7 @@ void MinecraftServer::broadcastEffect(int32_t effectId, int32_t x, int32_t y, in
     writeInt(pkt, data);
     pkt.push_back(disableRelativeVolume ? 1 : 0);
 
-    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
     for (auto& conn : connections_) {
         if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
         auto copy = pkt;
@@ -930,7 +931,7 @@ void MinecraftServer::broadcastScoreboardObjective(const std::string& objName,
                                                     const std::string& displayName,
                                                     int8_t mode) {
     auto pkt = buildS3B(objName, displayName, mode);
-    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
     for (auto& conn : connections_) {
         if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
         auto copy = pkt;
@@ -947,7 +948,7 @@ void MinecraftServer::broadcastUpdateScore(const std::string& playerName,
     } else {
         pkt = buildS3CRemove(playerName);
     }
-    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
     for (auto& conn : connections_) {
         if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
         auto copy = pkt;
@@ -957,7 +958,7 @@ void MinecraftServer::broadcastUpdateScore(const std::string& playerName,
 
 void MinecraftServer::broadcastRemoveScore(const std::string& playerName) {
     auto pkt = buildS3CRemove(playerName);
-    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
     for (auto& conn : connections_) {
         if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
         auto copy = pkt;
@@ -967,7 +968,7 @@ void MinecraftServer::broadcastRemoveScore(const std::string& playerName) {
 
 void MinecraftServer::broadcastDisplayScoreboard(int8_t position, const std::string& objName) {
     auto pkt = buildS3D(position, objName);
-    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
     for (auto& conn : connections_) {
         if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
         auto copy = pkt;
@@ -993,7 +994,7 @@ void MinecraftServer::broadcastTeams(const ScorePlayerTeam& team, int8_t mode,
                          static_cast<int8_t>(team.getFriendlyFlags()),
                          playerList);
 
-    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
     for (auto& conn : connections_) {
         if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
         auto copy = pkt;
@@ -1098,7 +1099,7 @@ void MinecraftServer::tickMobSpawners() {
     // Collect player positions for range check
     std::vector<std::tuple<double, double, double>> playerPositions;
     {
-        std::lock_guard<std::mutex> lock(connectionsMutex_);
+        std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
         for (auto& conn : connections_) {
             if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
             auto handler = conn->getHandler();
@@ -1571,7 +1572,7 @@ void MinecraftServer::createExplosion(double x, double y, double z, float power,
     std::map<int32_t, PlayerKnockback> playerKnockbacks; // entityId → velocity
 
     {
-        std::lock_guard<std::mutex> lock(connectionsMutex_);
+        std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
         for (auto& conn : connections_) {
             if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
             auto handler = conn->getHandler();
@@ -1712,7 +1713,7 @@ void MinecraftServer::createExplosion(double x, double y, double z, float power,
 
     // Phase 4: Send S27 Explosion packet to all players
     {
-        std::lock_guard<std::mutex> lock(connectionsMutex_);
+        std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
         for (auto& conn : connections_) {
             if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
             auto handler = conn->getHandler();
@@ -2221,7 +2222,7 @@ int32_t MinecraftServer::spawnItemDrop(double x, double y, double z,
 
     // Broadcast spawn to all players
     {
-        std::lock_guard<std::mutex> lock(connectionsMutex_);
+        std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
         for (auto& conn : connections_) {
             if (conn->isConnected() && conn->getState() == ConnectionState::Play) {
                 auto handler = conn->getHandler();
@@ -2282,7 +2283,7 @@ int32_t MinecraftServer::spawnItemDropStack(double x, double y, double z, const 
 
     // Broadcast spawn to all players
     {
-        std::lock_guard<std::mutex> lock(connectionsMutex_);
+        std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
         for (auto& conn : connections_) {
             if (conn->isConnected() && conn->getState() == ConnectionState::Play) {
                 auto handler = conn->getHandler();
@@ -2330,11 +2331,51 @@ void MinecraftServer::tickItemEntities() {
         e.posY += e.motionY;
         e.posZ += e.motionZ;
 
-        // Simple ground check: don't go below Y=0
-        if (e.posY < 0.5) {
-            e.posY = 0.5;
-            e.onGround = true;
-            e.motionY = 0;
+        // Block collision: check if item has moved into a solid block
+        // Java: EntityItem uses full AABB collision, we simplify to column check
+        {
+            int32_t bx = static_cast<int32_t>(std::floor(e.posX));
+            int32_t by = static_cast<int32_t>(std::floor(e.posY));
+            int32_t bz = static_cast<int32_t>(std::floor(e.posZ));
+
+            // Check if the block at the item's feet is solid
+            int32_t blockBelow = getBlockIdInWorld(bx, by, bz);
+            if (blockBelow != 0 && blockBelow != 8 && blockBelow != 9 &&   // not air/water
+                blockBelow != 10 && blockBelow != 11 &&                      // not lava
+                blockBelow != 31 && blockBelow != 37 && blockBelow != 38 &&  // not tallgrass/flowers
+                blockBelow != 6 && blockBelow != 32 && blockBelow != 106) {  // not saplings/deadbush/vines
+                // Item is inside a solid block — push up to top
+                e.posY = static_cast<double>(by + 1) + 0.01;
+                e.onGround = true;
+                e.motionY = 0;
+            } else {
+                // Check if block below feet is solid (for landing on top of blocks)
+                int32_t blockUnder = getBlockIdInWorld(bx, by - 1, bz);
+                if (e.motionY <= 0 && by >= 0 &&
+                    blockUnder != 0 && blockUnder != 8 && blockUnder != 9 &&
+                    blockUnder != 10 && blockUnder != 11 &&
+                    blockUnder != 31 && blockUnder != 37 && blockUnder != 38 &&
+                    blockUnder != 6 && blockUnder != 32 && blockUnder != 106) {
+                    // Landing on top of a solid block
+                    double blockTop = static_cast<double>(by);
+                    if (e.posY <= blockTop + 0.01) {
+                        e.posY = blockTop + 0.01;
+                        e.onGround = true;
+                        e.motionY = 0;
+                    } else {
+                        e.onGround = false;
+                    }
+                } else {
+                    e.onGround = false;
+                }
+            }
+
+            // Final safety: don't fall below Y=0
+            if (e.posY < 0.5) {
+                e.posY = 0.5;
+                e.onGround = true;
+                e.motionY = 0;
+            }
         }
 
         if (result.shouldDie) {
@@ -2345,7 +2386,7 @@ void MinecraftServer::tickItemEntities() {
 
         // Check for player pickup
         if (e.delayBeforeCanPickup == 0) {
-            std::lock_guard<std::mutex> connLock(connectionsMutex_);
+            std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
             for (auto& conn : connections_) {
                 if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
                 auto handler = conn->getHandler();
@@ -2387,7 +2428,7 @@ void MinecraftServer::tickItemEntities() {
 
     // Broadcast destroy for dead entities
     if (!deadEntityIds.empty()) {
-        std::lock_guard<std::mutex> connLock(connectionsMutex_);
+        std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
         for (auto& conn : connections_) {
             if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
             auto handler = conn->getHandler();
@@ -2413,7 +2454,7 @@ void MinecraftServer::tickItemEntities() {
 
 void MinecraftServer::broadcastEntityEvent(int32_t entityId, int8_t status) {
     // Java reference: WorldServer.setEntityState() → S1APacketEntityStatus
-    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
     for (auto& conn : connections_) {
         if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
         auto handler = conn->getHandler();
@@ -2426,7 +2467,7 @@ void MinecraftServer::broadcastEntityEvent(int32_t entityId, int8_t status) {
 
 void MinecraftServer::broadcastAttachEntity(int32_t leashId, int32_t riderId, int32_t vehicleId) {
     // S1B AttachEntity — broadcast to all players
-    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
     for (auto& conn : connections_) {
         if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
         auto handler = conn->getHandler();
@@ -2441,7 +2482,7 @@ void MinecraftServer::broadcastAnimation(int32_t entityId, uint8_t animationType
     // Java reference: WorldServer entity.worldObj.setEntityState() for animation
     // Broadcasts S0B Animation to all players except the source entity
     auto pkt = PacketBuilder::animation(entityId, animationType);
-    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
     for (auto& conn : connections_) {
         if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
         auto handler = conn->getHandler();
@@ -2455,7 +2496,7 @@ void MinecraftServer::broadcastEntityMetadataFlags(int32_t entityId, uint8_t fla
     // Java reference: EntityTrackerEntry.func_151261_b() → S1CPacketEntityMetadata
     // Broadcasts entity metadata flags (sneaking, sprinting) to all players except the source
     auto pkt = PacketBuilder::entityMetadataFlags(entityId, flags);
-    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
     for (auto& conn : connections_) {
         if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
         auto handler = conn->getHandler();
@@ -2476,7 +2517,7 @@ void MinecraftServer::broadcastEquipment(PlayHandler& handler, int16_t equipSlot
         item = handler.getArmorItem(equipSlot);
     }
 
-    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
     for (auto& conn : connections_) {
         if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
         auto h = conn->getHandler();
@@ -2493,7 +2534,7 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
     Connection* targetConn = nullptr;
 
     {
-        std::lock_guard<std::mutex> lock(connectionsMutex_);
+        std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
         for (auto& conn : connections_) {
             if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
             auto handler = conn->getHandler();
@@ -2538,7 +2579,7 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
 
                     // Broadcast S13 DestroyEntities
                     std::vector<int32_t> destroyIds = { cart.entityId };
-                    std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                    std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                     for (auto& conn : connections_) {
                         if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
                         auto handler = conn->getHandler();
@@ -2581,7 +2622,7 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
                 if (boat.isDead) {
                     // Dismount rider + broadcast destroy — single lock
                     std::vector<int32_t> destroyIds = { boat.entityId };
-                    std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                    std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                     for (auto& conn : connections_) {
                         if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
                         auto handler = conn->getHandler();
@@ -2708,7 +2749,7 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
                     mob.posZ = newZ;
                     broadcastSound("mob.endermen.portal", mob.posX, mob.posY, mob.posZ, 1.0f, 1.0f);
                     {
-                        std::lock_guard<std::mutex> cl(connectionsMutex_);
+                        std::lock_guard<std::recursive_mutex> cl(connectionsMutex_);
                         for (auto& c : connections_) {
                             if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
                             auto h = c->getHandler();
@@ -2816,7 +2857,7 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
 
                 // Destroy entity
                 {
-                    std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                    std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                     std::vector<int32_t> dead = {targetEntityId};
                     for (auto& c : connections_) {
                         if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
@@ -2933,7 +2974,7 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
                             // Dismount rider if pig was being ridden
                             if (mob.riderEntityId >= 0) {
                                 broadcastAttachEntity(0, mob.riderEntityId, -1);
-                                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                                std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                                 for (auto& c : connections_) {
                                     if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
                                     auto h = c->getHandler();
@@ -2985,7 +3026,7 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
                             // Dismount rider if horse was being ridden
                             if (mob.riderEntityId >= 0) {
                                 broadcastAttachEntity(0, mob.riderEntityId, -1);
-                                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                                std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                                 for (auto& c : connections_) {
                                     if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
                                     auto h = c->getHandler();
@@ -3214,7 +3255,7 @@ void MinecraftServer::handleEntityInteract(PlayHandler& player, Connection& conn
                 {
                     uint8_t dw16 = static_cast<uint8_t>((mob.fleeceColor & 0x0F) | 0x10);
                     auto metaPkt = PacketBuilder::entityMetadataByte(mob.entityId, 16, dw16);
-                    std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                    std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                     for (auto& c : connections_) {
                         if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
                         c->sendPacket(metaPkt);
@@ -3234,7 +3275,7 @@ void MinecraftServer::handleEntityInteract(PlayHandler& player, Connection& conn
 
                 // Broadcast destroy mooshroom
                 {
-                    std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                    std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                     for (auto& c : connections_) {
                         if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
                         auto handler = c->getHandler();
@@ -3338,7 +3379,7 @@ void MinecraftServer::handleEntityInteract(PlayHandler& player, Connection& conn
             // S1C EntityMetadata — DataWatcher byte 16 = 1 (saddled)
             {
                 auto metaPkt = PacketBuilder::entityMetadataByte(mob.entityId, 16, 1);
-                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                 for (auto& c : connections_) {
                     if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
                     c->sendPacket(metaPkt);
@@ -3378,7 +3419,7 @@ void MinecraftServer::handleEntityInteract(PlayHandler& player, Connection& conn
                 uint8_t dw16 = static_cast<uint8_t>(
                     (mob.fleeceColor & 0x0F) | (mob.isSheared ? 0x10 : 0x00));
                 auto metaPkt = PacketBuilder::entityMetadataByte(mob.entityId, 16, dw16);
-                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                 for (auto& c : connections_) {
                     if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
                     c->sendPacket(metaPkt);
@@ -3404,7 +3445,7 @@ void MinecraftServer::handleEntityInteract(PlayHandler& player, Connection& conn
                 if (w.isAngry)   dw16 |= 0x02;
                 if (w.isTamed)   dw16 |= 0x04;
                 auto metaPkt = PacketBuilder::entityMetadataByte(w.entityId, 16, dw16);
-                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                 for (auto& c : connections_) {
                     if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
                     c->sendPacket(metaPkt);
@@ -3446,7 +3487,7 @@ void MinecraftServer::handleEntityInteract(PlayHandler& player, Connection& conn
                     // Broadcast updated health — DW 18 float
                     {
                         auto metaPkt = PacketBuilder::entityMetadataFloat(mob.entityId, 18, mob.health);
-                        std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                        std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                         for (auto& c : connections_) {
                             if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
                             c->sendPacket(metaPkt);
@@ -3469,7 +3510,7 @@ void MinecraftServer::handleEntityInteract(PlayHandler& player, Connection& conn
                         {
                             auto metaPkt = PacketBuilder::entityMetadataByte(
                                 mob.entityId, 20, static_cast<uint8_t>(mob.collarColor & 0x0F));
-                            std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                            std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                             for (auto& c : connections_) {
                                 if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
                                 c->sendPacket(metaPkt);
@@ -3512,7 +3553,7 @@ void MinecraftServer::handleEntityInteract(PlayHandler& player, Connection& conn
                         // Broadcast updated health — DW 18
                         {
                             auto metaPkt = PacketBuilder::entityMetadataFloat(mob.entityId, 18, mob.health);
-                            std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                            std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                             for (auto& c : connections_) {
                                 if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
                                 c->sendPacket(metaPkt);
@@ -3549,7 +3590,7 @@ void MinecraftServer::handleEntityInteract(PlayHandler& player, Connection& conn
                 if (o.isSitting) dw16 |= 0x01;
                 if (o.isTamed)   dw16 |= 0x04;
                 auto metaPkt = PacketBuilder::entityMetadataByte(o.entityId, 16, dw16);
-                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                 for (auto& c : connections_) {
                     if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
                     c->sendPacket(metaPkt);
@@ -3593,7 +3634,7 @@ void MinecraftServer::handleEntityInteract(PlayHandler& player, Connection& conn
                             {
                                 auto metaPkt = PacketBuilder::entityMetadataByte(
                                     mob.entityId, 18, static_cast<uint8_t>(mob.catSkinType));
-                                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                                std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                                 for (auto& c : connections_) {
                                     if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
                                     c->sendPacket(metaPkt);
@@ -3633,7 +3674,7 @@ void MinecraftServer::handleEntityInteract(PlayHandler& player, Connection& conn
                 if (h.isHorseSaddled) dw16val |= 4;
                 if (h.isHorseChested) dw16val |= 8;
                 auto metaPkt = PacketBuilder::entityMetadataInt(h.entityId, 16, dw16val);
-                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                 for (auto& c : connections_) {
                     if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
                     c->sendPacket(metaPkt);
@@ -3643,7 +3684,7 @@ void MinecraftServer::handleEntityInteract(PlayHandler& player, Connection& conn
             // Helper: broadcast horse DW 22 (armor index)
             auto broadcastHorseDW22 = [&](SpawnedMob& h) {
                 auto metaPkt = PacketBuilder::entityMetadataInt(h.entityId, 22, h.horseArmorIndex);
-                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                 for (auto& c : connections_) {
                     if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
                     c->sendPacket(metaPkt);
@@ -3902,7 +3943,7 @@ void MinecraftServer::handleEntityInteract(PlayHandler& player, Connection& conn
                 player.setRidingEntityId(-1);
 
                 // S1B AttachEntity — detach (vehicleId = -1)
-                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                 for (auto& c : connections_) {
                     if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
                     auto h = c->getHandler();
@@ -3917,7 +3958,7 @@ void MinecraftServer::handleEntityInteract(PlayHandler& player, Connection& conn
                 player.setRidingEntityId(cart.entityId);
 
                 // S1B AttachEntity — attach (vehicleId = cart entityId)
-                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                 for (auto& c : connections_) {
                     if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
                     auto h = c->getHandler();
@@ -3942,7 +3983,7 @@ void MinecraftServer::handleEntityInteract(PlayHandler& player, Connection& conn
                 boat.riderEntityId = -1;
                 player.setRidingEntityId(-1);
 
-                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                 for (auto& c : connections_) {
                     if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
                     auto h = c->getHandler();
@@ -3955,7 +3996,7 @@ void MinecraftServer::handleEntityInteract(PlayHandler& player, Connection& conn
                 boat.riderEntityId = player.getEntityId();
                 player.setRidingEntityId(boat.entityId);
 
-                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                 for (auto& c : connections_) {
                     if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
                     auto h = c->getHandler();
@@ -4003,7 +4044,7 @@ bool MinecraftServer::boostRiddenPig(int32_t riderEntityId) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 void MinecraftServer::teleportPlayer(const std::string& playerName, double x, double y, double z) {
-    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
     for (auto& conn : connections_) {
         if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
         auto handler = conn->getHandler();
@@ -4011,6 +4052,7 @@ void MinecraftServer::teleportPlayer(const std::string& playerName, double x, do
         if (!ph || ph->getPlayerName() != playerName) continue;
 
         ph->setPlayerPosition(x, y, z);
+        ph->resetFallDistance(); // Prevent phantom fall damage after teleport
         ph->sendPlayerPosAndLook(*conn, x, y, z, ph->getPlayerYaw(), ph->getPlayerPitch());
         // Broadcast to others
         for (auto& oc : connections_) {
@@ -4026,7 +4068,7 @@ void MinecraftServer::teleportPlayer(const std::string& playerName, double x, do
 
 void MinecraftServer::setWorldTime(int64_t time) {
     if (!worlds_.empty()) worlds_[0]->setWorldTime(time);
-    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
     for (auto& conn : connections_) {
         if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
         auto handler = conn->getHandler();
@@ -4044,7 +4086,7 @@ void MinecraftServer::addWorldTime(int64_t amount) {
         worlds_[0]->setWorldTime(worlds_[0]->getWorldTime() + amount);
         newTime = worlds_[0]->getWorldTime();
     }
-    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
     for (auto& conn : connections_) {
         if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
         auto handler = conn->getHandler();
@@ -4057,7 +4099,7 @@ void MinecraftServer::addWorldTime(int64_t amount) {
 }
 
 void MinecraftServer::killPlayer(const std::string& playerName) {
-    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
     for (auto& conn : connections_) {
         if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
         auto handler = conn->getHandler();
@@ -4072,7 +4114,7 @@ void MinecraftServer::killPlayer(const std::string& playerName) {
 }
 
 void MinecraftServer::setPlayerGameMode(const std::string& playerName, int32_t gameMode) {
-    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
     for (auto& conn : connections_) {
         if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
         auto handler = conn->getHandler();
@@ -4085,7 +4127,7 @@ void MinecraftServer::setPlayerGameMode(const std::string& playerName, int32_t g
 }
 
 void MinecraftServer::addPlayerLevels(const std::string& playerName, int32_t levels) {
-    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
     for (auto& conn : connections_) {
         if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
         auto handler = conn->getHandler();
@@ -4098,7 +4140,7 @@ void MinecraftServer::addPlayerLevels(const std::string& playerName, int32_t lev
 }
 
 void MinecraftServer::addPlayerExperience(const std::string& playerName, int32_t amount) {
-    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
     for (auto& conn : connections_) {
         if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
         auto handler = conn->getHandler();
@@ -4111,7 +4153,7 @@ void MinecraftServer::addPlayerExperience(const std::string& playerName, int32_t
 }
 
 void MinecraftServer::enchantPlayerItem(const std::string& playerName, int32_t enchId, int32_t level) {
-    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
     for (auto& conn : connections_) {
         if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
         auto handler = conn->getHandler();
@@ -4124,7 +4166,7 @@ void MinecraftServer::enchantPlayerItem(const std::string& playerName, int32_t e
 }
 
 int32_t MinecraftServer::clearPlayerInventory(const std::string& playerName, int32_t itemId, int32_t damage) {
-    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
     for (auto& conn : connections_) {
         if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
         auto handler = conn->getHandler();
@@ -4139,7 +4181,7 @@ int32_t MinecraftServer::clearPlayerInventory(const std::string& playerName, int
 
 void MinecraftServer::setPlayerSpawnPoint(const std::string& playerName, int32_t x, int32_t y, int32_t z) {
     // Send S05 SpawnPosition update to the target player
-    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
     for (auto& conn : connections_) {
         if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
         auto handler = conn->getHandler();
@@ -4171,7 +4213,7 @@ void MinecraftServer::setPlayerSpawnPoint(const std::string& playerName, int32_t
 }
 
 std::vector<std::string> MinecraftServer::getOnlinePlayerNames() const {
-    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
     std::vector<std::string> names;
     for (auto& conn : connections_) {
         if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
@@ -4183,7 +4225,7 @@ std::vector<std::string> MinecraftServer::getOnlinePlayerNames() const {
 }
 
 std::optional<PlayerPosition> MinecraftServer::getPlayerPosition(const std::string& playerName) const {
-    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
     for (auto& conn : connections_) {
         if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
         auto handler = conn->getHandler();
@@ -4197,7 +4239,7 @@ std::optional<PlayerPosition> MinecraftServer::getPlayerPosition(const std::stri
 
 void MinecraftServer::givePlayerItem(const std::string& playerName, int32_t itemId, int32_t amount, int32_t damage) {
     // Give item by sending S2F SetSlot to the first empty hotbar/inventory slot
-    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
     for (auto& conn : connections_) {
         if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
         auto handler = conn->getHandler();
@@ -4212,7 +4254,7 @@ void MinecraftServer::givePlayerItem(const std::string& playerName, int32_t item
 }
 
 void MinecraftServer::sendPrivateMessage(const std::string& playerName, const std::string& message) {
-    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
     for (auto& conn : connections_) {
         if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
         auto handler = conn->getHandler();
@@ -4224,7 +4266,7 @@ void MinecraftServer::sendPrivateMessage(const std::string& playerName, const st
 }
 
 void MinecraftServer::kickPlayer(const std::string& playerName, const std::string& reason) {
-    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
     for (auto& conn : connections_) {
         if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
         auto handler = conn->getHandler();
@@ -5465,7 +5507,7 @@ void MinecraftServer::tripwireHookUpdate(int32_t hookX, int32_t hookY, int32_t h
             // Java: func_150140_e() — check if any entity intersects this wire block
             // Check all connected players + mobs
             {
-                std::lock_guard<std::mutex> lock(connectionsMutex_);
+                std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
                 for (auto& conn : connections_) {
                     if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
                     auto handler = conn->getHandler();
@@ -5693,7 +5735,7 @@ void MinecraftServer::tickScheduledBlocks() {
                     double railMaxZ = railMinZ + 1.0;
                     double railMinY = static_cast<double>(tick.y);
                     double railMaxY = railMinY + 0.625; // Rail AABB height
-                    std::lock_guard<std::mutex> lock(connectionsMutex_);
+                    std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
                     for (auto& conn : connections_) {
                         if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
                         auto handler = conn->getHandler();
@@ -6023,7 +6065,7 @@ int32_t MinecraftServer::summonMob(uint8_t mobType, double x, double y, double z
     mob.lastSentPosY = static_cast<int32_t>(std::floor(y * 32.0));
     mob.lastSentPosZ = static_cast<int32_t>(std::floor(z * 32.0));
     {
-        std::lock_guard<std::mutex> lock(connectionsMutex_);
+        std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
         for (auto& conn : connections_) {
             if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
             auto handler = conn->getHandler();
@@ -6128,7 +6170,7 @@ void MinecraftServer::setWeather(int32_t mode, int32_t durationTicks) {
 
     // Broadcast immediately to all players
     {
-        std::lock_guard<std::mutex> lock(connectionsMutex_);
+        std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
         for (auto& conn : connections_) {
             if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
             auto handler = conn->getHandler();
@@ -6152,7 +6194,7 @@ void MinecraftServer::setWeather(int32_t mode, int32_t durationTicks) {
 
 void MinecraftServer::applyPlayerPotionEffect(const std::string& playerName, int32_t effectId,
                                                int32_t durationTicks, int32_t amplifier) {
-    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
     for (auto& conn : connections_) {
         if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
         auto handler = conn->getHandler();
@@ -6165,7 +6207,7 @@ void MinecraftServer::applyPlayerPotionEffect(const std::string& playerName, int
 }
 
 void MinecraftServer::clearPlayerPotionEffects(const std::string& playerName) {
-    std::lock_guard<std::mutex> lock(connectionsMutex_);
+    std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
     for (auto& conn : connections_) {
         if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
         auto handler = conn->getHandler();
@@ -6200,7 +6242,7 @@ void MinecraftServer::spawnNaturalMobs() {
     static thread_local std::mt19937 rng(std::random_device{}());
     PlayHandler* targetPlayer = nullptr;
     {
-        std::lock_guard<std::mutex> lock(connectionsMutex_);
+        std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
         std::vector<PlayHandler*> players;
         for (auto& conn : connections_) {
             if (conn->isConnected() && conn->getState() == ConnectionState::Play) {
@@ -6273,7 +6315,7 @@ void MinecraftServer::spawnNaturalMobs() {
     mob.lastSentPosZ = static_cast<int32_t>(std::floor(spawnZ * 32.0));
     // Broadcast S0F SpawnMob to all players
     {
-        std::lock_guard<std::mutex> lock(connectionsMutex_);
+        std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
         for (auto& conn : connections_) {
             if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
             auto handler = conn->getHandler();
@@ -6314,7 +6356,7 @@ void MinecraftServer::spawnPassiveMobs() {
     static thread_local std::mt19937 rng(std::random_device{}());
     PlayHandler* targetPlayer = nullptr;
     {
-        std::lock_guard<std::mutex> lock(connectionsMutex_);
+        std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
         std::vector<PlayHandler*> players;
         for (auto& conn : connections_) {
             if (conn->isConnected() && conn->getState() == ConnectionState::Play) {
@@ -6426,7 +6468,7 @@ void MinecraftServer::spawnPassiveMobs() {
 
     // Broadcast S0F SpawnMob to all players
     {
-        std::lock_guard<std::mutex> lock(connectionsMutex_);
+        std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
         for (auto& conn : connections_) {
             if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
             auto handler = conn->getHandler();
@@ -6471,7 +6513,7 @@ void MinecraftServer::tickMobs() {
             // Check distance to nearest player
             double nearestDistSq = 1e9;
             {
-                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                 for (auto& conn : connections_) {
                     if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
                     auto handler = conn->getHandler();
@@ -6586,7 +6628,7 @@ void MinecraftServer::tickMobs() {
                             mob.isSheared = false;
                             uint8_t dw16 = static_cast<uint8_t>(mob.fleeceColor & 0x0F);
                             auto metaPkt = PacketBuilder::entityMetadataByte(mob.entityId, 16, dw16);
-                            std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                            std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                             for (auto& c : connections_) {
                                 if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
                                 c->sendPacket(metaPkt);
@@ -6692,7 +6734,7 @@ void MinecraftServer::tickMobs() {
                                 // XP orbs — Java: 1-7 XP (give to nearest player)
                                 int32_t xpAmount = 1 + (rand() % 7);
                                 {
-                                    std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                                    std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                                     PlayHandler* nearest = nullptr;
                                     double nearestDistSq = 64.0;  // 8 blocks
                                     for (auto& c : connections_) {
@@ -6737,7 +6779,7 @@ void MinecraftServer::tickMobs() {
                 PlayHandler* rider = nullptr;
                 Connection* riderConn = nullptr;
                 {
-                    std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                    std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                     for (auto& c : connections_) {
                         if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
                         auto handler = c->getHandler();
@@ -6871,7 +6913,7 @@ void MinecraftServer::tickMobs() {
 
                 // Broadcast position update for ridden pig
                 {
-                    std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                    std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                     for (auto& c : connections_) {
                         if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
                         auto handler = c->getHandler();
@@ -6895,7 +6937,7 @@ void MinecraftServer::tickMobs() {
                     // Sitting — don't move at all — Java: EntityAISit
                     // Still broadcast position (entity might have been pushed)
                     {
-                        std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                        std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                         for (auto& conn : connections_) {
                             if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
                             auto handler = conn->getHandler();
@@ -6911,7 +6953,7 @@ void MinecraftServer::tickMobs() {
                     // ─── Follow owner — Java: EntityAIFollowOwner ───
                     PlayHandler* owner = nullptr;
                     {
-                        std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                        std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                         for (auto& conn : connections_) {
                             if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
                             auto handler = conn->getHandler();
@@ -7031,7 +7073,7 @@ void MinecraftServer::tickMobs() {
 
                     // Broadcast position
                     {
-                        std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                        std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                         for (auto& conn : connections_) {
                             if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
                             auto handler = conn->getHandler();
@@ -7054,7 +7096,7 @@ void MinecraftServer::tickMobs() {
                 if (mob.isTamed && mob.isSitting) {
                     // Sitting — don't move — Java: EntityAISit
                     {
-                        std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                        std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                         for (auto& conn : connections_) {
                             if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
                             auto handler = conn->getHandler();
@@ -7070,7 +7112,7 @@ void MinecraftServer::tickMobs() {
                     // ─── Follow owner — Java: EntityAIFollowOwner (minDist=5, maxDist=10) ───
                     PlayHandler* owner = nullptr;
                     {
-                        std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                        std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                         for (auto& conn : connections_) {
                             if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
                             auto handler = conn->getHandler();
@@ -7143,7 +7185,7 @@ void MinecraftServer::tickMobs() {
 
                     // Broadcast position
                     {
-                        std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                        std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                         for (auto& conn : connections_) {
                             if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
                             auto handler = conn->getHandler();
@@ -7217,7 +7259,7 @@ void MinecraftServer::tickMobs() {
 
                 // Broadcast position update for passive mobs
                 {
-                    std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                    std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                     for (auto& conn : connections_) {
                         if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
                         auto handler = conn->getHandler();
@@ -7266,7 +7308,7 @@ void MinecraftServer::tickMobs() {
             PlayHandler* nearest = nullptr;
             double nearestDistSq = 256.0; // 16 blocks squared
             {
-                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                 for (auto& conn : connections_) {
                     if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
                     auto handler = conn->getHandler();
@@ -7342,7 +7384,7 @@ void MinecraftServer::tickMobs() {
 
                 // Broadcast S18 EntityTeleport to all players
                 {
-                    std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                    std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                     for (auto& conn : connections_) {
                         if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
                         auto handler = conn->getHandler();
@@ -7370,7 +7412,7 @@ void MinecraftServer::tickMobs() {
             PlayHandler* nearest = nullptr;
             double nearestDistSq = 36.0; // 6 blocks max
             {
-                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                 for (auto& conn : connections_) {
                     if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
                     auto handler = conn->getHandler();
@@ -7492,7 +7534,7 @@ void MinecraftServer::tickMobs() {
                     mob.posZ = newZ;
                     broadcastSound("mob.endermen.portal", mob.posX, mob.posY, mob.posZ, 1.0f, 1.0f);
                     {
-                        std::lock_guard<std::mutex> cl(connectionsMutex_);
+                        std::lock_guard<std::recursive_mutex> cl(connectionsMutex_);
                         for (auto& c : connections_) {
                             if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
                             auto h = c->getHandler();
@@ -7545,7 +7587,7 @@ void MinecraftServer::tickMobs() {
             PlayHandler* nearest = nullptr;
             double nearestDistSq = 9.0; // 3 blocks squared
             {
-                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                 for (auto& conn : connections_) {
                     if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
                     auto handler = conn->getHandler();
@@ -7593,7 +7635,7 @@ void MinecraftServer::tickMobs() {
             PlayHandler* nearest = nullptr;
             double nearestDistSq = 256.0;
             {
-                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                 for (auto& conn : connections_) {
                     if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
                     auto handler = conn->getHandler();
@@ -7646,7 +7688,7 @@ void MinecraftServer::tickMobs() {
             Connection* nearestConn = nullptr;
             double nearestDistSq = 256.0;
             {
-                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                 for (auto& conn : connections_) {
                     if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
                     auto handler = conn->getHandler();
@@ -7699,7 +7741,7 @@ void MinecraftServer::tickMobs() {
             Connection* nearestConn = nullptr;
             double nearestDistSq = 4096.0; // 64 blocks squared
             {
-                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                 for (auto& conn : connections_) {
                     if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
                     auto handler = conn->getHandler();
@@ -7743,7 +7785,7 @@ void MinecraftServer::tickMobs() {
             Connection* nearestConn = nullptr;
             double nearestDistSq = 900.0; // 30 blocks squared
             {
-                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                 for (auto& conn : connections_) {
                     if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
                     auto handler = conn->getHandler();
@@ -7859,7 +7901,7 @@ void MinecraftServer::tickMobs() {
             Connection* nearestConn = nullptr;
             double nearestDistSq = 100.0; // 10 blocks squared
             {
-                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                 for (auto& conn : connections_) {
                     if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
                     auto handler = conn->getHandler();
@@ -7938,7 +7980,7 @@ void MinecraftServer::tickMobs() {
             if (currentTick - mob.lastAttackTick < 20) continue;
 
             // Check proximity to all players
-            std::lock_guard<std::mutex> connLock(connectionsMutex_);
+            std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
             for (auto& conn : connections_) {
                 if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
                 auto handler = conn->getHandler();
@@ -8023,7 +8065,7 @@ void MinecraftServer::tickMobs() {
 
     // Broadcast destroy for despawned mobs
     if (!deadIds.empty()) {
-        std::lock_guard<std::mutex> lock(connectionsMutex_);
+        std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
         for (auto& conn : connections_) {
             if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
             auto handler = conn->getHandler();
@@ -8170,7 +8212,7 @@ void MinecraftServer::tickFurnaces() {
         bool dirty = furnace.tick();
         if (dirty) {
             // Send updates to any player who has this furnace open
-            std::lock_guard<std::mutex> connLock(connectionsMutex_);
+            std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
             for (auto& conn : connections_) {
                 if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
                 auto handler = conn->getHandler();
@@ -8240,7 +8282,7 @@ int32_t MinecraftServer::spawnArrow(double x, double y, double z,
     // Broadcast S0E SpawnObject to all players
     // Type 60 = arrow, data = shooter entity ID (>0 means velocity is included)
     {
-        std::lock_guard<std::mutex> connLock(connectionsMutex_);
+        std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
         for (auto& conn : connections_) {
             if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
             auto handler = conn->getHandler();
@@ -8282,7 +8324,7 @@ void MinecraftServer::tickArrows() {
             // Java: EntityArrow.onCollideWithPlayer() — pickup grounded arrows
             // Must be inGround, arrowShake==0, canBePickedUp > 0
             if (arrow.canBePickedUp > 0) {
-                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                 for (auto& conn : connections_) {
                     if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
                     auto handler = conn->getHandler();
@@ -8371,7 +8413,7 @@ void MinecraftServer::tickArrows() {
 
                 // Send S18 for final position
                 {
-                    std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                    std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                     for (auto& conn : connections_) {
                         if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
                         auto handler = conn->getHandler();
@@ -8426,7 +8468,7 @@ void MinecraftServer::tickArrows() {
                         mob.posZ = newZ;
                         broadcastSound("mob.endermen.portal", mob.posX, mob.posY, mob.posZ, 1.0f, 1.0f);
                         {
-                            std::lock_guard<std::mutex> cl(connectionsMutex_);
+                            std::lock_guard<std::recursive_mutex> cl(connectionsMutex_);
                             for (auto& c : connections_) {
                                 if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
                                 auto h = c->getHandler();
@@ -8560,7 +8602,7 @@ void MinecraftServer::tickArrows() {
 
                     // Destroy entity
                     {
-                        std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                        std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                         std::vector<int32_t> dead = {mob.entityId};
                         for (auto& c : connections_) {
                             if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
@@ -8574,7 +8616,7 @@ void MinecraftServer::tickArrows() {
                     // Looting from shooter's held item
                     int32_t lootingLevel = 0;
                     if (arrow.shooterEntityId >= 0) {
-                        std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                        std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                         for (auto& conn : connections_) {
                             if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
                             auto handler = conn->getHandler();
@@ -8686,7 +8728,7 @@ void MinecraftServer::tickArrows() {
         // ─── Player collision check ──────────────────────────────────
         // Java: scan for entities in expanded AABB along motion vector
         if (!arrow.isDead) {
-            std::lock_guard<std::mutex> connLock(connectionsMutex_);
+            std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
             for (auto& conn : connections_) {
                 if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
                 auto handler = conn->getHandler();
@@ -8796,7 +8838,7 @@ void MinecraftServer::tickArrows() {
 
         // Broadcast S18 EntityTeleport every tick for smooth flight
         {
-            std::lock_guard<std::mutex> connLock(connectionsMutex_);
+            std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
             for (auto& conn : connections_) {
                 if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
                 auto handler = conn->getHandler();
@@ -8827,7 +8869,7 @@ void MinecraftServer::tickArrows() {
         arrowEntities_.end());
 
     if (!deadIds.empty()) {
-        std::lock_guard<std::mutex> connLock(connectionsMutex_);
+        std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
         for (auto& conn : connections_) {
             if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
             auto handler = conn->getHandler();
@@ -8886,7 +8928,7 @@ int32_t MinecraftServer::spawnThrowable(ThrowableType type, double x, double y, 
 
     // Broadcast S0E SpawnObject to all players
     {
-        std::lock_guard<std::mutex> lock(connectionsMutex_);
+        std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
         for (auto& conn : connections_) {
             if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
             auto handler = conn->getHandler();
@@ -8958,7 +9000,7 @@ void MinecraftServer::tickThrowables() {
                             break;
                         case ThrowableType::EnderPearl: {
                             // Teleport thrower to impact point
-                            std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                            std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                             for (auto& conn : connections_) {
                                 if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
                                 auto handler = conn->getHandler();
@@ -8999,7 +9041,7 @@ void MinecraftServer::tickThrowables() {
             // ─── Entity (player) collision check ────────────────────
             // Java: EntityThrowable.onUpdate() — check entity AABB
             {
-                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                 for (auto& conn : connections_) {
                     if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
                     auto handler = conn->getHandler();
@@ -9113,7 +9155,7 @@ void MinecraftServer::tickThrowables() {
                             broadcastEntityEvent(mob.entityId, 3);
                             broadcastSound("mob.blaze.death", mob.posX, mob.posY, mob.posZ, 1.0f, 1.0f);
                             {
-                                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                                std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                                 std::vector<int32_t> dead = {mob.entityId};
                                 for (auto& c : connections_) {
                                     if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
@@ -9125,7 +9167,7 @@ void MinecraftServer::tickThrowables() {
                             // Blaze drops: blaze rod (369), XP 10
                             int32_t lootingLevel = 0;
                             if (t.throwerEntityId >= 0) {
-                                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                                std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                                 for (auto& conn : connections_) {
                                     if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
                                     auto handler = conn->getHandler();
@@ -9158,7 +9200,7 @@ void MinecraftServer::tickThrowables() {
                     }
                     case ThrowableType::EnderPearl: {
                         // Teleport thrower to mob hit position
-                        std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                        std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                         for (auto& conn : connections_) {
                             if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
                             auto handler = conn->getHandler();
@@ -9200,7 +9242,7 @@ void MinecraftServer::tickThrowables() {
 
             // Broadcast position update
             {
-                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                 for (auto& conn : connections_) {
                     if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
                     auto handler = conn->getHandler();
@@ -9220,7 +9262,7 @@ void MinecraftServer::tickThrowables() {
 
     // Broadcast destroy for dead throwables
     if (!deadIds.empty()) {
-        std::lock_guard<std::mutex> lock(connectionsMutex_);
+        std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
         for (auto& conn : connections_) {
             if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
             auto handler = conn->getHandler();
@@ -9242,7 +9284,7 @@ void MinecraftServer::tickRandomBlocks() {
     // Get player positions
     std::vector<std::pair<int, int>> playerChunks;
     {
-        std::lock_guard<std::mutex> lock(connectionsMutex_);
+        std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
         for (auto& conn : connections_) {
             if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
             auto handler = conn->getHandler();
@@ -9948,7 +9990,7 @@ int32_t MinecraftServer::spawnFishHook(double x, double y, double z,
     // Broadcast S0E SpawnObject — type 90 = fishing float, data = angler entity ID
     // Java: S0E objectType=90 for EntityFishHook, data=angler.getEntityId()
     {
-        std::lock_guard<std::mutex> lock(connectionsMutex_);
+        std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
         for (auto& conn : connections_) {
             if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
             auto handler = conn->getHandler();
@@ -9991,7 +10033,7 @@ void MinecraftServer::tickFishHooks() {
             // Java: if (angler.isDead || getCurrentEquippedItem != fishing_rod || dist > 1024) setDead
             bool anglerValid = false;
             {
-                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                 for (auto& conn : connections_) {
                     if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
                     auto handler = conn->getHandler();
@@ -10180,7 +10222,7 @@ void MinecraftServer::tickFishHooks() {
                     // Lure enchantment reduction applied in retractFishHook via angler lookup
                     // For simplicity, we apply Lure here if we can find it
                     {
-                        std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                        std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                         for (auto& conn : connections_) {
                             if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
                             auto handler = conn->getHandler();
@@ -10235,7 +10277,7 @@ void MinecraftServer::tickFishHooks() {
 
     // Broadcast S13 DestroyEntities for dead hooks
     if (!deadIds.empty()) {
-        std::lock_guard<std::mutex> lock(connectionsMutex_);
+        std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
         for (auto& conn : connections_) {
             if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
             auto handler = conn->getHandler();
@@ -10249,7 +10291,7 @@ void MinecraftServer::tickFishHooks() {
     // Broadcast position updates via S18 EntityTeleport
     {
         std::lock_guard<std::mutex> lock(fishHookEntitiesMutex_);
-        std::lock_guard<std::mutex> connLock(connectionsMutex_);
+        std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
         for (auto& h : fishHookEntities_) {
             if (h.isDead) continue;
             for (auto& conn : connections_) {
@@ -10296,7 +10338,7 @@ int32_t MinecraftServer::retractFishHook(int32_t anglerEntityId) {
         int32_t luckLevel = 0;
         int32_t lureLevel = 0;
         {
-            std::lock_guard<std::mutex> connLock(connectionsMutex_);
+            std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
             for (auto& conn : connections_) {
                 if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
                 auto handler = conn->getHandler();
@@ -10401,7 +10443,7 @@ int32_t MinecraftServer::retractFishHook(int32_t anglerEntityId) {
     hook->isDead = true;
     std::vector<int32_t> destroyIds = {hook->entityId};
     {
-        std::lock_guard<std::mutex> connLock(connectionsMutex_);
+        std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
         for (auto& conn : connections_) {
             if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
             auto handler = conn->getHandler();
@@ -10446,7 +10488,7 @@ int32_t MinecraftServer::spawnMinecart(int32_t type, double x, double y, double 
 
     // Broadcast S0E SpawnObject — type 10 = minecart, data = minecart subtype
     // Java: EntityTrackerEntry.func_151260_c → S0EPacketSpawnObject(entity, 10, EntityMinecart.minecartType)
-    std::lock_guard<std::mutex> connLock(connectionsMutex_);
+    std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
     for (auto& conn : connections_) {
         if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
         auto handler = conn->getHandler();
@@ -10507,7 +10549,7 @@ void MinecraftServer::tickMinecarts() {
             float riderYaw = 0;
             double riderForward = 0;
             if (hasRider) {
-                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                 for (auto& conn : connections_) {
                     if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
                     auto handler = conn->getHandler();
@@ -10552,7 +10594,7 @@ void MinecraftServer::tickMinecarts() {
             cart.lastSentPosY = newPY;
             cart.lastSentPosZ = newPZ;
 
-            std::lock_guard<std::mutex> connLock(connectionsMutex_);
+            std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
             for (auto& conn : connections_) {
                 if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
                 auto handler = conn->getHandler();
@@ -10568,7 +10610,7 @@ void MinecraftServer::tickMinecarts() {
 
     // Broadcast destroy for dead minecarts
     if (!destroyIds.empty()) {
-        std::lock_guard<std::mutex> connLock(connectionsMutex_);
+        std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
         for (auto& conn : connections_) {
             if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
             auto handler = conn->getHandler();
@@ -10604,7 +10646,7 @@ int32_t MinecraftServer::spawnLightning(double x, double y, double z) {
 
     // Broadcast S2C SpawnGlobalEntity — type 1 = lightning
     {
-        std::lock_guard<std::mutex> connLock(connectionsMutex_);
+        std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
         for (auto& conn : connections_) {
             if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
             auto handler = conn->getHandler();
@@ -10702,7 +10744,7 @@ void MinecraftServer::tickLightning() {
             bolt.logic.getDamageBounds(minX, minY, minZ, maxX, maxY, maxZ);
 
             // Damage nearby players — Java: 5 hearts (10 damage)
-            std::lock_guard<std::mutex> connLock(connectionsMutex_);
+            std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
             for (auto& conn : connections_) {
                 if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
                 auto handler = conn->getHandler();
@@ -10751,7 +10793,7 @@ void MinecraftServer::tickLightning() {
 
     // Broadcast destroy for dead bolts
     if (!destroyIds.empty()) {
-        std::lock_guard<std::mutex> connLock(connectionsMutex_);
+        std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
         for (auto& conn : connections_) {
             if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
             auto handler = conn->getHandler();
@@ -10795,7 +10837,7 @@ int32_t MinecraftServer::spawnBoat(double x, double y, double z, float yaw) {
 
     // Broadcast S0E SpawnObject — type 1 = boat
     // Java: EntityTrackerEntry → S0EPacketSpawnObject(entity, 1)
-    std::lock_guard<std::mutex> connLock(connectionsMutex_);
+    std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
     for (auto& conn : connections_) {
         if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
         auto handler = conn->getHandler();
@@ -10883,7 +10925,7 @@ void MinecraftServer::tickBoats() {
 
             // Find rider's PlayHandler to get steering input
             {
-                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                 for (auto& conn : connections_) {
                     if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
                     auto handler = conn->getHandler();
@@ -10963,7 +11005,7 @@ void MinecraftServer::tickBoats() {
 
             // Dismount rider
             if (boat.riderEntityId >= 0) {
-                std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                 for (auto& conn : connections_) {
                     if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
                     auto handler = conn->getHandler();
@@ -11022,7 +11064,7 @@ void MinecraftServer::tickBoats() {
             boat.lastSentPosZ = newPZ;
             boat.ticksSinceLastTeleport = 0;
 
-            std::lock_guard<std::mutex> connLock(connectionsMutex_);
+            std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
             for (auto& conn : connections_) {
                 if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
                 auto handler = conn->getHandler();
@@ -11037,7 +11079,7 @@ void MinecraftServer::tickBoats() {
 
     // Broadcast destroy for dead boats
     if (!destroyIds.empty()) {
-        std::lock_guard<std::mutex> connLock(connectionsMutex_);
+        std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
         for (auto& conn : connections_) {
             if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
             auto handler = conn->getHandler();
@@ -11109,7 +11151,7 @@ void MinecraftServer::spawnXPOrbs(double x, double y, double z, int32_t totalXp)
 
     // Broadcast S11 SpawnExpOrb to all players
     {
-        std::lock_guard<std::mutex> lock(connectionsMutex_);
+        std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
         for (auto& orb : newOrbs) {
             for (auto& conn : connections_) {
                 if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
@@ -11170,7 +11212,7 @@ void MinecraftServer::tickXPOrbs() {
         Connection* closestConn = nullptr;
 
         {
-            std::lock_guard<std::mutex> connLock(connectionsMutex_);
+            std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
             for (auto& conn : connections_) {
                 if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
                 auto handler = conn->getHandler();
@@ -11220,7 +11262,7 @@ void MinecraftServer::tickXPOrbs() {
 
                 // Send collect animation — Java: S0D CollectItem
                 {
-                    std::lock_guard<std::mutex> connLock(connectionsMutex_);
+                    std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
                     for (auto& conn : connections_) {
                         if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
                         auto handler = conn->getHandler();
@@ -11286,7 +11328,7 @@ void MinecraftServer::tickXPOrbs() {
 
         // ─── Broadcast position update (EntityTeleport) every 3 ticks ───
         if (orb.xpOrbAge % 3 == 0) {
-            std::lock_guard<std::mutex> connLock(connectionsMutex_);
+            std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
             for (auto& conn : connections_) {
                 if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
                 auto handler = conn->getHandler();
@@ -11301,7 +11343,7 @@ void MinecraftServer::tickXPOrbs() {
 
     // Broadcast destroy for dead orbs
     if (!destroyIds.empty()) {
-        std::lock_guard<std::mutex> connLock(connectionsMutex_);
+        std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
         for (auto& conn : connections_) {
             if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
             auto handler = conn->getHandler();

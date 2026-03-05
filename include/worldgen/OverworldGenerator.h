@@ -736,7 +736,7 @@ public:
                     if (blockId != 0) {
                         int sectionIdx = y >> 4;
                         if (!chunk->sections[sectionIdx]) {
-                            chunk->sections[sectionIdx] = std::make_unique<ChunkSection>(sectionIdx);
+                            chunk->sections[sectionIdx] = std::make_unique<ChunkSection>(sectionIdx << 4);
                         }
                         int localY = y & 0xF;
                         chunk->sections[sectionIdx]->setBlock(x, localY, z, Block::getBlockById(blockId));
@@ -765,6 +765,9 @@ public:
                 chunk->heightMap[z * 16 + x] = highest;
             }
         }
+
+        // Mark chunk as fully generated — Java: Chunk.isTerrainPopulated
+        chunk->isTerrainPopulated = true;
 
         return chunk;
     }

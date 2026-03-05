@@ -266,8 +266,6 @@ public:
                                 int32_t blockY = k * 8 + yi;
                                 int32_t index = (blockX * 16 + blockZ) * 256 + blockY;
 
-                                dZ += ddZ;
-
                                 if (dZ > 0.0) {
                                     blocksOut[index] = STONE;
                                 } else if (blockY < SEA_LEVEL) {
@@ -275,6 +273,8 @@ public:
                                 } else {
                                     blocksOut[index] = 0;  // Air
                                 }
+
+                                dZ += ddZ;
                             }
 
                             dX0 += ddX0;

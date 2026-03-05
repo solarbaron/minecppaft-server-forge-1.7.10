@@ -721,7 +721,7 @@ private:
     // ─── Networking ─────────────────────────────────────────────────────
     std::unique_ptr<TcpListener> listener_;
 
-    mutable std::mutex connectionsMutex_;
+    mutable std::recursive_mutex connectionsMutex_;
     std::vector<std::shared_ptr<Connection>> connections_;
 
     // ─── Worlds ──────────────────────────────────────────────────────────

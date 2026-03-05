@@ -505,6 +505,7 @@ public:
         playerX_ = x; playerY_ = y; playerZ_ = z;
     }
     void setGameMode(int32_t mode) { gameMode_ = mode; }
+    void resetFallDistance() { fallDistance_ = 0.0f; }
     int32_t getGameMode() const { return gameMode_; }
 
     /**

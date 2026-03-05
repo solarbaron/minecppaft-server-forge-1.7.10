@@ -1858,6 +1858,19 @@ void PlayHandler::handlePlayerPosition(const uint8_t* data, size_t length, Conne
         // Player is falling — accumulate distance
         fallDistance_ += static_cast<float>(-deltaY);
     }
+    // Reset fall distance in water or on ladder — Java: Entity.handleWaterMovement/isOnLadder
+    if (fallDistance_ > 0.0f && !server_.getWorlds().empty()) {
+        auto* wld = server_.getWorlds()[0].get();
+        int32_t bx = static_cast<int32_t>(std::floor(playerX_));
+        int32_t by = static_cast<int32_t>(std::floor(playerY_));
+        int32_t bz = static_cast<int32_t>(std::floor(playerZ_));
+        Block* feetBlock = wld->getBlock(bx, by, bz);
+        int32_t feetId = feetBlock ? Block::getIdFromBlock(feetBlock) : 0;
+        // Water (8, 9), ladder (65), vine (106)
+        if (feetId == 8 || feetId == 9 || feetId == 65 || feetId == 106) {
+            fallDistance_ = 0.0f;
+        }
+    }
     if (playerOnGround_ && fallDistance_ > 0.0f) {
         // Landed! Apply fall damage — Java: damage = ceil(fallDistance - 3.0)
         if (gameMode_ != 1 && !dead_) { // No fall damage in creative
@@ -1881,6 +1894,8 @@ void PlayHandler::handlePlayerPosition(const uint8_t* data, size_t length, Conne
                     dead_ = true;
                     server_.broadcastEntityEvent(entityId_, 3);
                     server_.broadcastChatMessage(playerName_ + " fell from a high place");
+                    fallDistance_ = 0.0f;
+                    return; // Stop processing — client shows death screen
                 }
             }
         }
@@ -1984,6 +1999,19 @@ void PlayHandler::handlePlayerPosAndLook(const uint8_t* data, size_t length, Con
     if (deltaY < 0.0) {
         fallDistance_ += static_cast<float>(-deltaY);
     }
+    // Reset fall distance in water or on ladder — Java: Entity.handleWaterMovement/isOnLadder
+    if (fallDistance_ > 0.0f && !server_.getWorlds().empty()) {
+        auto* wld = server_.getWorlds()[0].get();
+        int32_t bx = static_cast<int32_t>(std::floor(playerX_));
+        int32_t by = static_cast<int32_t>(std::floor(playerY_));
+        int32_t bz = static_cast<int32_t>(std::floor(playerZ_));
+        Block* feetBlock = wld->getBlock(bx, by, bz);
+        int32_t feetId = feetBlock ? Block::getIdFromBlock(feetBlock) : 0;
+        // Water (8, 9), ladder (65), vine (106)
+        if (feetId == 8 || feetId == 9 || feetId == 65 || feetId == 106) {
+            fallDistance_ = 0.0f;
+        }
+    }
     if (playerOnGround_ && fallDistance_ > 0.0f) {
         if (gameMode_ != 1 && !dead_) {
             int damage = static_cast<int>(std::ceil(fallDistance_ - 3.0f));
@@ -2004,6 +2032,8 @@ void PlayHandler::handlePlayerPosAndLook(const uint8_t* data, size_t length, Con
                     dead_ = true;
                     server_.broadcastEntityEvent(entityId_, 3);
                     server_.broadcastChatMessage(playerName_ + " fell from a high place");
+                    fallDistance_ = 0.0f;
+                    return; // Stop processing — client shows death screen
                 }
             }
         }
@@ -5000,18 +5030,14 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
         return;
     }
 
-    // Determine which block to place
-    // C08 slot format: Short itemId, Byte count, Short damage, [NBT...]
-    // Java reference: Packet.readItemStackFromBuffer
-    int32_t placeBlockId = 1; // stone fallback
+    // Determine which block to place from SERVER-SIDE inventory (not packet data)
+    // Java reference: NetHandlerPlayServer uses server-side held item, not client packet
+    int32_t placeBlockId = 0; // 0 = no valid block
     int16_t itemDamage = 0;
-    if (length >= 12) {
-        int16_t heldItemId = static_cast<int16_t>((data[10] << 8) | data[11]);
-        // Read count (byte 12) and damage (bytes 13-14) if available
-        if (heldItemId >= 0 && length >= 15) {
-            // byte 12 = count, bytes 13-14 = damage
-            itemDamage = static_cast<int16_t>((data[13] << 8) | data[14]);
-        }
+    auto heldStack = inventory_.getCurrentItem();
+    if (heldStack && !heldStack->isEmpty()) {
+        int32_t heldItemId = heldStack->getItemId();
+        itemDamage = static_cast<int16_t>(heldStack->getDamage());
         if (heldItemId >= 0 && heldItemId < 256) {
             // Direct block IDs (items 0-255 correspond to blocks)
             Block* heldBlock = Block::getBlockById(heldItemId);
@@ -5043,6 +5069,8 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
             }
         }
     }
+    // If no valid block to place, cancel
+    if (placeBlockId == 0) return;
 
     // ─── Chest placement restriction — prevent triple chests ─────────
     // Java: BlockChest.canPlaceBlockAt() + isDoubleChest()
@@ -7338,20 +7366,19 @@ void PlayHandler::handleClientStatus(const uint8_t* data, size_t length, Connect
         if (overworld) {
             spawnX = static_cast<double>(overworld->getSpawnX()) + 0.5;
             spawnZ = static_cast<double>(overworld->getSpawnZ()) + 0.5;
-            // Find safe Y — scan upward from spawn Y to find first non-solid position
-            // where both feet and head block are air/non-solid
-            int baseY = overworld->getSpawnY();
-            int safeY = baseY;
-            for (int y = baseY; y < 256; ++y) {
-                Block* feetB = overworld->getBlock(overworld->getSpawnX(), y, overworld->getSpawnZ());
-                Block* headB = overworld->getBlock(overworld->getSpawnX(), y + 1, overworld->getSpawnZ());
-                int feetId = feetB ? Block::getIdFromBlock(feetB) : 0;
-                int headId = headB ? Block::getIdFromBlock(headB) : 0;
-                if (feetId == 0 && headId == 0) {
-                    safeY = y;
+            // Find safe Y — scan downward from Y=255 to find highest solid block,
+            // then place the player on top (Java: WorldProvider.getSpawnPoint logic)
+            int safeY = 80; // fallback
+            int sx = overworld->getSpawnX();
+            int sz = overworld->getSpawnZ();
+            for (int y = 255; y >= 0; --y) {
+                Block* b = overworld->getBlock(sx, y, sz);
+                int bid = b ? Block::getIdFromBlock(b) : 0;
+                if (bid != 0) { // found a solid/liquid block
+                    // Place player one block above the solid block
+                    safeY = y + 1;
                     break;
                 }
-                safeY = y + 1; // keep going up
             }
             spawnY = static_cast<double>(safeY);
         }
@@ -8058,52 +8085,61 @@ void PlayHandler::tickFood(Connection& conn) {
                 airSupply_ = 300;
             }
 
-            // ─── Lava damage — Java: Entity.onEntityUpdate → setFire(15) + 4 dmg ───
-            // Fire Protection (damageType=1) reduces fire-type damage
+            // ─── Lava damage — Java: Entity.setOnFireFromLava() ───
+            // Java: attackEntityFrom(DamageSource.lava, 4.0f) + setFire(15)
+            // attackEntityFrom goes through hurtResistantTime; setFire is independent
             if (isInLava) {
-                float lavaDmg = 4.0f;
-                int32_t fireProt = getEnchantmentProtectionModifier(1);
-                if (fireProt > 0) {
-                    lavaDmg *= (1.0f - std::min(fireProt, 20) * 0.04f);
-                }
-                health_ -= lavaDmg;
-                if (health_ < 0.0f) health_ = 0.0f;
-                sendUpdateHealth(conn, health_, foodStats_.getFoodLevel(), foodStats_.getSaturationLevel());
-                server_.broadcastSound("game.player.hurt", playerX_, playerY_, playerZ_, 1.0f, 1.0f);
-                fireTicks_ = 300; // 15 seconds on fire (Java: setFire(15))
-                if (health_ <= 0.0f) {
-                    dead_ = true;
-                    server_.broadcastEntityEvent(entityId_, 3);
-                    server_.broadcastChatMessage(playerName_ + " tried to swim in lava");
+                fireTicks_ = 300; // 15 seconds on fire (Java: setFire(15)) — always applied
+                if (hurtResistantTime_ <= 0) {
+                    hurtResistantTime_ = 10;
+                    float lavaDmg = 4.0f;
+                    int32_t fireProt = getEnchantmentProtectionModifier(1);
+                    if (fireProt > 0) {
+                        lavaDmg *= (1.0f - std::min(fireProt, 20) * 0.04f);
+                    }
+                    health_ -= lavaDmg;
+                    if (health_ < 0.0f) health_ = 0.0f;
+                    sendUpdateHealth(conn, health_, foodStats_.getFoodLevel(), foodStats_.getSaturationLevel());
+                    server_.broadcastSound("game.player.hurt", playerX_, playerY_, playerZ_, 1.0f, 1.0f);
+                    if (health_ <= 0.0f) {
+                        dead_ = true;
+                        server_.broadcastEntityEvent(entityId_, 3);
+                        server_.broadcastChatMessage(playerName_ + " tried to swim in lava");
+                    }
                 }
                 if (dead_) goto envDamageEnd;
             }
 
             // ─── Fire block damage — Java: Entity.dealFireDamage(1) ───
-            // Fire Protection (damageType=1) reduces fire-type damage
+            // Java: attackEntityFrom(DamageSource.inFire, 1) — goes through hurtResistantTime
+            // Fire ignition (fireTicks_) is set independently via setFire(8)
             if (isInFire && !isInLava) {
-                float fireDmg = 1.0f;
-                int32_t fireProt = getEnchantmentProtectionModifier(1);
-                if (fireProt > 0) {
-                    fireDmg *= (1.0f - std::min(fireProt, 20) * 0.04f);
-                }
-                if (fireDmg > 0.01f) {
-                    health_ -= fireDmg;
-                    if (health_ < 0.0f) health_ = 0.0f;
-                    sendUpdateHealth(conn, health_, foodStats_.getFoodLevel(), foodStats_.getSaturationLevel());
-                }
-                fireTicks_ = std::max(fireTicks_, 160); // 8 seconds on fire
-                if (health_ <= 0.0f) {
-                    dead_ = true;
-                    server_.broadcastEntityEvent(entityId_, 3);
-                    server_.broadcastChatMessage(playerName_ + " went up in flames");
+                fireTicks_ = std::max(fireTicks_, 160); // 8 seconds on fire — always applied
+                if (hurtResistantTime_ <= 0) {
+                    hurtResistantTime_ = 10;
+                    float fireDmg = 1.0f;
+                    int32_t fireProt = getEnchantmentProtectionModifier(1);
+                    if (fireProt > 0) {
+                        fireDmg *= (1.0f - std::min(fireProt, 20) * 0.04f);
+                    }
+                    if (fireDmg > 0.01f) {
+                        health_ -= fireDmg;
+                        if (health_ < 0.0f) health_ = 0.0f;
+                        sendUpdateHealth(conn, health_, foodStats_.getFoodLevel(), foodStats_.getSaturationLevel());
+                    }
+                    if (health_ <= 0.0f) {
+                        dead_ = true;
+                        server_.broadcastEntityEvent(entityId_, 3);
+                        server_.broadcastChatMessage(playerName_ + " went up in flames");
+                    }
                 }
                 if (dead_) goto envDamageEnd;
             }
 
             // ─── Cactus damage — Java: BlockCactus.onEntityCollidedWithBlock ───
             // 1 damage when touching cactus (block 81)
-            if (feetBlockId == 81 || headBlockId == 81) {
+            if ((feetBlockId == 81 || headBlockId == 81) && hurtResistantTime_ <= 0) {
+                hurtResistantTime_ = 10;
                 health_ -= 1.0f;
                 if (health_ < 0.0f) health_ = 0.0f;
                 sendUpdateHealth(conn, health_, foodStats_.getFoodLevel(), foodStats_.getSaturationLevel());
@@ -8163,10 +8199,15 @@ void PlayHandler::tickFood(Connection& conn) {
                         isOpaqueFullCube = true;
                         break;
                 }
-                if (isOpaqueFullCube) {
+                if (isOpaqueFullCube && hurtResistantTime_ <= 0) {
+                    // Java: attackEntityFrom(DamageSource.inWall, 1.0f)
+                    // inWall bypasses armor but respects hurtResistantTime
+                    // maxHurtResistantTime = 20, damage gated at > half = 10 ticks
+                    hurtResistantTime_ = 10;
                     health_ -= 1.0f;
                     if (health_ < 0.0f) health_ = 0.0f;
                     sendUpdateHealth(conn, health_, foodStats_.getFoodLevel(), foodStats_.getSaturationLevel());
+                    server_.broadcastSound("game.player.hurt", playerX_, playerY_, playerZ_, 1.0f, 1.0f);
                     if (health_ <= 0.0f) {
                         dead_ = true;
                         server_.broadcastEntityEvent(entityId_, 3);
