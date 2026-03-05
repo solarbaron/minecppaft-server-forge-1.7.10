@@ -148,7 +148,7 @@ struct BiomeGenBase {
 // Java: BiomeGenBase static fields + biomeList[256]
 // ═══════════════════════════════════════════════════════════════════════════
 
-class BiomeRegistry {
+class BiomeGenRegistry {
 public:
     static constexpr int32_t MAX_BIOMES = 256;
 

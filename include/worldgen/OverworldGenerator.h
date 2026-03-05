@@ -11,7 +11,7 @@
  *   2. Generate biome data (simplified: plains everywhere for now)
  *   3. Compute 5×33×5 density field via noise
  *   4. Trilinear interpolation to 16×256×16 block array
- *   5. Surface replacement: grass/dirt/sand based on biome
+ *   5. Surface replacement: biome-specific topBlock/fillerBlock via BiomeRegistry
  *   6. Bedrock at y=0..4 (random), cave carving
  *
  * Thread safety: Each instance has its own noise state.
@@ -31,6 +31,7 @@
 #include "worldgen/MapGenVillage.h"
 #include "worldgen/WorldGenOre.h"
 #include "worldgen/WorldGenTrees.h"
+#include "worldgen/WorldChunkManager.h"
 
 #include <array>
 #include <cstring>
@@ -46,6 +47,9 @@ public:
         cfg.mapFeaturesEnabled = false;
         cfg.amplified = false;
         terrain_ = ChunkProviderGenerate(cfg);
+
+        // Initialize biome generation pipeline
+        chunkManager_.init(seed);
 
         // Initialize noise generators — Java: ChunkProviderGenerate constructor
         // Same order as Java: 7 NoiseGeneratorOctaves created from same RNG sequence
@@ -68,14 +72,21 @@ public:
         std::array<int32_t, 65536> blocks{};
         std::array<uint8_t, 65536> meta{};
 
-        // ── Step 1: Biome data (simplified: all plains) ──
-        // Java uses 10×10 biome grid for height blending
+        // ── Step 1: Biome data from GenLayer pipeline ──
+        // Java: WorldChunkManager.getBiomesForGeneration — 10×10 at 1:4 scale
+        auto biomeIds10x10 = chunkManager_.getBiomesForGeneration(
+            chunkX * 4 - 2, chunkZ * 4 - 2, 10, 10);
         std::array<ChunkProviderGenerate::BiomeData, 100> biomes10x10;
-        for (auto& b : biomes10x10) {
-            b.minHeight = 0.1f;   // Plains height
-            b.maxHeight = 0.3f;   // Plains variation
-            b.biomeId = 1;        // Plains biome ID
+        for (int32_t i = 0; i < 100; ++i) {
+            const auto* biome = BiomeGenRegistry::getBiome(biomeIds10x10[i]);
+            biomes10x10[i].minHeight = biome->minHeight;
+            biomes10x10[i].maxHeight = biome->maxHeight;
+            biomes10x10[i].biomeId = biome->biomeID;
         }
+
+        // Per-block biome IDs (16×16) for surface replacement, snow/ice, chunk biome array
+        auto blockBiomes = chunkManager_.getBiomeData(
+            chunkX * 16, chunkZ * 16, 16, 16);
 
         // ── Step 2: Generate noise for density field ──
         int32_t gridX = chunkX * 4;
@@ -118,19 +129,25 @@ public:
         // ── Step 4: Trilinear interpolation to 16×256×16 ──
         terrain_.interpolateBlocks(densityField.data(), blocks.data());
 
-        // ── Step 5: Surface replacement ──
-        replaceBlocksForBiome(chunkX, chunkZ, blocks.data(), meta.data());
+        // ── Step 5: Surface replacement (biome-aware) ──
+        replaceBlocksForBiome(chunkX, chunkZ, blocks.data(), meta.data(), blockBiomes);
 
         // ── Step 6: Cave generation ──
         // Java reference: ChunkProviderGenerate.provideChunk → caveGenerator.generate
         caveGen_.generate(seed_, chunkX, chunkZ, blocks.data(),
-            [](int32_t /*x*/, int32_t /*z*/) -> int32_t { return GRASS; });
+            [&blockBiomes](int32_t x, int32_t z) -> int32_t {
+                int32_t biomeId = blockBiomes[x * 16 + z];
+                return BiomeGenRegistry::getBiome(biomeId)->topBlock;
+            });
 
         // ── Step 6.1: Ravine generation ──
         // Java reference: ChunkProviderGenerate.provideChunk → ravineGenerator.generate
         // Ravines carve after caves, before structures (same as Java ordering)
         {
-            auto getBiomeTop = [](int32_t /*x*/, int32_t /*z*/) -> int32_t { return GRASS; };
+            auto getBiomeTop = [&blockBiomes](int32_t x, int32_t z) -> int32_t {
+                int32_t biomeId = blockBiomes[x * 16 + z];
+                return BiomeGenRegistry::getBiome(biomeId)->topBlock;
+            };
             for (int32_t rx = chunkX - 8; rx <= chunkX + 8; ++rx) {
                 for (int32_t rz = chunkZ - 8; rz <= chunkZ + 8; ++rz) {
                     auto mods = ravineGen_.generateForChunk(
@@ -267,16 +284,16 @@ public:
             }
         }
 
-        // ── Step 9: Tree generation ──
-        // Java reference: BiomeDecorator — plains has treesPerChunk = -1
-        // meaning 0 trees + 1/10 chance of an extra tree
+        // ── Step 9: Tree generation (biome-aware) ──
+        // Java reference: BiomeDecorator — trees per chunk varies by biome
         {
             TreeGenerator::RNG treeRng;
             treeRng.setSeed(seed_ ^ (static_cast<int64_t>(chunkX) * 341873128712LL +
                                       static_cast<int64_t>(chunkZ) * 132897987541LL));
 
-            int32_t treesPerChunk = 0;
-            if (treeRng.nextInt(10) == 0) treesPerChunk = 1;
+            // Determine tree count from center biome
+            int32_t centerBiomeId = blockBiomes[8 * 16 + 8];
+            int32_t treesPerChunk = getTreesPerChunk(centerBiomeId, treeRng);
 
             auto getBlockForTree = [&blocks](int32_t x, int32_t y, int32_t z) -> int32_t {
                 if (x < 0 || x > 15 || z < 0 || z > 15 || y < 0 || y > 255) return 0;
@@ -300,39 +317,15 @@ public:
                     }
                 }
 
-                // Tree type selection: 1/6 oak, 1/6 birch, 1/6 spruce, 1/6 jungle, 1/6 acacia, 1/6 dark oak
-                // Java ref: BiomeDecorator.getRandomWorldGenForTrees
-                int32_t treeType = treeRng.nextInt(6);
+                // Biome-aware tree type selection
+                int32_t localBiome = blockBiomes[tx * 16 + tz];
                 int32_t minHeight = 4;
                 int32_t metaWood = 0;
                 int32_t metaLeaves = 0;
                 int32_t logBlockId = 17;    // default log
                 int32_t leavesBlockId = 18; // default leaves
-                if (treeType == 1) {
-                    metaWood = 2;    // Birch log (meta 2)
-                    metaLeaves = 2;  // Birch leaves (meta 2)
-                    minHeight = 5;
-                } else if (treeType == 2) {
-                    metaWood = 1;    // Spruce log (meta 1)
-                    metaLeaves = 1;  // Spruce leaves (meta 1)
-                    minHeight = 6;
-                } else if (treeType == 3) {
-                    metaWood = 3;    // Jungle log (meta 3)
-                    metaLeaves = 3;  // Jungle leaves (meta 3)
-                    minHeight = 5;
-                } else if (treeType == 4) {
-                    logBlockId = 162;   // Log2 (acacia/dark oak)
-                    leavesBlockId = 161; // Leaves2
-                    metaWood = 0;    // Acacia log2 (meta 0)
-                    metaLeaves = 0;  // Acacia leaves2 (meta 0)
-                    minHeight = 5;
-                } else if (treeType == 5) {
-                    logBlockId = 162;   // Log2 (acacia/dark oak)
-                    leavesBlockId = 161; // Leaves2
-                    metaWood = 1;    // Dark oak log2 (meta 1)
-                    metaLeaves = 1;  // Dark oak leaves2 (meta 1)
-                    minHeight = 6;
-                }
+                selectTreeTypeForBiome(localBiome, treeRng, logBlockId, leavesBlockId,
+                                       metaWood, metaLeaves, minHeight);
 
                 auto placements = TreeGenerator::generateTree(
                     tx, ty, tz,
@@ -367,9 +360,12 @@ public:
             decoRng.setSeed(seed_ ^ (static_cast<int64_t>(chunkX) * 6364136223846793005LL +
                                       static_cast<int64_t>(chunkZ) * 1442695040888963407LL));
 
-            // Plains: flowersPerChunk=4, grassPerChunk=10
+            // Biome-aware decoration counts
+            int32_t decoCenter = blockBiomes[8 * 16 + 8];
+            int32_t flowersPerChunk = getFlowersPerChunk(decoCenter);
+            int32_t grassPerChunk = getGrassPerChunk(decoCenter);
             // Flowers: dandelion (37) or poppy (38)
-            for (int32_t f = 0; f < 4; ++f) {
+            for (int32_t f = 0; f < flowersPerChunk; ++f) {
                 int32_t fx = decoRng.nextInt(16);
                 int32_t fz = decoRng.nextInt(16);
                 for (int32_t fy = 255; fy >= 1; --fy) {
@@ -383,7 +379,7 @@ public:
             }
 
             // Tallgrass patches: block 31, meta 1 (tall grass, not fern)
-            for (int32_t g = 0; g < 10; ++g) {
+            for (int32_t g = 0; g < grassPerChunk; ++g) {
                 int32_t gx = decoRng.nextInt(16);
                 int32_t gz = decoRng.nextInt(16);
                 for (int32_t gy = 255; gy >= 1; --gy) {
@@ -591,7 +587,9 @@ public:
             cactusRng.setSeed(seed_ ^ (static_cast<int64_t>(chunkX) * 1234509876LL +
                                         static_cast<int64_t>(chunkZ) * 6789012345LL));
 
-            if (cactusRng.nextInt(6) == 0) {
+            // Biome-aware: desert/mesa get more cacti
+            int32_t cactusChance = isBiomeDesertLike(blockBiomes[8*16+8]) ? 2 : 6;
+            if (cactusRng.nextInt(cactusChance) == 0) {
                 int32_t cx = cactusRng.nextInt(16);
                 int32_t cz = cactusRng.nextInt(16);
                 for (int32_t cy = 80; cy >= 2; --cy) {
@@ -624,7 +622,9 @@ public:
             bushRng.setSeed(seed_ ^ (static_cast<int64_t>(chunkX) * 2468013579LL +
                                       static_cast<int64_t>(chunkZ) * 1357924680LL));
 
-            if (bushRng.nextInt(8) == 0) {
+            // Biome-aware: desert gets more dead bushes
+            int32_t deadBushChance = isBiomeDesertLike(blockBiomes[8*16+8]) ? 2 : 8;
+            if (bushRng.nextInt(deadBushChance) == 0) {
                 int32_t bx = bushRng.nextInt(16);
                 int32_t bz = bushRng.nextInt(16);
                 for (int32_t by = 80; by >= 2; --by) {
@@ -728,6 +728,43 @@ public:
             }
         }
 
+        // ── Step 9.15: Snow and ice placement for cold biomes ──
+        // Java: ChunkProviderGenerate.populate → freeze/snow logic
+        {
+            for (int32_t sx = 0; sx < 16; ++sx) {
+                for (int32_t sz = 0; sz < 16; ++sz) {
+                    int32_t biomeId = blockBiomes[sx * 16 + sz];
+                    const auto* biome = BiomeGenRegistry::getBiome(biomeId);
+                    if (!biome->enableSnow && biome->temperature >= 0.15f) continue;
+
+                    // Find highest solid block
+                    for (int32_t sy = 255; sy >= 1; --sy) {
+                        int32_t blockAt = blocks[(sx * 16 + sz) * 256 + sy];
+                        if (blockAt == 0) continue; // skip air
+
+                        // Check temperature at this position
+                        float temp = biome->getFloatTemperature(
+                            chunkX * 16 + sx, sy, chunkZ * 16 + sz);
+
+                        if (temp < 0.15f) {
+                            // Freeze water to ice
+                            if (blockAt == WATER || blockAt == 8) {
+                                blocks[(sx * 16 + sz) * 256 + sy] = ICE;
+                            }
+                            // Place snow layer on solid non-ice blocks
+                            else if (blockAt != ICE && sy + 1 < 256) {
+                                int32_t above = blocks[(sx * 16 + sz) * 256 + sy + 1];
+                                if (above == 0) {
+                                    blocks[(sx * 16 + sz) * 256 + sy + 1] = SNOW_LAYER;
+                                }
+                            }
+                        }
+                        break; // Only process topmost block
+                    }
+                }
+            }
+        }
+
         // ── Step 10: Fill chunk sections ──
         for (int x = 0; x < 16; ++x) {
             for (int z = 0; z < 16; ++z) {
@@ -749,8 +786,10 @@ public:
             }
         }
 
-        // Fill biome array with plains
-        std::memset(chunk->biomes.data(), 1, chunk->biomes.size());
+        // Fill biome array from GenLayer data
+        for (int32_t i = 0; i < 256; ++i) {
+            chunk->biomes[i] = static_cast<uint8_t>(blockBiomes[i] & 0xFF);
+        }
 
         // Height map (find highest non-air block per column)
         for (int x = 0; x < 16; ++x) {
@@ -777,6 +816,7 @@ public:
 private:
     int64_t seed_;
     ChunkProviderGenerate terrain_;
+    WorldChunkManager chunkManager_;  // Biome generation pipeline
     MapGenCaves caveGen_;       // Cave carver
     MapGenRavine ravineGen_;    // Ravine carver
     MapGenMineshaft mineshaftGen_;  // Mineshaft structure generator
@@ -800,13 +840,16 @@ private:
     static constexpr int32_t SANDSTONE = 24;
     static constexpr int32_t STONE = 1;
     static constexpr int32_t WATER = 9;
+    static constexpr int32_t ICE = 79;
+    static constexpr int32_t SNOW_LAYER = 78;
     static constexpr int32_t COBBLESTONE = 4;
     static constexpr int32_t MOSSY_COBBLESTONE = 48;
     static constexpr int32_t MOB_SPAWNER = 52;
 
-    // Java: replaceBlocksForBiome — replace stone surface with grass/dirt/sand
+    // Java: replaceBlocksForBiome — replace stone surface with biome-specific blocks
     void replaceBlocksForBiome(int32_t chunkX, int32_t chunkZ,
-                                int32_t* blocks, uint8_t* meta) {
+                                int32_t* blocks, uint8_t* meta,
+                                const std::vector<int32_t>& blockBiomes) {
         // Stone noise for surface variation
         std::array<double, 256> stoneNoise{};
         noiseGen4_->generateNoiseOctaves2D(stoneNoise.data(),
@@ -814,16 +857,27 @@ private:
             ChunkProviderGenerate::NoiseParams::SURFACE_SCALE * 2.0,
             ChunkProviderGenerate::NoiseParams::SURFACE_SCALE * 2.0);
 
-        // Per-column surface replacement
+        // Deterministic RNG per chunk (replaces rand())
+        NoiseGeneratorImproved::RNG surfRng;
+        surfRng.setSeed(seed_ + ChunkProviderGenerate::getChunkSeed(chunkX, chunkZ) + 137);
+
+        // Per-column surface replacement with biome-specific blocks
         for (int32_t x = 0; x < 16; ++x) {
             for (int32_t z = 0; z < 16; ++z) {
-                // Plains biome: grass on top, dirt below, sand near water
-                int32_t topBlock = GRASS;
-                int32_t fillerBlock = DIRT;
+                int32_t biomeId = blockBiomes[x * 16 + z];
+                const auto* biome = BiomeGenRegistry::getBiome(biomeId);
+                float biomeTemp = biome->temperature;
+
+                // Get biome-specific surface blocks
+                int32_t topBlock = biome->topBlock;
+                int32_t fillerBlock = biome->fillerBlock;
+                int32_t origTop = topBlock;
+                int32_t origFiller = fillerBlock;
+
                 int32_t noiseIdx = x * 16 + z;
                 int32_t depth = -1;
                 int32_t fillerDepth = static_cast<int32_t>(stoneNoise[noiseIdx] / 3.0 + 3.0 +
-                    (static_cast<double>(rand()) / RAND_MAX) * 0.25);
+                    surfRng.nextDouble() * 0.25);
 
                 for (int32_t y = 255; y >= 0; --y) {
                     int32_t idx = (x * 16 + z) * 256 + y;
@@ -834,24 +888,29 @@ private:
                                 topBlock = 0;  // Air
                                 fillerBlock = STONE;
                             } else if (y >= 59 && y <= 64) {
-                                // Near sea level: could be sand
-                                topBlock = GRASS;
-                                fillerBlock = DIRT;
+                                // Reset to biome defaults near sea level
+                                topBlock = origTop;
+                                fillerBlock = origFiller;
                             }
 
+                            // Below sea level + exposed: ice or water based on temperature
                             if (y < 63 && topBlock == 0) {
-                                topBlock = WATER;
+                                if (biomeTemp < 0.15f) {
+                                    topBlock = ICE;
+                                } else {
+                                    topBlock = WATER;
+                                }
                             }
 
                             depth = fillerDepth;
                             if (y >= 62) {
                                 blocks[idx] = topBlock;
-                            } else if (y >= 56) {
-                                blocks[idx] = fillerBlock;
-                            } else {
-                                blocks[idx] = fillerBlock;
+                            } else if (y < 56 - fillerDepth) {
                                 topBlock = 0;
                                 fillerBlock = STONE;
+                                blocks[idx] = GRAVEL;
+                            } else {
+                                blocks[idx] = fillerBlock;
                             }
                         } else if (depth > 0) {
                             --depth;
@@ -859,7 +918,7 @@ private:
 
                             // Sandstone under sand
                             if (depth == 0 && fillerBlock == SAND) {
-                                depth = static_cast<int32_t>((static_cast<double>(rand()) / RAND_MAX) * 2.0) + 1;
+                                depth = surfRng.nextInt(4) + std::max(0, y - 63);
                                 fillerBlock = SANDSTONE;
                             }
                         }
@@ -869,6 +928,105 @@ private:
                 }
             }
         }
+    }
+
+    // ── Biome-specific tree count ──
+    // Java: BiomeDecorator.treesPerChunk per biome
+    static int32_t getTreesPerChunk(int32_t biomeId, TreeGenerator::RNG& rng) {
+        using namespace BiomeID;
+        switch (biomeId) {
+            case FOREST: case FOREST_HILLS: case BIRCH_FOREST:
+            case BIRCH_FOREST_HILLS: return 10;
+            case ROOFED_FOREST: return 10;
+            case TAIGA: case TAIGA_HILLS: case COLD_TAIGA:
+            case COLD_TAIGA_HILLS: return 10;
+            case MEGA_TAIGA: case MEGA_TAIGA_HILLS: return 10;
+            case JUNGLE: case JUNGLE_HILLS: case JUNGLE_EDGE: return 50;
+            case SWAMPLAND: return 2;
+            case SAVANNA: case SAVANNA_PLATEAU: return 1;
+            case EXTREME_HILLS: case EXTREME_HILLS_PLUS:
+            case EXTREME_HILLS_EDGE: return 0 + (rng.nextInt(5) == 0 ? 1 : 0);
+            case DESERT: case DESERT_HILLS: case ICE_PLAINS:
+            case ICE_MOUNTAINS: case BEACH: case COLD_BEACH:
+            case STONE_BEACH: case MESA: case MESA_PLATEAU:
+            case MESA_PLATEAU_F: return 0;
+            case OCEAN: case DEEP_OCEAN: case FROZEN_OCEAN:
+            case RIVER: case FROZEN_RIVER: return 0;
+            default: // Plains-like: treesPerChunk = 0, 1/10 chance
+                return (rng.nextInt(10) == 0) ? 1 : 0;
+        }
+    }
+
+    // ── Biome-specific tree type selection ──
+    static void selectTreeTypeForBiome(int32_t biomeId, TreeGenerator::RNG& rng,
+                                       int32_t& logBlock, int32_t& leavesBlock,
+                                       int32_t& metaWood, int32_t& metaLeaves,
+                                       int32_t& minHeight) {
+        using namespace BiomeID;
+        logBlock = 17; leavesBlock = 18;
+        metaWood = 0; metaLeaves = 0; minHeight = 4;
+
+        switch (biomeId) {
+            case BIRCH_FOREST: case BIRCH_FOREST_HILLS:
+                metaWood = 2; metaLeaves = 2; minHeight = 5; break;
+            case TAIGA: case TAIGA_HILLS: case COLD_TAIGA:
+            case COLD_TAIGA_HILLS: case MEGA_TAIGA: case MEGA_TAIGA_HILLS:
+                metaWood = 1; metaLeaves = 1; minHeight = 6; break;
+            case JUNGLE: case JUNGLE_HILLS: case JUNGLE_EDGE:
+                metaWood = 3; metaLeaves = 3; minHeight = 5; break;
+            case ROOFED_FOREST:
+                logBlock = 162; leavesBlock = 161;
+                metaWood = 1; metaLeaves = 1; minHeight = 6; break;
+            case SAVANNA: case SAVANNA_PLATEAU:
+                logBlock = 162; leavesBlock = 161;
+                metaWood = 0; metaLeaves = 0; minHeight = 5; break;
+            case FOREST: case FOREST_HILLS:
+                if (rng.nextInt(5) == 0) { metaWood = 2; metaLeaves = 2; minHeight = 5; }
+                break;
+            default: // Oak with occasional birch
+                if (rng.nextInt(3) == 0) { metaWood = 2; metaLeaves = 2; minHeight = 5; }
+                break;
+        }
+    }
+
+    // ── Biome-specific flower count ──
+    static int32_t getFlowersPerChunk(int32_t biomeId) {
+        using namespace BiomeID;
+        switch (biomeId) {
+            case FOREST: case FOREST_HILLS: case BIRCH_FOREST:
+            case BIRCH_FOREST_HILLS: case ROOFED_FOREST: return 4;
+            case PLAINS: return 4;
+            case JUNGLE: case JUNGLE_HILLS: case JUNGLE_EDGE: return 4;
+            case SWAMPLAND: return 1;
+            case DESERT: case DESERT_HILLS: case ICE_PLAINS:
+            case ICE_MOUNTAINS: case MESA: case MESA_PLATEAU:
+            case MESA_PLATEAU_F: case OCEAN: case DEEP_OCEAN: return 0;
+            default: return 2;
+        }
+    }
+
+    // ── Biome-specific grass count ──
+    static int32_t getGrassPerChunk(int32_t biomeId) {
+        using namespace BiomeID;
+        switch (biomeId) {
+            case PLAINS: return 10;
+            case FOREST: case FOREST_HILLS: case BIRCH_FOREST:
+            case BIRCH_FOREST_HILLS: case ROOFED_FOREST: return 2;
+            case TAIGA: case TAIGA_HILLS: return 1;
+            case JUNGLE: case JUNGLE_HILLS: case JUNGLE_EDGE: return 25;
+            case SAVANNA: case SAVANNA_PLATEAU: return 20;
+            case SWAMPLAND: return 5;
+            case DESERT: case DESERT_HILLS: case ICE_PLAINS:
+            case ICE_MOUNTAINS: return 0;
+            default: return 1;
+        }
+    }
+
+    // ── Desert-like biome check (for cacti/dead bushes) ──
+    static bool isBiomeDesertLike(int32_t biomeId) {
+        return biomeId == BiomeID::DESERT || biomeId == BiomeID::DESERT_HILLS ||
+               biomeId == BiomeID::MESA || biomeId == BiomeID::MESA_PLATEAU ||
+               biomeId == BiomeID::MESA_PLATEAU_F;
     }
 
     // Place bedrock at y=0..4 with decreasing probability

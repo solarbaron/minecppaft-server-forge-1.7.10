@@ -742,4 +742,93 @@ public:
     }
 };
 
+// ═══════════════════════════════════════════════════════════════════════════
+// GenLayerStack — Factory to build the full biome generation pipeline.
+// Java: GenLayer.initializeAllBiomeGenerators(long, WorldType)
+// ═══════════════════════════════════════════════════════════════════════════
+
+class GenLayerStack {
+public:
+    GenLayer* biomeLayer = nullptr;      // 1:1 biome (for height blending)
+    GenLayer* voronoiLayer = nullptr;    // 1:4 voronoi-zoomed (for per-block biome)
+
+    // Owns all allocated layers
+    std::vector<std::unique_ptr<GenLayer>> layers;
+
+    void initializeAllBiomeGenerators(int64_t worldSeed) {
+        // ── Build land/ocean/climate base ──
+        // Java: GenLayer.initializeAllBiomeGenerators lines 42-59
+        auto* layer = addLayer<GenLayerIsland>(1LL);
+        layer = addLayer<GenLayerFuzzyZoom>(2000LL, layer);
+        layer = addLayer<GenLayerAddIsland>(1LL, layer);
+        layer = addLayer<GenLayerZoom>(2001LL, layer);
+        layer = addLayer<GenLayerAddIsland>(2LL, layer);
+        layer = addLayer<GenLayerAddIsland>(50LL, layer);
+        layer = addLayer<GenLayerAddIsland>(70LL, layer);
+        layer = addLayer<GenLayerRemoveTooMuchOcean>(2LL, layer);
+        layer = addLayer<GenLayerAddSnow>(2LL, layer);
+        layer = addLayer<GenLayerAddIsland>(3LL, layer);
+        layer = addLayer<GenLayerEdge>(2LL, layer, GenLayerEdge::Mode::COOL_WARM);
+        layer = addLayer<GenLayerEdge>(2LL, layer, GenLayerEdge::Mode::HEAT_ICE);
+        layer = addLayer<GenLayerEdge>(3LL, layer, GenLayerEdge::Mode::SPECIAL);
+        layer = addLayer<GenLayerZoom>(2002LL, layer);
+        layer = addLayer<GenLayerZoom>(2003LL, layer);
+        layer = addLayer<GenLayerAddIsland>(4LL, layer);
+        layer = addLayer<GenLayerAddMushroomIsland>(5LL, layer);
+        layer = addLayer<GenLayerDeepOcean>(4LL, layer);
+        layer = GenLayerZoom::magnify(1000LL, layer, 0, layers);
+
+        // ── Fork: river branch ──
+        auto* riverBranch = GenLayerZoom::magnify(1000LL, layer, 0, layers);
+        riverBranch = addLayer<GenLayerRiverInit>(100LL, riverBranch);
+
+        // ── Fork: biome branch ──
+        int32_t biomeSize = 4;  // Normal world type
+        auto* biomeBranch = addLayer<GenLayerBiome>(200LL, layer);
+        biomeBranch = GenLayerZoom::magnify(1000LL, biomeBranch, 2, layers);
+        biomeBranch = addLayer<GenLayerBiomeEdge>(1000LL, biomeBranch);
+
+        // ── Hills ──
+        auto* riverForHills = GenLayerZoom::magnify(1000LL, riverBranch, 2, layers);
+        biomeBranch = addLayer<GenLayerHills>(1000LL, biomeBranch, riverForHills);
+
+        // ── River processing ──
+        auto* riverProcessed = GenLayerZoom::magnify(1000LL, riverBranch, 2, layers);
+        riverProcessed = GenLayerZoom::magnify(1000LL, riverProcessed, biomeSize, layers);
+        riverProcessed = addLayer<GenLayerRiver>(1LL, riverProcessed);
+        riverProcessed = addLayer<GenLayerSmooth>(1000LL, riverProcessed);
+
+        // ── Rare biome + zoom ──
+        biomeBranch = addLayer<GenLayerRareBiome>(1001LL, biomeBranch);
+        for (int32_t i = 0; i < biomeSize; ++i) {
+            biomeBranch = addLayer<GenLayerZoom>(1000LL + i, biomeBranch);
+            if (i == 0) biomeBranch = addLayer<GenLayerAddIsland>(3LL, biomeBranch);
+            if (i == 1) biomeBranch = addLayer<GenLayerShore>(1000LL, biomeBranch);
+        }
+        biomeBranch = addLayer<GenLayerSmooth>(1000LL, biomeBranch);
+
+        // ── Combine biome + river ──
+        auto* mixed = addLayer<GenLayerRiverMix>(100LL, biomeBranch, riverProcessed);
+
+        // ── Voronoi zoom for per-block biomes ──
+        auto* voronoi = addLayer<GenLayerVoronoiZoom>(10LL, mixed);
+
+        // ── Init world gen seeds recursively ──
+        mixed->initWorldGenSeed(worldSeed);
+        voronoi->initWorldGenSeed(worldSeed);
+
+        biomeLayer = mixed;
+        voronoiLayer = voronoi;
+    }
+
+private:
+    template<typename T, typename... Args>
+    GenLayer* addLayer(Args&&... args) {
+        auto layer = std::make_unique<T>(std::forward<Args>(args)...);
+        GenLayer* ptr = layer.get();
+        layers.push_back(std::move(layer));
+        return ptr;
+    }
+};
+
 } // namespace mccpp
