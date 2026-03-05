@@ -158,6 +158,12 @@ bool MinecraftServer::init() {
 
     worlds_.push_back(std::move(overworld));
 
+    // Create Nether world (dimension -1)
+    // Java reference: MinecraftServer creates WorldServer for each dimension
+    auto nether = std::make_unique<WorldServer>(-1, "world_nether");
+    nether->initialize();
+    worlds_.push_back(std::move(nether));
+
     return true;
 }
 
@@ -231,6 +237,13 @@ int MinecraftServer::getOnlinePlayerCount() const {
     std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
     return static_cast<int>(std::count_if(connections_.begin(), connections_.end(),
         [](const auto& c) { return c->getState() == ConnectionState::Play; }));
+}
+
+WorldServer* MinecraftServer::getWorldForDimension(int dim) {
+    for (auto& w : worlds_) {
+        if (w->getDimensionId() == dim) return w.get();
+    }
+    return nullptr;
 }
 
 void MinecraftServer::addConnection(std::shared_ptr<Connection> conn) {
@@ -422,6 +435,7 @@ void MinecraftServer::tick() {
             if (play) {
                 play->tickFood(*conn);
                 play->tickPotionEffects(*conn);
+                play->tickPortal(*conn);
             }
         }
     }

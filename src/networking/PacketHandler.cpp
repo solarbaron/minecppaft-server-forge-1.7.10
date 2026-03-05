@@ -16,6 +16,7 @@
 #include "command/CommandSystem.h"
 #include "types/VarInt.h"
 #include "world/World.h"
+#include "world/TeleporterPortal.h"
 #include "crafting/Crafting.h"
 #include "enchantment/Enchantment.h"
 #include "inventory/EnchantingAnvil.h"
@@ -26,6 +27,7 @@
 #include <algorithm>
 #include <array>
 #include <climits>
+#include <limits>
 #include <cstring>
 #include <functional>
 #include <iostream>
@@ -7980,8 +7982,8 @@ void PlayHandler::savePlayerData() {
     // OnGround
     root.setByte("OnGround", playerOnGround_ ? 1 : 0);
 
-    // Dimension
-    root.setInteger("Dimension", 0);
+    // Dimension — Java: EntityPlayer.dimension
+    root.setInteger("Dimension", playerDimension_);
 
     // Health
     root.setFloat("Health", health_);
@@ -8089,6 +8091,15 @@ bool PlayHandler::loadPlayerData() {
     // Read onGround
     if (root->hasKey("OnGround")) {
         playerOnGround_ = root->getByte("OnGround") != 0;
+    }
+
+    // Read dimension — Java: EntityPlayer.dimension
+    if (root->hasKey("Dimension")) {
+        playerDimension_ = root->getInteger("Dimension");
+        // Validate: only accept known dimensions (0, -1, 1)
+        if (playerDimension_ != 0 && playerDimension_ != -1 && playerDimension_ != 1) {
+            playerDimension_ = 0;
+        }
     }
 
     // Read health
@@ -8222,6 +8233,10 @@ void PlayHandler::handleClientStatus(const uint8_t* data, size_t length, Connect
         fireTicks_ = 0;
         airSupply_ = 300;
         fallDistance_ = 0.0f;
+        // Reset dimension to Overworld — Java: respawn always goes to dim 0
+        playerDimension_ = 0;
+        portalCooldown_ = 0;
+        portalTicks_ = 0;
 
         // Get spawn coordinates from world — Java: WorldInfo.getSpawnX/Y/Z
         auto* overworld = server_.getWorlds().empty() ? nullptr : server_.getWorlds()[0].get();
@@ -8519,8 +8534,8 @@ void PlayHandler::updateChunks(Connection& conn) {
     lastChunkX_ = currentChunkX;
     lastChunkZ_ = currentChunkZ;
     
-    auto* overworld = server_.getWorlds().empty() ? nullptr : server_.getWorlds()[0].get();
-    if (!overworld) return;
+    auto* world = server_.getWorldForDimension(playerDimension_);
+    if (!world) return;
     
     // Compute the set of chunks that SHOULD be loaded
     std::set<std::pair<int,int>> desired;
@@ -8560,7 +8575,7 @@ void PlayHandler::updateChunks(Connection& conn) {
     });
     
     for (const auto& [cx, cz] : toLoad) {
-        Chunk* chunk = overworld->getChunkFromChunkCoords(cx, cz);
+        Chunk* chunk = world->getChunkFromChunkCoords(cx, cz);
         if (chunk) {
             sendChunkData(conn, chunk);
             loadedChunks_.insert({cx, cz});
@@ -10224,6 +10239,306 @@ void PlayHandler::updateAnvilOutput(Connection& conn) {
 
     // Send output slot update
     sendSetSlot(conn, openWindowId_, 2, anvilOutput_);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Nether Portal Transit
+// Java reference: Entity.handlePortal(), ServerConfigurationManager.transferPlayerToDimension(),
+//                 Teleporter.placeInPortal(), Teleporter.makePortal()
+// ═══════════════════════════════════════════════════════════════════════════
+
+void PlayHandler::tickPortal(Connection& conn) {
+    using namespace TeleporterConstants;
+
+    // Decrement cooldown
+    if (portalCooldown_ > 0) {
+        --portalCooldown_;
+        return;
+    }
+
+    // Dead players don't portal
+    if (dead_) return;
+
+    // Check if the player is standing in a portal block
+    // Java: Entity.handlePortal() checks block at feet position
+    auto* world = server_.getWorldForDimension(playerDimension_);
+    if (!world) return;
+
+    int bx = static_cast<int>(std::floor(playerX_));
+    int by = static_cast<int>(std::floor(playerY_));
+    int bz = static_cast<int>(std::floor(playerZ_));
+
+    // Check feet and head positions for portal block (ID 90)
+    bool inPortal = false;
+    for (int yo = 0; yo <= 1; ++yo) {
+        Block* block = world->getBlock(bx, by + yo, bz);
+        int blockId = block ? Block::getIdFromBlock(block) : 0;
+        if (blockId == PORTAL_ID) {
+            inPortal = true;
+            break;
+        }
+    }
+
+    if (!inPortal) {
+        // Reset portal ticks when player steps out
+        portalTicks_ = 0;
+        return;
+    }
+
+    // Player is in a portal block — increment timer
+    ++portalTicks_;
+
+    // Java: Entity.handlePortal() — 80 ticks (4 seconds) in portal triggers teleport
+    // In creative mode, it's instant (0 ticks, but we use 1 tick minimum)
+    int32_t portalThreshold = (gameMode_ == 1) ? 1 : 80;
+
+    if (portalTicks_ >= portalThreshold) {
+        // Teleport!
+        portalTicks_ = 0;
+        portalCooldown_ = 300; // 15 seconds cooldown — Java: Entity.timeUntilPortal = 300
+        transferDimension(conn);
+    }
+}
+
+void PlayHandler::transferDimension(Connection& conn) {
+    using namespace TeleporterConstants;
+
+    // Determine destination dimension
+    // Java: ServerConfigurationManager.transferPlayerToDimension()
+    int32_t fromDim = playerDimension_;
+    int32_t toDim;
+    if (fromDim == OVERWORLD) {
+        toDim = NETHER;
+    } else if (fromDim == NETHER) {
+        toDim = OVERWORLD;
+    } else {
+        return; // End dimension portal not yet supported
+    }
+
+    auto* destWorld = server_.getWorldForDimension(toDim);
+    if (!destWorld) {
+        std::cerr << "[Portal] No world for dimension " << toDim << "\n";
+        return;
+    }
+
+    // ─── Compute destination coordinates ─────────────────────────────────
+    // Java: Overworld → Nether: divide X,Z by 8
+    //        Nether → Overworld: multiply X,Z by 8
+    double destX, destZ;
+    if (toDim == NETHER) {
+        destX = playerX_ / NETHER_SCALE;
+        destZ = playerZ_ / NETHER_SCALE;
+    } else {
+        destX = playerX_ * NETHER_SCALE;
+        destZ = playerZ_ * NETHER_SCALE;
+    }
+
+    // ─── Clamp Nether Y coordinate ───────────────────────────────────────
+    // Java: Nether ceiling is at Y=127, clamp to 1..125 for portal placement
+    double destY = playerY_;
+    if (toDim == NETHER) {
+        if (destY > 125.0) destY = 125.0;
+        if (destY < 1.0) destY = 1.0;
+    }
+
+    std::cout << "[Portal] " << playerName_ << " transferring from dim " << fromDim
+              << " to dim " << toDim << " — coords ("
+              << playerX_ << "," << playerY_ << "," << playerZ_ << ") → ("
+              << destX << "," << destY << "," << destZ << ")\n";
+
+    // ─── Search for existing portal in destination world ─────────────────
+    // Java: Teleporter.placeInExistingPortal() — search 128-block XZ radius
+    int searchX = static_cast<int>(std::floor(destX));
+    int searchZ = static_cast<int>(std::floor(destZ));
+
+    // Find nearest portal block within search radius
+    bool foundPortal = false;
+    int portalX = 0, portalY = 0, portalZ = 0;
+    double nearestDist2 = std::numeric_limits<double>::max();
+
+    for (int dx = -SEARCH_RADIUS; dx <= SEARCH_RADIUS; ++dx) {
+        for (int dz = -SEARCH_RADIUS; dz <= SEARCH_RADIUS; ++dz) {
+            int cx = searchX + dx;
+            int cz = searchZ + dz;
+            // Scan Y levels top to bottom
+            int maxY = (toDim == NETHER) ? 127 : 255;
+            for (int y = maxY; y >= 0; --y) {
+                Block* block = destWorld->getBlock(cx, y, cz);
+                int blockId = block ? Block::getIdFromBlock(block) : 0;
+                if (blockId == PORTAL_ID) {
+                    // Walk down to the lowest portal block in this column
+                    while (y > 0) {
+                        Block* below = destWorld->getBlock(cx, y - 1, cz);
+                        int belowId = below ? Block::getIdFromBlock(below) : 0;
+                        if (belowId != PORTAL_ID) break;
+                        --y;
+                    }
+                    double dist2 = static_cast<double>(dx * dx + dz * dz);
+                    if (dist2 < nearestDist2) {
+                        nearestDist2 = dist2;
+                        portalX = cx;
+                        portalY = y;
+                        portalZ = cz;
+                        foundPortal = true;
+                    }
+                    break; // Found portal in this column, move on
+                }
+            }
+        }
+    }
+
+    if (!foundPortal) {
+        // ─── Create a new portal ─────────────────────────────────────────
+        // Java: Teleporter.makePortal()
+        // Find a suitable location and build a 4×5 obsidian portal frame
+        int buildX = searchX;
+        int buildZ = searchZ;
+        int buildY;
+
+        // Find a reasonable Y level — scan for ground
+        int maxScan = (toDim == NETHER) ? 120 : 255;
+        int minScan = (toDim == NETHER) ? 4 : 1;
+        buildY = -1;
+        for (int y = maxScan; y >= minScan; --y) {
+            Block* block = destWorld->getBlock(buildX, y, buildZ);
+            int blockId = block ? Block::getIdFromBlock(block) : 0;
+            if (blockId != 0) {
+                buildY = y + 1;
+                break;
+            }
+        }
+        if (buildY < 0 || buildY < minScan) {
+            // Fallback — Java: clamp to 70
+            buildY = FALLBACK_MIN_Y;
+        }
+        if (toDim == NETHER && buildY > 120) buildY = 120;
+
+        // Build portal frame (X-axis aligned, 4 wide × 5 tall)
+        // Obsidian frame with portal blocks inside
+        Block* obsidian = Block::getBlockById(OBSIDIAN_ID);
+        Block* portalBlock = Block::getBlockById(PORTAL_ID);
+        Block* air = Block::getBlockById(AIR_ID);
+
+        // Ensure platform area is clear and supported
+        // Place a 4×1 ground support of obsidian below the portal
+        for (int dx2 = 0; dx2 < 4; ++dx2) {
+            destWorld->setBlock(buildX + dx2, buildY - 1, buildZ, obsidian);
+        }
+
+        // Build the frame (4 wide × 5 tall)
+        for (int dy = 0; dy < 5; ++dy) {
+            for (int dx2 = 0; dx2 < 4; ++dx2) {
+                if (dx2 == 0 || dx2 == 3 || dy == 0 || dy == 4) {
+                    // Frame: obsidian
+                    destWorld->setBlock(buildX + dx2, buildY + dy, buildZ, obsidian);
+                } else {
+                    // Inside: portal blocks (ID 90, meta 1 = X-axis)
+                    destWorld->setBlock(buildX + dx2, buildY + dy, buildZ, portalBlock);
+                    destWorld->setBlockMetadata(buildX + dx2, buildY + dy, buildZ, 1);
+                }
+            }
+        }
+
+        // Clear space in front of and behind portal (2 blocks deep)
+        for (int dz2 = -1; dz2 <= 1; dz2 += 2) {
+            for (int dy = 0; dy < 5; ++dy) {
+                for (int dx2 = 0; dx2 < 4; ++dx2) {
+                    destWorld->setBlock(buildX + dx2, buildY + dy, buildZ + dz2, air);
+                }
+            }
+        }
+
+        portalX = buildX + 1; // Position player inside the portal
+        portalY = buildY + 1; // One block above the bottom frame
+        portalZ = buildZ;
+
+        std::cout << "[Portal] Created new portal at (" << buildX << "," << buildY
+                  << "," << buildZ << ") in dim " << toDim << "\n";
+    } else {
+        std::cout << "[Portal] Found existing portal at (" << portalX << "," << portalY
+                  << "," << portalZ << ") in dim " << toDim << "\n";
+    }
+
+    // ─── Unload old chunks ───────────────────────────────────────────────
+    for (const auto& [cx, cz] : loadedChunks_) {
+        sendChunkUnload(conn, cx, cz);
+    }
+    loadedChunks_.clear();
+    lastChunkX_ = INT_MIN;
+    lastChunkZ_ = INT_MIN;
+
+    // ─── Update player dimension ─────────────────────────────────────────
+    playerDimension_ = toDim;
+
+    // ─── Send S07 Respawn packet ─────────────────────────────────────────
+    // Java: S07PacketRespawn — tells client to switch dimension
+    {
+        std::vector<uint8_t> pkt;
+        writeVarInt(pkt, ClientboundPacket::Respawn);
+        writeInt(pkt, toDim);          // Destination dimension
+        writeUByte(pkt, 1);            // Difficulty: 1 = Easy
+        writeUByte(pkt, static_cast<uint8_t>(gameMode_)); // Game mode
+        writeString(pkt, toDim == NETHER ? "default" : "flat"); // Level type
+        conn.sendPacket(std::move(pkt));
+    }
+
+    // ─── Set player position at destination portal ───────────────────────
+    playerX_ = static_cast<double>(portalX) + 0.5;
+    playerY_ = static_cast<double>(portalY);
+    playerZ_ = static_cast<double>(portalZ) + 0.5;
+    fallDistance_ = 0.0f;
+
+    // ─── Load chunks around destination ──────────────────────────────────
+    int playerChunkX = static_cast<int>(std::floor(playerX_)) >> 4;
+    int playerChunkZ = static_cast<int>(std::floor(playerZ_)) >> 4;
+
+    // Send chunks in a radius around the destination
+    for (int cx = playerChunkX - 3; cx <= playerChunkX + 3; ++cx) {
+        for (int cz = playerChunkZ - 3; cz <= playerChunkZ + 3; ++cz) {
+            Chunk* chunk = destWorld->getChunkFromChunkCoords(cx, cz);
+            if (chunk) {
+                sendChunkData(conn, chunk);
+                loadedChunks_.insert({cx, cz});
+            }
+        }
+    }
+
+    // ─── Send position to client ─────────────────────────────────────────
+    {
+        std::vector<uint8_t> pkt;
+        writeVarInt(pkt, ClientboundPacket::PlayerPosAndLook);
+        writeDouble(pkt, playerX_);
+        writeDouble(pkt, playerY_);
+        writeDouble(pkt, playerZ_);
+        writeFloat(pkt, playerYaw_);
+        writeFloat(pkt, playerPitch_);
+        writeBool(pkt, false);  // flags: absolute position
+        conn.sendPacket(std::move(pkt));
+    }
+
+    // ─── Sync health, food, XP ───────────────────────────────────────────
+    sendUpdateHealth(conn, health_, foodStats_.getFoodLevel(), foodStats_.getSaturationLevel());
+    sendSetExperience(conn, experienceBar_, experienceLevel_, experienceTotal_);
+
+    // ─── Resync inventory ────────────────────────────────────────────────
+    sendWindowItems(conn);
+
+    // ─── Re-send active potion effects ───────────────────────────────────
+    // Java: ServerConfigurationManager.transferPlayerToDimension re-sends
+    // all active PotionEffects via S1DPacketEntityEffect after respawn
+    for (const auto& [id, effect] : activePotionEffects_) {
+        sendEntityEffect(conn, entityId_, static_cast<int8_t>(effect.effectId),
+                         static_cast<int8_t>(effect.amplifier), effect.duration);
+    }
+
+    // ─── Re-broadcast spawn to other players ─────────────────────────────
+    server_.onPlayerJoined(conn, *this);
+
+    // ─── Save player data with new dimension ─────────────────────────────
+    savePlayerData();
+
+    std::cout << "[Portal] " << playerName_ << " arrived in dim " << toDim
+              << " at (" << playerX_ << "," << playerY_ << "," << playerZ_ << ")\n";
 }
 
 } // namespace mccpp

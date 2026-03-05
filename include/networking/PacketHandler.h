@@ -488,6 +488,7 @@ public:
     bool isDead() const { return dead_; }
     int16_t getCurrentSlot() const { return currentSlot_; }
     bool isSneaking() const { return isSneaking_; }
+    int32_t getPlayerDimension() const { return playerDimension_; }
 
     // C0C SteerVehicle input — Java: EntityLivingBase.moveForward/moveStrafing
     float getMoveForward() const { return moveForward_; }
@@ -500,6 +501,18 @@ public:
 
     // Java: Entity.setFire(int seconds) — sets fire ticks
     void setOnFire(int32_t ticks) { fireTicks_ = ticks; }
+
+    /**
+     * Transfer the player to another dimension (Nether portal transit).
+     * Java reference: ServerConfigurationManager.transferPlayerToDimension()
+     */
+    void transferDimension(Connection& conn);
+
+    /**
+     * Tick portal standing detection/cooldown. Called once per server tick.
+     * Java reference: Entity.handlePortal() / EntityPlayerMP.onUpdate()
+     */
+    void tickPortal(Connection& conn);
 
     /**
      * Tick the food/hunger system once per server tick.
@@ -1038,6 +1051,11 @@ private:
     int32_t airSupply_ = 300;     // Entity.air — ticks of air remaining (300 = 15 seconds)
     int32_t fireTicks_ = 0;       // Entity.fire — ticks remaining on fire (>0 = burning)
     int64_t bowChargeStartTick_ = -1; // ItemBow: server tick when bow draw started (-1 = not drawing)
+
+    // ─── Dimension / portal state ────────────────────────────────────
+    int32_t playerDimension_ = 0;   // Current dimension (0=overworld, -1=nether, 1=end)
+    int32_t portalCooldown_ = 0;    // Ticks until portal re-entry allowed (Java: 300 = 15s)
+    int32_t portalTicks_ = 0;       // Ticks player has been standing in portal block
 
     // Pressure plate tracking — deactivate when player steps off
     int32_t pressurePlateX_ = INT_MIN, pressurePlateY_ = INT_MIN, pressurePlateZ_ = INT_MIN;

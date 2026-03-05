@@ -119,6 +119,7 @@ public:
      */
     const std::vector<std::unique_ptr<WorldServer>>& getWorlds() const { return worlds_; }
     std::vector<std::unique_ptr<WorldServer>>& getWorlds() { return worlds_; }
+    WorldServer* getWorldForDimension(int dim);
 
     /**
      * Get the command handler for dispatching commands.
