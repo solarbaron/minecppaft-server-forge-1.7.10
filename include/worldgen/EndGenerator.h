@@ -10,9 +10,9 @@
  *   3. Trilinear interpolation to 16×128×16 block array
  *      → end_stone where density > 0
  *   4. Basic surface replacement (func_147421_b)
- *   5. Fill chunk sections + biome (sky=9) + height map
- *
- * No caves, no ores, no features — The End is barren.
+ *   5. Obsidian pillar decoration (WorldGenSpikes, 1/5 chance per chunk)
+ *   6. End spawn platform (5×5 obsidian at origin, y=64)
+ *   7. Fill chunk sections + biome (sky=9) + height map
  *
  * Thread safety: Each instance has its own noise state.
  */
@@ -51,6 +51,11 @@ public:
         // Java: Block[] blockArray = new Block[32768]
         std::array<int32_t, 32768> blocks{};
 
+        // ── Per-chunk RNG (Java: endRNG.setSeed) ──
+        NoiseGeneratorImproved::RNG endRNG;
+        endRNG.setSeed(static_cast<int64_t>(chunkX) * 341873128712LL +
+                       static_cast<int64_t>(chunkZ) * 132897987541LL);
+
         // ── Step 1: Generate 3D density field → fill end stone ──
         // Java: func_147420_a(n, n2, blockArray, biomesForGeneration)
         generateTerrain(chunkX, chunkZ, blocks.data());
@@ -60,7 +65,15 @@ public:
         // since we already place end stone directly, included for parity)
         replaceSurface(chunkX, chunkZ, blocks.data());
 
-        // ── Step 3: Fill chunk sections ──
+        // ── Step 3: End obsidian pillar decoration ──
+        // Java: ChunkProviderEnd.populate → BiomeEndDecorator.genDecorations
+        //   → WorldGenSpikes.generate with 1/5 chance
+        generateSpikes(chunkX, chunkZ, blocks.data(), endRNG);
+
+        // ── Step 4: End spawn platform (5×5 obsidian at origin y=64) ──
+        generateSpawnPlatform(chunkX, chunkZ, blocks.data());
+
+        // ── Step 5: Fill chunk sections ──
         for (int x = 0; x < 16; ++x) {
             for (int z = 0; z < 16; ++z) {
                 for (int y = 0; y < 128; ++y) {
@@ -68,7 +81,7 @@ public:
                     if (blockId != 0) {
                         int sectionIdx = y >> 4;
                         if (!chunk->sections[sectionIdx]) {
-                            chunk->sections[sectionIdx] = std::make_unique<ChunkSection>(sectionIdx);
+                            chunk->sections[sectionIdx] = std::make_unique<ChunkSection>(sectionIdx << 4);
                         }
                         int localY = y & 0xF;
                         chunk->sections[sectionIdx]->setBlock(x, localY, z, Block::getBlockById(blockId));
@@ -94,6 +107,9 @@ public:
             }
         }
 
+        // Mark chunk as fully generated
+        chunk->isTerrainPopulated = true;
+
         return chunk;
     }
 
@@ -111,9 +127,161 @@ private:
 
     // Block IDs
     static constexpr int32_t END_STONE = 121;
+    static constexpr int32_t OBSIDIAN = 49;
+    static constexpr int32_t BEDROCK = 7;
 
     // Noise frequency (Java: d = 684.412, doubled to 1368.824)
     static constexpr double BASE_FREQ = 684.412;
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Helper: get top solid block in column (local within blocks array)
+    // Java: World.getTopSolidOrLiquidBlock
+    // ═══════════════════════════════════════════════════════════════════════
+
+    static int32_t getTopSolidLocal(const int32_t* blocks, int lx, int lz) {
+        for (int y = 127; y >= 0; --y) {
+            int32_t bId = blocks[(lx * 16 + lz) * 128 + y];
+            if (bId != 0) return y + 1;
+        }
+        return 0;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // WorldGenSpikes — End obsidian pillar generation
+    // Java reference: net.minecraft.world.gen.feature.WorldGenSpikes (58 lines)
+    //
+    // Called from BiomeEndDecorator.genDecorations with 1/5 chance per chunk.
+    // Generates a cylindrical obsidian column at a random position with:
+    //   - Height: 6-37 blocks (random.nextInt(32) + 6)
+    //   - Radius: 1-4 blocks (random.nextInt(4) + 1)
+    //   - Bedrock cap block
+    //   - Ender Crystal entity on top (entity spawn deferred)
+    //
+    // Validation:
+    //   - Position must be air with end_stone below
+    //   - All blocks within radius at y-1 must be end_stone
+    // ═══════════════════════════════════════════════════════════════════════
+
+    void generateSpikes(int32_t chunkX, int32_t chunkZ, int32_t* blocks, NoiseGeneratorImproved::RNG& rng) {
+        // Java: BiomeEndDecorator.genDecorations — 1/5 chance
+        if (rng.nextInt(5) != 0) return;
+
+        // Java: n = chunk_X + random.nextInt(16) + 8
+        //        n2 = chunk_Z + random.nextInt(16) + 8
+        // chunk_X/chunk_Z are already world coords (chunkX*16)
+        int32_t worldX = chunkX * 16 + rng.nextInt(16) + 8;
+        int32_t worldZ = chunkZ * 16 + rng.nextInt(16) + 8;
+
+        // Convert to chunk-local coordinates
+        int32_t localX = worldX & 15;
+        int32_t localZ = worldZ & 15;
+
+        // Get top solid block (Java: World.getTopSolidOrLiquidBlock)
+        int32_t baseY = getTopSolidLocal(blocks, localX, localZ);
+        if (baseY == 0) return;
+
+        // Java: WorldGenSpikes.generate validation
+        // 1. Position must be air: !world.isAirBlock(x, y, z)
+        int32_t centerIdx = (localX * 16 + localZ) * 128 + baseY;
+        if (baseY < 128 && blocks[centerIdx] != 0) return;
+
+        // 2. Block below must be end_stone
+        if (baseY == 0 || blocks[centerIdx - 1] != END_STONE) return;
+
+        // Java: n8 = random.nextInt(32) + 6  (height)
+        //        n9 = random.nextInt(4) + 1   (radius)
+        int32_t height = rng.nextInt(32) + 6;
+        int32_t radius = rng.nextInt(4) + 1;
+
+        // Java validation: all blocks within radius at y-1 must be end_stone
+        for (int32_t dx = -radius; dx <= radius; ++dx) {
+            for (int32_t dz = -radius; dz <= radius; ++dz) {
+                int32_t sx = localX + dx;
+                int32_t sz = localZ + dz;
+                if (sx < 0 || sx >= 16 || sz < 0 || sz >= 16) continue;
+                if (dx * dx + dz * dz > radius * radius + 1) continue;
+                // Java: world.getBlock(n7, n2 - 1, n6) == this.field_150520_a
+                int32_t checkIdx = (sx * 16 + sz) * 128 + (baseY - 1);
+                if (blocks[checkIdx] != END_STONE) return;
+            }
+        }
+
+        // Generate obsidian cylinder
+        for (int32_t y = baseY; y < baseY + height && y < 128; ++y) {
+            for (int32_t dx = -radius; dx <= radius; ++dx) {
+                for (int32_t dz = -radius; dz <= radius; ++dz) {
+                    int32_t sx = localX + dx;
+                    int32_t sz = localZ + dz;
+                    if (sx < 0 || sx >= 16 || sz < 0 || sz >= 16) continue;
+                    if (dx * dx + dz * dz > radius * radius + 1) continue;
+                    blocks[(sx * 16 + sz) * 128 + y] = OBSIDIAN;
+                }
+            }
+        }
+
+        // Java: world.setBlock(n, n2 + n8, n3, Blocks.bedrock, 0, 2)
+        // Bedrock cap at top of pillar
+        int32_t capY = baseY + height;
+        if (capY < 128) {
+            blocks[(localX * 16 + localZ) * 128 + capY] = BEDROCK;
+        }
+
+        // Java: EntityEnderCrystal spawned at (n+0.5, n2+n8, n3+0.5)
+        // Entity spawning deferred — requires entity system integration
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // End spawn platform — 5×5 obsidian platform at (0, 64, 0)
+    // Java reference: net.minecraft.world.Teleporter
+    //   → When a player teleports to The End, a 5×5 obsidian platform
+    //     is generated at (0, 64, 0) with air clearance above.
+    //
+    // We generate this during chunk generation for the chunk containing
+    // the origin (chunk 0,0). In Java this happens on teleport, but
+    // pre-generating ensures the platform exists for server starts.
+    // ═══════════════════════════════════════════════════════════════════════
+
+    void generateSpawnPlatform(int32_t chunkX, int32_t chunkZ, int32_t* blocks) {
+        // Platform is centered at world (0, 64, 0) = chunk (0, 0) local (0, 0)
+        // Only the chunk at (0, 0) contains the platform center
+        // Platform spans from (-2, 64, -2) to (2, 64, 2) in world coords
+        // This means chunks (-1, -1), (-1, 0), (0, -1), (0, 0) could contain parts
+        int32_t startWorldX = -2;
+        int32_t endWorldX = 2;
+        int32_t startWorldZ = -2;
+        int32_t endWorldZ = 2;
+        int32_t platformY = 64;
+
+        // Check if this chunk intersects the platform area
+        int32_t chunkStartX = chunkX * 16;
+        int32_t chunkStartZ = chunkZ * 16;
+        int32_t chunkEndX = chunkStartX + 15;
+        int32_t chunkEndZ = chunkStartZ + 15;
+
+        // No overlap check
+        if (chunkEndX < startWorldX || chunkStartX > endWorldX) return;
+        if (chunkEndZ < startWorldZ || chunkStartZ > endWorldZ) return;
+
+        // Place obsidian platform and clear air above
+        for (int32_t wx = startWorldX; wx <= endWorldX; ++wx) {
+            for (int32_t wz = startWorldZ; wz <= endWorldZ; ++wz) {
+                // Check if this world position is in this chunk
+                if (wx < chunkStartX || wx > chunkEndX) continue;
+                if (wz < chunkStartZ || wz > chunkEndZ) continue;
+
+                int32_t lx = wx - chunkStartX;
+                int32_t lz = wz - chunkStartZ;
+
+                // Place obsidian at platform level
+                blocks[(lx * 16 + lz) * 128 + platformY] = OBSIDIAN;
+
+                // Clear 3 blocks of air above for player clearance
+                for (int32_t y = platformY + 1; y <= platformY + 3 && y < 128; ++y) {
+                    blocks[(lx * 16 + lz) * 128 + y] = 0;
+                }
+            }
+        }
+    }
 
     // ═══════════════════════════════════════════════════════════════════════
     // Java: func_147420_a — 3D density field to block array

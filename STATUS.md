@@ -283,7 +283,7 @@
 - ~~**Trees/vegetation**~~ — ✅ Oak/birch/spruce/jungle/acacia/dark oak tree generation + flowers, tallgrass, sugar cane, pumpkin patches, clay deposits, cactus, dead bush, mushrooms, vines, lily pads
 - **Beach generation** — ✅ Sand beach at water edges
 - ~~**Nether terrain**~~ — ✅ NetherGenerator with 5×17×5 density field, lava sea y=32, surface decoration (soul sand/gravel/bedrock), MapGenCavesHell, quartz ore, glowstone, fire, mushrooms
-- ~~**End terrain**~~ — ✅ EndGenerator with 3×33×3 density field, island shape function (100-sqrt(x²+z²)*8), end stone, biome=sky(9)
+- ~~**End terrain**~~ — ✅ EndGenerator with 3×33×3 density field, island shape function (100-sqrt(x²+z²)*8), end stone, biome=sky(9), obsidian pillars (WorldGenSpikes: 1/5 chance, height 6-37, radius 1-4, bedrock cap), 5×5 obsidian spawn platform at origin y=64
 
 ---
 
