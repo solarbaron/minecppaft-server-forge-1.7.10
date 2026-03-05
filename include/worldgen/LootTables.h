@@ -45,6 +45,11 @@
 
 #include <cstdint>
 #include <array>
+#include <optional>
+#include <string>
+
+#include "item/Item.h"
+#include "inventory/Inventory.h"
 
 namespace mccpp {
 
@@ -398,6 +403,156 @@ inline int32_t computeTotalWeight(const LootEntry* table, int32_t size) {
         total += table[i].weight;
     }
     return total;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Loot table lookup by name — maps structure generator string to table data.
+// ═══════════════════════════════════════════════════════════════════════════
+
+struct LootTableRef {
+    const LootEntry* table;
+    int32_t tableSize;
+    int32_t minItems;
+    int32_t randomItems;  // total items = minItems + random(randomItems)
+};
+
+inline LootTableRef getLootTable(const std::string& name) {
+    if (name == "blacksmith" || name == "village_blacksmith") {
+        return { VillageBlacksmithLoot::TABLE,
+                 VillageBlacksmithLoot::TABLE_SIZE,
+                 VillageBlacksmithLoot::MIN_ITEMS,
+                 VillageBlacksmithLoot::MAX_ITEMS - VillageBlacksmithLoot::MIN_ITEMS };
+    }
+    if (name == "stronghold_corridor") {
+        return { StrongholdCorridorLoot::TABLE,
+                 StrongholdCorridorLoot::TABLE_SIZE,
+                 StrongholdCorridorLoot::MIN_ITEMS,
+                 StrongholdCorridorLoot::RANDOM_ITEMS };
+    }
+    if (name == "stronghold_crossing") {
+        return { StrongholdCrossingLoot::TABLE,
+                 StrongholdCrossingLoot::TABLE_SIZE,
+                 StrongholdCrossingLoot::MIN_ITEMS,
+                 StrongholdCrossingLoot::RANDOM_ITEMS };
+    }
+    if (name == "stronghold_library") {
+        return { StrongholdLibraryLoot::TABLE,
+                 StrongholdLibraryLoot::TABLE_SIZE,
+                 StrongholdLibraryLoot::MIN_ITEMS,
+                 StrongholdLibraryLoot::RANDOM_ITEMS };
+    }
+    if (name == "jungle_pyramid" || name == "jungle_temple") {
+        return { JungleTempleLoot::TABLE,
+                 JungleTempleLoot::TABLE_SIZE,
+                 JungleTempleLoot::MIN_ITEMS,
+                 JungleTempleLoot::RANDOM_ITEMS };
+    }
+    if (name == "desert_pyramid" || name == "desert_temple") {
+        return { DesertTempleLoot::TABLE,
+                 DesertTempleLoot::TABLE_SIZE,
+                 DesertTempleLoot::MIN_ITEMS,
+                 DesertTempleLoot::RANDOM_ITEMS };
+    }
+    if (name == "nether_fortress" || name == "nether_bridge") {
+        return { NetherFortressLoot::TABLE,
+                 NetherFortressLoot::TABLE_SIZE,
+                 NetherFortressLoot::MIN_ITEMS,
+                 NetherFortressLoot::RANDOM_ITEMS };
+    }
+    if (name == "mineshaft") {
+        return { MineshaftLoot::TABLE,
+                 MineshaftLoot::TABLE_SIZE,
+                 MineshaftLoot::MIN_ITEMS,
+                 MineshaftLoot::RANDOM_ITEMS };
+    }
+    if (name == "dungeon") {
+        // Dungeon uses similar parameters to mineshaft
+        return { DungeonLoot::TABLE, 13, 3, 4 };
+    }
+    // Fallback — empty table
+    return { nullptr, 0, 0, 0 };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// generateChestContents — Java: WeightedRandomChestContent.generateChestContents
+//
+// Fills a 27-slot chest inventory using the vanilla algorithm:
+//   For each of N attempts:
+//     1. Weighted-random select a LootEntry
+//     2. stackSize = min + random(max - min + 1)
+//     3. If item maxStackSize >= stackSize → place whole stack in random slot
+//     4. Else → split into individual items, each in a random slot
+//   Items CAN overwrite previous placements (vanilla behavior).
+//
+// Template parameter RNG must provide nextInt(int bound).
+// ═══════════════════════════════════════════════════════════════════════════
+
+template<typename RNG>
+inline void generateChestContents(
+    RNG& rng,
+    const LootEntry* table,
+    int32_t tableSize,
+    int32_t itemCount,
+    std::array<std::optional<ItemStack>, 27>& inventory)
+{
+    if (!table || tableSize <= 0 || itemCount <= 0) return;
+
+    int32_t totalWeight = computeTotalWeight(table, tableSize);
+    if (totalWeight <= 0) return;
+
+    for (int32_t attempt = 0; attempt < itemCount; ++attempt) {
+        // ── Weighted random selection (Java: WeightedRandom.getRandomItem) ──
+        int32_t pick = rng.nextInt(totalWeight);
+        const LootEntry* selected = &table[0];
+        for (int32_t i = 0; i < tableSize; ++i) {
+            pick -= table[i].weight;
+            if (pick < 0) {
+                selected = &table[i];
+                break;
+            }
+        }
+
+        // ── Stack size ──
+        int32_t range = selected->maxStack - selected->minStack + 1;
+        int32_t stackSize = selected->minStack + (range > 1 ? rng.nextInt(range) : 0);
+        if (stackSize <= 0) continue;
+
+        // ── Look up item max stack size ──
+        // Java: theItem.getItemStackLimit()
+        // Use Item registry when available, otherwise default to 64
+        int32_t maxStack = 64;
+        auto* item = Item::getItemById(selected->itemId);
+        if (item) {
+            maxStack = item->getMaxStackSize();
+        }
+
+        if (maxStack >= stackSize) {
+            // Place entire stack in one random slot
+            int32_t slot = rng.nextInt(LootGenConstants::CHEST_SIZE);
+            inventory[slot] = ItemStack(selected->itemId, stackSize, selected->metadata);
+        } else {
+            // Split into individual items across random slots
+            for (int32_t s = 0; s < stackSize; ++s) {
+                int32_t slot = rng.nextInt(LootGenConstants::CHEST_SIZE);
+                inventory[slot] = ItemStack(selected->itemId, 1, selected->metadata);
+            }
+        }
+    }
+}
+
+// Convenience overload using loot table name
+template<typename RNG>
+inline std::array<std::optional<ItemStack>, 27> generateChestContents(
+    const std::string& lootTableName,
+    RNG& rng)
+{
+    std::array<std::optional<ItemStack>, 27> inventory{};
+    LootTableRef ref = getLootTable(lootTableName);
+    if (!ref.table) return inventory;
+
+    int32_t itemCount = ref.minItems + (ref.randomItems > 0 ? rng.nextInt(ref.randomItems + 1) : 0);
+    generateChestContents(rng, ref.table, ref.tableSize, itemCount, inventory);
+    return inventory;
 }
 
 } // namespace mccpp

@@ -22,6 +22,8 @@
 #include "world/World.h"
 #include "redstone/Redstone.h"
 #include "entity/EntityList.h"
+#include "worldgen/LootTables.h"
+#include "worldgen/NoiseGeneratorOctaves.h"
 
 #include <algorithm>
 #include <cmath>
@@ -100,6 +102,27 @@ bool MinecraftServer::init() {
             sd.entityId = info.entityId;
         }
         chunk.pendingSpawners.clear();
+    });
+
+    // Set chest registrar callback so freshly-generated structure chests
+    // are populated with randomized loot in the server's chestStorage_.
+    // Java reference: WeightedRandomChestContent.generateChestContents()
+    overworld->setChestRegistrar([this](Chunk& chunk) {
+        for (auto& info : chunk.pendingChests) {
+            // Seed RNG from chest position for deterministic loot
+            NoiseGeneratorImproved::RNG rng;
+            int64_t posSeed = static_cast<int64_t>(info.x) * 341873128712LL +
+                              static_cast<int64_t>(info.y) * 28457361 +
+                              static_cast<int64_t>(info.z) * 132897987541LL;
+            rng.setSeed(posSeed);
+
+            auto contents = generateChestContents(info.lootTable, rng);
+
+            int64_t pk = packBlockPos(info.x, info.y, info.z);
+            std::lock_guard<std::mutex> lock(chestMutex_);
+            chestStorage_[pk] = std::move(contents);
+        }
+        chunk.pendingChests.clear();
     });
 
     worlds_.push_back(std::move(overworld));

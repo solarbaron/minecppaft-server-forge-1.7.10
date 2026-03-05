@@ -171,6 +171,13 @@ Chunk* ChunkProviderServer::loadChunk(int chunkX, int chunkZ) {
                     registrar(*chunk);
                 }
             }
+            // Register any chests from structure generation
+            if (chunk && !chunk->pendingChests.empty()) {
+                const auto& registrar = world_->getChestRegistrar();
+                if (registrar) {
+                    registrar(*chunk);
+                }
+            }
         } else {
             // Empty chunk fallback
             chunk = std::make_unique<Chunk>(chunkX, chunkZ);

@@ -358,6 +358,12 @@ public:
     void setSpawnerRegistrar(SpawnerRegistrar reg) { spawnerRegistrar_ = std::move(reg); }
     const SpawnerRegistrar& getSpawnerRegistrar() const { return spawnerRegistrar_; }
 
+    // ─── Chest Registrar callback ─────────────────────────────────────
+    // Called after chunk generation to populate pending chests with loot.
+    using ChestRegistrar = std::function<void(Chunk& chunk)>;
+    void setChestRegistrar(ChestRegistrar reg) { chestRegistrar_ = std::move(reg); }
+    const ChestRegistrar& getChestRegistrar() const { return chestRegistrar_; }
+
 private:
     int dimensionId_;
     std::string worldName_;
@@ -389,6 +395,7 @@ private:
     // Tile entity loader callback
     TileEntityLoader tileEntityLoader_;
     SpawnerRegistrar spawnerRegistrar_;
+    ChestRegistrar chestRegistrar_;
 };
 
 } // namespace mccpp
