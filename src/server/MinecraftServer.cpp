@@ -2771,6 +2771,25 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
                 mob.dragonTargetEntityId = -1;  // Clear player target
             }
 
+            // ─── Wither damage — Java: EntityWither.attackEntityFrom() ───
+            if (mob.mobType == 64) {
+                // Invulnerable during spawn sequence
+                if (mob.witherInvulTime > 0) {
+                    return;
+                }
+                // Java: isArmored() && source is arrow → return false
+                // (arrows blocked when health <= 50%)
+                // We treat all player melee as non-arrow; arrow hits handled separately
+                // Java: field_82222_j = 20 — block break timer on damage
+                if (mob.witherBlockBreakTimer <= 0) {
+                    mob.witherBlockBreakTimer = 20;
+                }
+                // Java: field_82224_i[n] += 3 — accelerate charged shot counters
+                for (int i = 0; i < 2; ++i) {
+                    mob.witherSideChargeCounter[i] += 3;
+                }
+            }
+
             mob.health -= damage;
 
             // Hurt animation
@@ -2795,6 +2814,7 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
                     case 61: hurtSound = "mob.blaze.hit"; break;
                     case 62: hurtSound = "mob.magmacube.small"; break;
                     case 63: hurtSound = "mob.enderdragon.hit"; hurtVolume = 5.0f; break;
+                    case 64: hurtSound = "mob.wither.hurt"; break;
                     case 66: hurtSound = "mob.witch.hurt"; break;
                     case 92: hurtSound = "mob.cow.hurt"; break;
                     case 90: hurtSound = "mob.pig.say"; break;
@@ -2941,6 +2961,7 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
                         case 61: deathSound = "mob.blaze.death"; break;
                         case 62: deathSound = "mob.magmacube.big"; break;
                         case 63: deathSound = "mob.enderdragon.end"; deathVolume = 5.0f; break;
+                        case 64: deathSound = "mob.wither.death"; break;
                         case 66: deathSound = "mob.witch.death"; break;
                         case 92: deathSound = "mob.cow.hurt"; break;
                         case 90: deathSound = "mob.pig.death"; break;
@@ -2998,6 +3019,7 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
                         case 57: return 5;   // Zombie Pigman
                         case 55: return 1;   // Slime (size-based, simplified to 1)
                         case 63: return 0;   // Ender Dragon — XP handled by death sequence
+                        case 64: return 50;  // Wither — Java: experienceValue = 50
                         // Passive mobs
                         case 92: return 1 + (rand() % 3); // Cow (1-3)
                         case 90: return 1 + (rand() % 3); // Pig
@@ -3063,6 +3085,8 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
                             break;
                         case 60: // Silverfish → nothing
                             break;
+                        case 64: // Wither → Nether Star (399)
+                            dropId = 399; baseCount = 1; break;
                         case 62: // Magma Cube → magma cream (378)
                             dropId = 378; baseCount = rand() % 2; break;
                         // ─── Passive mob drops ──────────────────────────
@@ -6275,6 +6299,27 @@ int32_t MinecraftServer::summonMob(uint8_t mobType, double x, double y, double z
                 conn->sendPacket(dw16Pkt);
             }
         }
+
+        // Wither-specific DataWatcher metadata — Java: EntityWither.entityInit()
+        // DW 17,18,19: int (watched target entity IDs for center+side heads)
+        // DW 20: int (invulnerability time, 220 on spawn)
+        if (mobType == 64) {
+            mob.witherInvulTime = 220;  // Java: setInvulTime(220) on spawn
+            auto dw17 = PacketBuilder::entityMetadataInt(eid, 17, 0); // center head target
+            auto dw18 = PacketBuilder::entityMetadataInt(eid, 18, 0); // left head target
+            auto dw19 = PacketBuilder::entityMetadataInt(eid, 19, 0); // right head target
+            auto dw20 = PacketBuilder::entityMetadataInt(eid, 20, 220); // invul time
+            for (auto& conn : connections_) {
+                if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                conn->sendPacket(dw17);
+                conn->sendPacket(dw18);
+                conn->sendPacket(dw19);
+                conn->sendPacket(dw20);
+            }
+            // Java: worldObj.playBroadcastSound(1015, ...) — wither spawn sound
+            broadcastEffect(1015, static_cast<int32_t>(x),
+                static_cast<int32_t>(y), static_cast<int32_t>(z), 0);
+        }
     }
     {
         std::lock_guard<std::mutex> lock(mobEntitiesMutex_);
@@ -6829,6 +6874,13 @@ void MinecraftServer::tickMobs() {
             // Dragon has its own AI; never despawns, never uses generic hostile chase
             if (mob.mobType == 63) {
                 tickDragon(mob, currentTick);
+                continue;
+            }
+
+            // ─── Wither Boss tick — Java: EntityWither.onLivingUpdate() + updateAITasks() ───
+            // Wither has its own AI; never despawns (entityAge=0)
+            if (mob.mobType == 64) {
+                tickWither(mob, currentTick);
                 continue;
             }
 
@@ -12368,4 +12420,389 @@ void MinecraftServer::tickXPOrbs() {
         xpOrbEntities_.end());
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Wither Boss — Java: EntityWither.onLivingUpdate() + updateAITasks()
+// ═══════════════════════════════════════════════════════════════════════════
+void MinecraftServer::tickWither(SpawnedMob& wither, int64_t currentTick) {
+    ++wither.witherTicksExisted;
+
+    // ─── Java: EntityWither.onLivingUpdate() ───
+    // motionY *= 0.6f — Wither floats, reduced Y velocity
+    wither.witherMotionY *= 0.6;
+
+    // ─── Fly toward primary target — Java: EntityWither.onLivingUpdate() lines 110-123 ───
+    if (wither.witherWatchedTargets[0] > 0) {
+        // Find nearest player as target
+        PlayHandler* target = nullptr;
+        double targetX = 0, targetY = 0, targetZ = 0;
+        {
+            std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
+            for (auto& conn : connections_) {
+                if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                auto handler = conn->getHandler();
+                auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                if (ph && ph->getEntityId() == wither.witherWatchedTargets[0] && !ph->isDead()) {
+                    target = ph;
+                    targetX = ph->getPlayerX();
+                    targetY = ph->getPlayerY();
+                    targetZ = ph->getPlayerZ();
+                    break;
+                }
+            }
+        }
+        if (target) {
+            // Java: if (posY < entity.posY || !isArmored() && posY < entity.posY + 5)
+            if (wither.posY < targetY || (!wither.isWitherArmored() && wither.posY < targetY + 5.0)) {
+                if (wither.witherMotionY < 0.0) wither.witherMotionY = 0.0;
+                wither.witherMotionY += (0.5 - wither.witherMotionY) * 0.6;
+            }
+            // Java: horizontal chase
+            double dx = targetX - wither.posX;
+            double dz = targetZ - wither.posZ;
+            double distSq = dx * dx + dz * dz;
+            if (distSq > 9.0) {
+                double dist = std::sqrt(distSq);
+                wither.witherMotionX += (dx / dist * 0.5 - wither.witherMotionX) * 0.6;
+                wither.witherMotionZ += (dz / dist * 0.5 - wither.witherMotionZ) * 0.6;
+            }
+        }
+    }
+
+    // Java: face direction of horizontal motion
+    if (wither.witherMotionX * wither.witherMotionX + wither.witherMotionZ * wither.witherMotionZ > 0.05) {
+        wither.yaw = static_cast<float>(std::atan2(wither.witherMotionZ, wither.witherMotionX) * 57.295776 - 90.0);
+    }
+
+    // Apply motion
+    wither.posX += wither.witherMotionX;
+    wither.posY += wither.witherMotionY;
+    wither.posZ += wither.witherMotionZ;
+
+    // Broadcast position
+    {
+        int32_t nx = static_cast<int32_t>(std::floor(wither.posX * 32.0));
+        int32_t ny = static_cast<int32_t>(std::floor(wither.posY * 32.0));
+        int32_t nz = static_cast<int32_t>(std::floor(wither.posZ * 32.0));
+        ++wither.ticksSinceLastTeleport;
+        if (wither.ticksSinceLastTeleport >= 60 ||
+            std::abs(nx - wither.lastSentPosX) > 512 ||
+            std::abs(ny - wither.lastSentPosY) > 512 ||
+            std::abs(nz - wither.lastSentPosZ) > 512) {
+            // Teleport
+            std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
+            for (auto& conn : connections_) {
+                if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                auto h = conn->getHandler();
+                auto* ph = dynamic_cast<PlayHandler*>(h.get());
+                if (ph) ph->sendEntityTeleport(*conn, wither.entityId, wither.posX, wither.posY, wither.posZ, wither.yaw, 0.0f);
+            }
+            wither.lastSentPosX = nx;
+            wither.lastSentPosY = ny;
+            wither.lastSentPosZ = nz;
+            wither.ticksSinceLastTeleport = 0;
+        } else {
+            int8_t relX = static_cast<int8_t>(nx - wither.lastSentPosX);
+            int8_t relY = static_cast<int8_t>(ny - wither.lastSentPosY);
+            int8_t relZ = static_cast<int8_t>(nz - wither.lastSentPosZ);
+            if (relX != 0 || relY != 0 || relZ != 0) {
+                std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
+                for (auto& conn : connections_) {
+                    if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                    auto h = conn->getHandler();
+                    auto* ph = dynamic_cast<PlayHandler*>(h.get());
+                    if (ph) ph->sendEntityLookRelMove(*conn, wither.entityId, relX, relY, relZ,
+                        static_cast<float>(wither.yaw), 0.0f);
+                }
+                wither.lastSentPosX = nx;
+                wither.lastSentPosY = ny;
+                wither.lastSentPosZ = nz;
+            }
+        }
+    }
+
+    // ─── Smoke particles on all 3 heads — Java: onLivingUpdate() lines 155-162 ───
+    if (wither.witherTicksExisted % 5 == 0) {
+        for (int headIdx = 0; headIdx < 3; ++headIdx) {
+            double headX = wither.posX;
+            double headY = (headIdx <= 0) ? wither.posY + 3.0 : wither.posY + 2.2;
+            double headZ = wither.posZ;
+            if (headIdx > 0) {
+                float angle = (wither.yaw + static_cast<float>(180 * (headIdx - 1))) / 180.0f * static_cast<float>(M_PI);
+                headX += static_cast<double>(std::cos(angle)) * 1.3;
+                headZ += static_cast<double>(std::sin(angle)) * 1.3;
+            }
+            broadcastParticle("smoke",
+                static_cast<float>(headX), static_cast<float>(headY), static_cast<float>(headZ),
+                0.3f, 0.3f, 0.3f, 0.0f, 1);
+        }
+    }
+
+    // ─── Java: EntityWither.updateAITasks() ───
+
+    // ─── Invulnerability phase (spawn animation) ───
+    if (wither.witherInvulTime > 0) {
+        int32_t newInvul = wither.witherInvulTime - 1;
+
+        if (newInvul <= 0) {
+            // Java: spawn explosion — power 7.0, no fire, respect mobGriefing
+            createExplosion(wither.posX, wither.posY + 3.0, wither.posZ, 7.0f, false, true);
+            // Java: this.worldObj.playBroadcastSound(1013, ...)
+            broadcastEffect(1013, static_cast<int32_t>(wither.posX),
+                static_cast<int32_t>(wither.posY), static_cast<int32_t>(wither.posZ), 0);
+        }
+
+        wither.witherInvulTime = newInvul;
+
+        // Java: heal 10 HP every 10 ticks during invul
+        if (wither.witherTicksExisted % 10 == 0) {
+            wither.health = std::min(wither.health + 10.0f, 300.0f);
+        }
+
+        // Invul particles — Java: lines 163-167
+        if (wither.witherTicksExisted % 3 == 0) {
+            broadcastParticle("mobSpell",
+                static_cast<float>(wither.posX + ((rand() % 200 - 100) / 100.0)),
+                static_cast<float>(wither.posY + ((float)(rand() % 330) / 100.0f)),
+                static_cast<float>(wither.posZ + ((rand() % 200 - 100) / 100.0)),
+                0.7f, 0.7f, 0.9f, 0.0f, 1);
+        }
+
+        // Broadcast DW 20 invul time
+        {
+            std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
+            for (auto& conn : connections_) {
+                if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                conn->sendPacket(PacketBuilder::entityMetadataInt(wither.entityId, 20, wither.witherInvulTime));
+            }
+        }
+        return;  // Java: return during invul
+    }
+
+    // ─── Side head targeting — Java: updateAITasks() lines 187-230 ───
+    for (int headIdx = 1; headIdx < 3; ++headIdx) {
+        int sideIdx = headIdx - 1;
+
+        // Check if current tick is past attack timer
+        if (wither.witherTicksExisted >= wither.witherSideAttackTimer[sideIdx]) {
+            wither.witherSideAttackTimer[sideIdx] = wither.witherTicksExisted + 10 + (rand() % 10);
+
+            // Java: charged shot after 15 charges — fire at random location
+            if (wither.witherSideChargeCounter[sideIdx] > 15) {
+                double randX = wither.posX + ((double)(rand() % 2000 - 1000) / 100.0);
+                double randY = wither.posY + ((double)(rand() % 1000 - 500) / 100.0);
+                double randZ = wither.posZ + ((double)(rand() % 2000 - 1000) / 100.0);
+
+                // Fire charged wither skull (blue) — larger explosion
+                // Java: launchWitherSkullToCoords(n+1, d, d2, d3, true) → charged skull
+                broadcastEffect(1014, static_cast<int32_t>(wither.posX),
+                    static_cast<int32_t>(wither.posY), static_cast<int32_t>(wither.posZ), 0);
+
+                // Simplified: instant explosion at random location (no projectile entity)
+                createExplosion(randX, randY, randZ, 1.0f, false, true);
+                wither.witherSideChargeCounter[sideIdx] = 0;
+                continue;
+            }
+
+            // Java: find target for this side head
+            int32_t sideTarget = wither.witherWatchedTargets[headIdx];
+            if (sideTarget > 0) {
+                // Check if target is still valid
+                bool valid = false;
+                double tx = 0, ty = 0, tz = 0;
+                {
+                    std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
+                    for (auto& conn : connections_) {
+                        if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                        auto handler = conn->getHandler();
+                        auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                        if (ph && ph->getEntityId() == sideTarget && !ph->isDead()) {
+                            double dx = ph->getPlayerX() - wither.posX;
+                            double dz = ph->getPlayerZ() - wither.posZ;
+                            if (dx * dx + dz * dz <= 900.0) {  // Java: 30 blocks range
+                                valid = true;
+                                tx = ph->getPlayerX();
+                                ty = ph->getPlayerY() + 0.85; // eye height * 0.5
+                                tz = ph->getPlayerZ();
+                            }
+                            break;
+                        }
+                    }
+                }
+
+                if (valid) {
+                    // Fire skull at target — Java: launchWitherSkullToEntity()
+                    // Sound effect 1014 = wither skull shoot
+                    broadcastEffect(1014, static_cast<int32_t>(wither.posX),
+                        static_cast<int32_t>(wither.posY), static_cast<int32_t>(wither.posZ), 0);
+
+                    // Simplified: direct damage + Wither II effect instead of projectile
+                    // Java: EntityWitherSkull.onImpact() → 8 damage + Wither II
+                    {
+                        std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
+                        for (auto& conn : connections_) {
+                            if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                            auto handler = conn->getHandler();
+                            auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                            if (ph && ph->getEntityId() == sideTarget && !ph->isDead()) {
+                                ph->applyDamage(8.0f);
+                                // Java: Wither II for 10s (normal) — Potion.wither.id = 20
+                                ph->addPotionEffect(*conn, 20, 200, 1);
+                                break;
+                            }
+                        }
+                    }
+
+                    // Small explosion at target — Java: newExplosion(skull, x, y, z, 1.0f, ...)
+                    createExplosion(tx, ty, tz, 1.0f, false, true);
+
+                    wither.witherSideAttackTimer[sideIdx] = wither.witherTicksExisted + 40 + (rand() % 20);
+                    wither.witherSideChargeCounter[sideIdx] = 0;
+                } else {
+                    wither.witherWatchedTargets[headIdx] = 0;
+                }
+            } else {
+                // Java: selectEntitiesWithinAABB — find new target
+                std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
+                double nearestDist = 400.0;  // 20 blocks squared
+                int32_t nearestId = 0;
+                for (auto& conn : connections_) {
+                    if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                    auto handler = conn->getHandler();
+                    auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                    if (!ph || ph->isDead()) continue;
+                    // Java: creative players with disableDamage are skipped
+                    if (ph->getGameMode() == 1) continue;
+                    double dx = ph->getPlayerX() - wither.posX;
+                    double dy = ph->getPlayerY() - wither.posY;
+                    double dz = ph->getPlayerZ() - wither.posZ;
+                    double distSq = dx * dx + dy * dy + dz * dz;
+                    if (distSq < nearestDist) {
+                        nearestDist = distSq;
+                        nearestId = ph->getEntityId();
+                    }
+                }
+                if (nearestId > 0) {
+                    wither.witherWatchedTargets[headIdx] = nearestId;
+                }
+            }
+        }
+    }
+
+    // ─── Center head attack (melee range) — Java: attackEntityWithRangedAttack() ───
+    // Java: EntityAIArrowAttack — attacks primary target at range 20, cooldown 40 ticks
+    if (wither.witherWatchedTargets[0] > 0 && wither.witherTicksExisted % 40 == 0) {
+        int32_t centerTarget = wither.witherWatchedTargets[0];
+        double tx = 0, ty = 0, tz = 0;
+        bool targetExists = false;
+        {
+            std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
+            for (auto& conn : connections_) {
+                if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                auto handler = conn->getHandler();
+                auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                if (ph && ph->getEntityId() == centerTarget && !ph->isDead()) {
+                    targetExists = true;
+                    tx = ph->getPlayerX();
+                    ty = ph->getPlayerY() + 0.85;
+                    tz = ph->getPlayerZ();
+                    break;
+                }
+            }
+        }
+        if (targetExists) {
+            double dx = tx - wither.posX;
+            double dz = tz - wither.posZ;
+            if (dx * dx + dz * dz <= 400.0) {  // 20 blocks range
+                broadcastEffect(1014, static_cast<int32_t>(wither.posX),
+                    static_cast<int32_t>(wither.posY), static_cast<int32_t>(wither.posZ), 0);
+                // Damage target
+                {
+                    std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
+                    for (auto& conn : connections_) {
+                        if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                        auto handler = conn->getHandler();
+                        auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                        if (ph && ph->getEntityId() == centerTarget && !ph->isDead()) {
+                            ph->applyDamage(8.0f);
+                            ph->addPotionEffect(*conn, 20, 200, 1); // Wither II 10s
+                            break;
+                        }
+                    }
+                }
+                createExplosion(tx, ty, tz, 1.0f, false, true);
+            } else {
+                wither.witherWatchedTargets[0] = 0;
+            }
+        } else {
+            wither.witherWatchedTargets[0] = 0;
+        }
+    }
+
+    // ─── Primary target acquisition — Java: updateAITasks() lines 231-235 ───
+    if (wither.witherWatchedTargets[0] == 0 && wither.witherTicksExisted % 20 == 0) {
+        // Find nearest visible player
+        std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
+        double nearestDist = 1600.0;  // 40 blocks range (Java: followRange=40)
+        int32_t nearestId = 0;
+        for (auto& conn : connections_) {
+            if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+            auto handler = conn->getHandler();
+            auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+            if (!ph || ph->isDead()) continue;
+            if (ph->getGameMode() == 1) continue;  // Skip creative
+            double dx = ph->getPlayerX() - wither.posX;
+            double dy = ph->getPlayerY() - wither.posY;
+            double dz = ph->getPlayerZ() - wither.posZ;
+            double distSq = dx * dx + dy * dy + dz * dz;
+            if (distSq < nearestDist) {
+                nearestDist = distSq;
+                nearestId = ph->getEntityId();
+            }
+        }
+        wither.witherWatchedTargets[0] = nearestId;
+    }
+
+    // ─── Block destruction timer — Java: updateAITasks() lines 236-258 ───
+    if (wither.witherBlockBreakTimer > 0) {
+        --wither.witherBlockBreakTimer;
+        if (wither.witherBlockBreakTimer == 0) {
+            // Java: mobGriefing check → break blocks in 3×4×3 area around wither
+            int bx = static_cast<int>(std::floor(wither.posX));
+            int by = static_cast<int>(std::floor(wither.posY));
+            int bz = static_cast<int>(std::floor(wither.posZ));
+            bool broke = false;
+            for (int i = -1; i <= 1; ++i) {
+                for (int j = -1; j <= 1; ++j) {
+                    for (int k = 0; k <= 3; ++k) {
+                        int wx = bx + i;
+                        int wy = by + k;
+                        int wz = bz + j;
+                        int32_t blockId = getBlockIdInWorld(wx, wy, wz);
+                        // Java: skip air, bedrock, end_portal, end_portal_frame, command_block
+                        if (blockId == 0 || blockId == 7 || blockId == 119 || blockId == 120 || blockId == 137) continue;
+                        setBlockInWorld(wx, wy, wz, 0, 0);  // Break to air
+                        broke = true;
+                    }
+                }
+            }
+            if (broke) {
+                // Java: playAuxSFXAtEntity(null, 1012, ...)
+                broadcastEffect(1012, bx, by, bz, 0);
+            }
+        }
+    }
+
+    // ─── Regeneration — Java: updateAITasks() line 260 → heal 1 every 20 ticks ───
+    if (wither.witherTicksExisted % 20 == 0) {
+        wither.health = std::min(wither.health + 1.0f, 300.0f);
+    }
+
+    // ─── Ambient sound — Java: getLivingSound() = "mob.wither.idle" ───
+    if ((rand() % 200) == 0) {
+        broadcastSound("mob.wither.idle", wither.posX, wither.posY, wither.posZ,
+            1.0f, 0.8f + ((float)(rand() % 40) / 100.0f));
+    }
+}
+
 } // namespace mccpp
+

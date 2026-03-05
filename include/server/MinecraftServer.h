@@ -844,6 +844,19 @@ private:
         // Crystal healing — Java: EntityDragon.healingEnderCrystal
         int32_t dragonHealingCrystalId = -1;   // Entity ID of linked ender crystal (-1 = none)
         int32_t dragonCrystalSearchTimer = 0;  // Ticks until next crystal search
+        // ─── Wither Boss state — Java: EntityWither ───
+        int32_t witherInvulTime = 0;               // DW 20: 220 on spawn, counts down
+        int32_t witherWatchedTargets[3] = {};       // DW 17,18,19: entity IDs of center+side head targets
+        float witherSideHeadYaw[2] = {};            // Java: field_82221_e — side head yaw
+        float witherSideHeadPitch[2] = {};          // Java: field_82220_d — side head pitch
+        float witherPrevSideHeadYaw[2] = {};        // Java: field_82218_g
+        float witherPrevSideHeadPitch[2] = {};      // Java: field_82217_f
+        int32_t witherSideAttackTimer[2] = {};      // Java: field_82223_h — next attack tick
+        int32_t witherSideChargeCounter[2] = {};    // Java: field_82224_i — charged shot counter
+        int32_t witherBlockBreakTimer = 0;          // Java: field_82222_j
+        double witherMotionX = 0, witherMotionY = 0, witherMotionZ = 0;
+        int32_t witherTicksExisted = 0;             // Java: ticksExisted counter
+        bool isWitherArmored() const { return health <= 150.0f; } // <= maxHealth/2
     };
     mutable std::mutex mobEntitiesMutex_;
     std::vector<SpawnedMob> mobEntities_;
@@ -857,6 +870,8 @@ private:
     void tickRandomBlocks();
     /** Tick a single Ender Dragon — Java: EntityDragon.onLivingUpdate() + onDeathUpdate() */
     void tickDragon(SpawnedMob& dragon, int64_t currentTick);
+    /** Tick a single Wither Boss — Java: EntityWither.onLivingUpdate() + updateAITasks() */
+    void tickWither(SpawnedMob& wither, int64_t currentTick);
 
 public:
     // ─── Arrow projectile entities ──────────────────────────────────
