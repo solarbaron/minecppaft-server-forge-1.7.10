@@ -2757,6 +2757,20 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
                 }
             }
 
+            // ─── Ender Dragon damage — Java: EntityDragon.attackEntityFromPart() ───
+            // Dragon ignores generic attackEntityFrom; only takes player/explosion damage
+            // Body hits: damage = f/4 + 1; Head hits: full damage
+            // Since we use a single hitbox, treat all hits as body hits (reduced damage)
+            if (mob.mobType == 63) {
+                damage = damage / 4.0f + 1.0f;  // Java: EntityDragonPart != head → f/4+1
+                // Force retarget after being hit — Java: EntityDragon.attackEntityFromPart()
+                float yawRad = mob.yaw * static_cast<float>(M_PI) / 180.0f;
+                mob.dragonTargetX = mob.posX + static_cast<double>(std::sin(yawRad) * 5.0f) + ((double)(rand() % 100) / 100.0 - 0.5) * 2.0;
+                mob.dragonTargetY = mob.posY + ((double)(rand() % 100) / 100.0) * 3.0 + 1.0;
+                mob.dragonTargetZ = mob.posZ - static_cast<double>(std::cos(yawRad) * 5.0f) + ((double)(rand() % 100) / 100.0 - 0.5) * 2.0;
+                mob.dragonTargetEntityId = -1;  // Clear player target
+            }
+
             mob.health -= damage;
 
             // Hurt animation
@@ -2766,6 +2780,7 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
             // Java: EntityLiving.attackEntityFrom() → getHurtSound()
             {
                 const char* hurtSound = "game.hostile.hurt";
+                float hurtVolume = 1.0f;
                 switch (mob.mobType) {
                     case 50: hurtSound = "mob.creeper.say"; break;
                     case 51: hurtSound = "mob.skeleton.hurt"; break;
@@ -2779,6 +2794,7 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
                     case 60: hurtSound = "mob.silverfish.hit"; break;
                     case 61: hurtSound = "mob.blaze.hit"; break;
                     case 62: hurtSound = "mob.magmacube.small"; break;
+                    case 63: hurtSound = "mob.enderdragon.hit"; hurtVolume = 5.0f; break;
                     case 66: hurtSound = "mob.witch.hurt"; break;
                     case 92: hurtSound = "mob.cow.hurt"; break;
                     case 90: hurtSound = "mob.pig.say"; break;
@@ -2797,7 +2813,7 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
                     }
                     default: break;
                 }
-                broadcastSound(hurtSound, mob.posX, mob.posY, mob.posZ, 1.0f, 1.0f);
+                broadcastSound(hurtSound, mob.posX, mob.posY, mob.posZ, hurtVolume, 1.0f);
             }
 
             // ─── Enderman teleport on hit ────────────────────────────
@@ -2886,6 +2902,21 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
 
             // Death check
             if (mob.health <= 0.0f) {
+                // ─── Ender Dragon death — Java: EntityDragon.onDeathUpdate() ───
+                // Dragon doesn't die immediately; it enters a 200-tick death sequence
+                if (mob.mobType == 63 && mob.dragonDeathTicks == 0) {
+                    mob.health = 0.0f;
+                    mob.dragonDeathTicks = 1;  // Start death sequence
+                    // Broadcast entity status 3 (death) — triggers client death animation
+                    broadcastEntityEvent(targetEntityId, 3);
+                    // Java: playBroadcastSound(1018, ...) — ender dragon death roar
+                    broadcastSound("mob.enderdragon.end", mob.posX, mob.posY, mob.posZ, 5.0f, 1.0f);
+                    std::cout << "[Dragon] Ender Dragon death sequence started at ("
+                              << mob.posX << ", " << mob.posY << ", " << mob.posZ << ")\n";
+                    // Don't mark isDead yet — death sequence handles that over 200 ticks
+                    return;
+                }
+
                 mob.isDead = true;
 
                 // Death animation
@@ -2895,6 +2926,7 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
                 // Java: EntityLiving.onDeath() → getDeathSound()
                 {
                     const char* deathSound = "game.hostile.die";
+                    float deathVolume = 1.0f;
                     switch (mob.mobType) {
                         case 50: deathSound = "mob.creeper.death"; break;
                         case 51: deathSound = "mob.skeleton.death"; break;
@@ -2908,6 +2940,7 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
                         case 60: deathSound = "mob.silverfish.kill"; break;
                         case 61: deathSound = "mob.blaze.death"; break;
                         case 62: deathSound = "mob.magmacube.big"; break;
+                        case 63: deathSound = "mob.enderdragon.end"; deathVolume = 5.0f; break;
                         case 66: deathSound = "mob.witch.death"; break;
                         case 92: deathSound = "mob.cow.hurt"; break;
                         case 90: deathSound = "mob.pig.death"; break;
@@ -2926,7 +2959,7 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
                         }
                         default: break;
                     }
-                    broadcastSound(deathSound, mob.posX, mob.posY, mob.posZ, 1.0f, 1.0f);
+                    broadcastSound(deathSound, mob.posX, mob.posY, mob.posZ, deathVolume, 1.0f);
                 }
 
                 // Destroy entity
@@ -2964,6 +2997,7 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
                         case 59: return 5;   // Cave Spider
                         case 57: return 5;   // Zombie Pigman
                         case 55: return 1;   // Slime (size-based, simplified to 1)
+                        case 63: return 0;   // Ender Dragon — XP handled by death sequence
                         // Passive mobs
                         case 92: return 1 + (rand() % 3); // Cow (1-3)
                         case 90: return 1 + (rand() % 3); // Pig
@@ -6791,6 +6825,13 @@ void MinecraftServer::tickMobs() {
         for (auto& mob : mobEntities_) {
             if (mob.isDead) continue;
 
+            // ─── Ender Dragon tick — Java: EntityDragon.onLivingUpdate() ───
+            // Dragon has its own AI; never despawns, never uses generic hostile chase
+            if (mob.mobType == 63) {
+                tickDragon(mob, currentTick);
+                continue;
+            }
+
             // Check distance to nearest player
             double nearestDistSq = 1e9;
             {
@@ -8538,6 +8579,509 @@ void MinecraftServer::tickMobs() {
             if (ph) {
                 ph->sendDestroyEntities(*conn, deadIds);
             }
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Ender Dragon AI tick — Java: EntityDragon.onLivingUpdate() + onDeathUpdate()
+// ═══════════════════════════════════════════════════════════════════════════
+
+void MinecraftServer::tickDragon(SpawnedMob& dragon, int64_t currentTick) {
+    // ─── Death sequence — Java: EntityDragon.onDeathUpdate() ───
+    if (dragon.dragonDeathTicks > 0) {
+        ++dragon.dragonDeathTicks;
+
+        // Spawn explosion particles during death — Java: onLivingUpdate() when health<=0
+        {
+            float px = ((float)(rand() % 1000) / 1000.0f - 0.5f) * 8.0f;
+            float py = ((float)(rand() % 1000) / 1000.0f - 0.5f) * 4.0f;
+            float pz = ((float)(rand() % 1000) / 1000.0f - 0.5f) * 8.0f;
+            broadcastParticle("largeexplode",
+                static_cast<float>(dragon.posX) + px,
+                static_cast<float>(dragon.posY) + 2.0f + py,
+                static_cast<float>(dragon.posZ) + pz,
+                0.0f, 0.0f, 0.0f, 0.0f, 1);
+        }
+
+        // Java: deathTicks >= 180 && deathTicks <= 200 → hugeexplosion particles
+        if (dragon.dragonDeathTicks >= 180 && dragon.dragonDeathTicks <= 200) {
+            float px = ((float)(rand() % 1000) / 1000.0f - 0.5f) * 8.0f;
+            float py = ((float)(rand() % 1000) / 1000.0f - 0.5f) * 4.0f;
+            float pz = ((float)(rand() % 1000) / 1000.0f - 0.5f) * 8.0f;
+            broadcastParticle("hugeexplosion",
+                static_cast<float>(dragon.posX) + px,
+                static_cast<float>(dragon.posY) + 2.0f + py,
+                static_cast<float>(dragon.posZ) + pz,
+                0.0f, 0.0f, 0.0f, 0.0f, 1);
+        }
+
+        // Java: deathTicks > 150 && deathTicks % 5 == 0 → spawn 1000 XP per wave
+        if (dragon.dragonDeathTicks > 150 && dragon.dragonDeathTicks % 5 == 0) {
+            spawnXPOrbs(dragon.posX, dragon.posY + 2.0, dragon.posZ, 1000);
+        }
+
+        // Slowly float upward and spin during death — Java: moveEntity(0, 0.1, 0), yaw += 20
+        dragon.posY += 0.1;
+        dragon.yaw += 20.0f;
+        while (dragon.yaw > 180.0f) dragon.yaw -= 360.0f;
+        while (dragon.yaw < -180.0f) dragon.yaw += 360.0f;
+
+        // Broadcast death position/rotation
+        {
+            std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
+            for (auto& conn : connections_) {
+                if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                auto handler = conn->getHandler();
+                auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                if (!ph) continue;
+                ph->sendEntityTeleport(*conn, dragon.entityId,
+                    dragon.posX, dragon.posY, dragon.posZ, dragon.yaw, dragon.pitch);
+            }
+        }
+
+        // Java: deathTicks == 200 → final XP burst (2000) + create portal + setDead()
+        if (dragon.dragonDeathTicks >= 200) {
+            spawnXPOrbs(dragon.posX, dragon.posY + 2.0, dragon.posZ, 2000);
+
+            // ─── Create End portal — Java: EntityDragon.createEnderPortal() ───
+            // Build bedrock + end_portal structure at Y=64
+            int portalX = static_cast<int>(std::floor(dragon.posX));
+            int portalZ = static_cast<int>(std::floor(dragon.posZ));
+            int portalY = 64;  // Java: int n3 = 64
+            int radius = 4;    // Java: int n4 = 4
+
+            std::cout << "[Dragon] Creating End portal at (" << portalX << ", " << portalY << ", " << portalZ << ")\n";
+
+            for (int y = portalY - 1; y <= portalY + 32; ++y) {
+                for (int x = portalX - radius; x <= portalX + radius; ++x) {
+                    for (int z = portalZ - radius; z <= portalZ + radius; ++z) {
+                        double dx = x - portalX;
+                        double dz = z - portalZ;
+                        double distSq = dx * dx + dz * dz;
+
+                        if (distSq > (radius - 0.5) * (radius - 0.5)) continue;
+
+                        if (y < portalY) {
+                            // Below portal level — bedrock floor
+                            if (distSq <= (radius - 1 - 0.5) * (radius - 1 - 0.5)) {
+                                setBlockInWorld(x, y, z, 7, 0);  // bedrock
+                            }
+                        } else if (y > portalY) {
+                            // Above portal level — clear blocks
+                            setBlockInWorld(x, y, z, 0, 0);  // air
+                        } else {
+                            // At portal level (y == portalY)
+                            if (distSq > (radius - 1 - 0.5) * (radius - 1 - 0.5)) {
+                                setBlockInWorld(x, y, z, 7, 0);  // bedrock rim
+                            } else {
+                                setBlockInWorld(x, y, z, 119, 0);  // end_portal (119)
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Central pillar — Java: bedrock column + torches + dragon egg
+            setBlockInWorld(portalX, portalY + 0, portalZ, 7, 0);  // bedrock
+            setBlockInWorld(portalX, portalY + 1, portalZ, 7, 0);  // bedrock
+            setBlockInWorld(portalX, portalY + 2, portalZ, 7, 0);  // bedrock
+            setBlockInWorld(portalX - 1, portalY + 2, portalZ, 50, 1);  // torch (east)
+            setBlockInWorld(portalX + 1, portalY + 2, portalZ, 50, 2);  // torch (west)
+            setBlockInWorld(portalX, portalY + 2, portalZ - 1, 50, 3);  // torch (south)
+            setBlockInWorld(portalX, portalY + 2, portalZ + 1, 50, 4);  // torch (north)
+            setBlockInWorld(portalX, portalY + 3, portalZ, 7, 0);  // bedrock
+            setBlockInWorld(portalX, portalY + 4, portalZ, 122, 0);  // dragon_egg (122)
+
+            // Mark dragon as truly dead
+            dragon.isDead = true;
+
+            // Destroy entity for all clients
+            {
+                std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
+                std::vector<int32_t> dead = {dragon.entityId};
+                for (auto& conn : connections_) {
+                    if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                    auto handler = conn->getHandler();
+                    auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                    if (ph) ph->sendDestroyEntities(*conn, dead);
+                }
+            }
+
+            broadcastChatMessage("§5The Ender Dragon has been defeated!");
+            std::cout << "[Dragon] Ender Dragon defeated. Portal and egg placed.\n";
+        }
+        return;
+    }
+
+    // ─── Living dragon AI — Java: EntityDragon.onLivingUpdate() ───
+
+    // --- Wing flap sound — Java: client-side animTime cos() crossing -0.3
+    dragon.dragonPrevAnimTime = dragon.dragonAnimTime;
+
+    // --- Ring buffer update — Java: EntityDragon ring buffer tracking
+    if (dragon.dragonRingIndex < 0) {
+        // Initialize ring buffer on first tick
+        for (int i = 0; i < 64; ++i) {
+            dragon.dragonRingBuffer[i][0] = static_cast<double>(dragon.yaw);
+            dragon.dragonRingBuffer[i][1] = dragon.posY;
+            dragon.dragonRingBuffer[i][2] = 0.0;
+        }
+    }
+    dragon.dragonRingIndex = (dragon.dragonRingIndex + 1) & 0x3F;  // Wrap at 64
+    dragon.dragonRingBuffer[dragon.dragonRingIndex][0] = static_cast<double>(dragon.yaw);
+    dragon.dragonRingBuffer[dragon.dragonRingIndex][1] = dragon.posY;
+
+    // --- Crystal healing — Java: EntityDragon.updateDragonEnderCrystal()
+    // (Simplified: heal 1HP per 10 ticks if dragon health < max)
+    if (dragon.health < 200.0f && currentTick % 10 == 0) {
+        dragon.health = std::min(200.0f, dragon.health + 1.0f);
+        // Update health metadata for boss bar — DataWatcher 6 (float health)
+        {
+            std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
+            for (auto& conn : connections_) {
+                if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                auto handler = conn->getHandler();
+                auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                if (!ph) continue;
+                conn->sendPacket(PacketBuilder::entityMetadataFloat(dragon.entityId, 6, dragon.health));
+            }
+        }
+    }
+
+    // --- Target acquisition — Java: EntityDragon.setNewTarget()
+    double dx = dragon.dragonTargetX - dragon.posX;
+    double dy = dragon.dragonTargetY - dragon.posY;
+    double dz = dragon.dragonTargetZ - dragon.posZ;
+    double distToTargetSq = dx * dx + dy * dy + dz * dz;
+
+    // Update target if targeting a player
+    if (dragon.dragonTargetEntityId >= 0) {
+        bool found = false;
+        std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
+        for (auto& conn : connections_) {
+            if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+            auto handler = conn->getHandler();
+            auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+            if (!ph || ph->getEntityId() != dragon.dragonTargetEntityId) continue;
+            dragon.dragonTargetX = ph->getPlayerX();
+            dragon.dragonTargetZ = ph->getPlayerZ();
+            // Java: targetY = player.boundingBox.minY + (0.4 + dist/80 - 1), capped at 10
+            double tdx = dragon.dragonTargetX - dragon.posX;
+            double tdz = dragon.dragonTargetZ - dragon.posZ;
+            double tdist = std::sqrt(tdx * tdx + tdz * tdz);
+            double yOffset = 0.4 + tdist / 80.0 - 1.0;
+            if (yOffset > 10.0) yOffset = 10.0;
+            dragon.dragonTargetY = ph->getPlayerY() + yOffset;
+            found = true;
+            break;
+        }
+        if (!found) {
+            dragon.dragonTargetEntityId = -1;  // Player disconnected
+        }
+    } else {
+        // Random drift when no target — Java: targetX += gaussian*2, targetZ += gaussian*2
+        dragon.dragonTargetX += ((double)(rand() % 200 - 100) / 50.0);
+        dragon.dragonTargetZ += ((double)(rand() % 200 - 100) / 50.0);
+    }
+
+    // Force new target if too close, too far, or stuck — Java: d < 100 || d > 22500
+    if (dragon.dragonForceNewTarget || distToTargetSq < 100.0 || distToTargetSq > 22500.0) {
+        dragon.dragonForceNewTarget = false;
+
+        // Java: 50% chance target random player, 50% random point
+        if (rand() % 2 == 0) {
+            // Target a random connected player
+            std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
+            std::vector<int32_t> playerIds;
+            for (auto& conn : connections_) {
+                if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                auto handler = conn->getHandler();
+                auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                if (ph) playerIds.push_back(ph->getEntityId());
+            }
+            if (!playerIds.empty()) {
+                dragon.dragonTargetEntityId = playerIds[rand() % playerIds.size()];
+            }
+        } else {
+            // Random target near origin — Java: Y=70+rand*50, X/Z=rand*120-60
+            dragon.dragonTargetEntityId = -1;
+            bool validTarget = false;
+            for (int attempt = 0; attempt < 10 && !validTarget; ++attempt) {
+                dragon.dragonTargetX = (double)(rand() % 120 - 60);
+                dragon.dragonTargetY = 70.0 + (double)(rand() % 50);
+                dragon.dragonTargetZ = (double)(rand() % 120 - 60);
+                // Java: must be >100 blocks from current pos
+                double ntdx = dragon.posX - dragon.dragonTargetX;
+                double ntdy = dragon.posY - dragon.dragonTargetY;
+                double ntdz = dragon.posZ - dragon.dragonTargetZ;
+                if (ntdx * ntdx + ntdy * ntdy + ntdz * ntdz > 100.0) {
+                    validTarget = true;
+                }
+            }
+        }
+    }
+
+    // --- Flight physics — Java: EntityDragon.onLivingUpdate() server-side path
+    // Recompute dx/dy/dz toward target
+    dx = dragon.dragonTargetX - dragon.posX;
+    dy = dragon.dragonTargetY - dragon.posY;
+    dz = dragon.dragonTargetZ - dragon.posZ;
+    double distHorizSq = dx * dx + dz * dz;
+    double distHoriz = std::sqrt(distHorizSq);
+
+    // Clamp vertical velocity — Java: d3 = dy / sqrt(dx*dx + dz*dz), clamped to [-0.6, 0.6]
+    float clampF = 0.6f;
+    if (distHoriz > 0.001) {
+        double dyNorm = dy / distHoriz;
+        if (dyNorm < -clampF) dyNorm = -clampF;
+        if (dyNorm > clampF) dyNorm = clampF;
+        dragon.dragonMotionY += dyNorm * 0.1;
+    }
+
+    // Steer yaw toward target — Java: atan2 + wrapAngleTo180 + clamp ±50
+    double targetYaw = 180.0 - std::atan2(dx, dz) * 180.0 / M_PI;
+    double yawDiff = targetYaw - static_cast<double>(dragon.yaw);
+    // Wrap to [-180, 180]
+    while (yawDiff > 180.0) yawDiff -= 360.0;
+    while (yawDiff < -180.0) yawDiff += 360.0;
+    if (yawDiff > 50.0) yawDiff = 50.0;
+    if (yawDiff < -50.0) yawDiff = -50.0;
+
+    // Java: vec3 = target - pos, normalized; vec32 = forward dir from yaw
+    double vecLen = std::sqrt(dx * dx + dy * dy + dz * dz);
+    double normX = (vecLen > 0.001) ? dx / vecLen : 0.0;
+    double normY = (vecLen > 0.001) ? dy / vecLen : 0.0;
+    double normZ = (vecLen > 0.001) ? dz / vecLen : 0.0;
+
+    float yawRad = dragon.yaw * static_cast<float>(M_PI) / 180.0f;
+    double fwdX = std::sin(yawRad);
+    double fwdZ = -std::cos(yawRad);
+    double fwdLen = std::sqrt(fwdX * fwdX + dragon.dragonMotionY * dragon.dragonMotionY + fwdZ * fwdZ);
+    if (fwdLen > 0.001) {
+        fwdX /= fwdLen;
+        fwdZ /= fwdLen;
+    }
+
+    // Dot product for speed scaling — Java: f5 = (dot + 0.5) / 1.5, clamped >= 0
+    double dotProduct = fwdX * normX + (dragon.dragonMotionY / (fwdLen > 0.001 ? fwdLen : 1.0)) * normY + fwdZ * normZ;
+    float f5 = static_cast<float>((dotProduct + 0.5) / 1.5);
+    if (f5 < 0.0f) f5 = 0.0f;
+
+    // Dampen yaw velocity — Java: randomYawVelocity *= 0.8
+    dragon.dragonRandomYawVelocity *= 0.8f;
+
+    // Compute speed factors — Java: f6 = sqrt(mX*mX + mZ*mZ) + 1
+    float f6 = static_cast<float>(std::sqrt(dragon.dragonMotionX * dragon.dragonMotionX +
+                                             dragon.dragonMotionZ * dragon.dragonMotionZ)) * 1.0f + 1.0f;
+    double d12 = std::sqrt(dragon.dragonMotionX * dragon.dragonMotionX +
+                            dragon.dragonMotionZ * dragon.dragonMotionZ) * 1.0 + 1.0;
+    if (d12 > 40.0) d12 = 40.0;
+
+    // Apply yaw steering — Java: randomYawVelocity += yawDiff * (0.7/d12/f6)
+    dragon.dragonRandomYawVelocity += static_cast<float>(yawDiff * (0.7 / d12 / static_cast<double>(f6)));
+    dragon.yaw += dragon.dragonRandomYawVelocity * 0.1f;
+
+    // Wrap yaw
+    while (dragon.yaw > 180.0f) dragon.yaw -= 360.0f;
+    while (dragon.yaw < -180.0f) dragon.yaw += 360.0f;
+
+    // Apply forward thrust — Java: moveFlying(0, -1, f8 * (f5*f7 + (1-f7)))
+    float f7 = static_cast<float>(2.0 / (d12 + 1.0));
+    float f8 = 0.06f;
+    float accel = f8 * (f5 * f7 + (1.0f - f7));
+    float yawRadNew = dragon.yaw * static_cast<float>(M_PI) / 180.0f;
+    dragon.dragonMotionX += static_cast<double>(-std::sin(yawRadNew) * accel);
+    dragon.dragonMotionZ += static_cast<double>(std::cos(yawRadNew) * accel);
+
+    // Apply movement — Java: moveEntity(motionX, motionY, motionZ)
+    if (dragon.dragonSlowed) {
+        dragon.posX += dragon.dragonMotionX * 0.8;
+        dragon.posY += dragon.dragonMotionY * 0.8;
+        dragon.posZ += dragon.dragonMotionZ * 0.8;
+    } else {
+        dragon.posX += dragon.dragonMotionX;
+        dragon.posY += dragon.dragonMotionY;
+        dragon.posZ += dragon.dragonMotionZ;
+    }
+
+    // Apply drag — Java: motionX *= f9, motionZ *= f9, motionY *= 0.91
+    // f9 = (dot(velocity_normalized, forward_normalized) + 1) / 2, then 0.8 + 0.15*f9
+    double velLen = std::sqrt(dragon.dragonMotionX * dragon.dragonMotionX +
+                               dragon.dragonMotionY * dragon.dragonMotionY +
+                               dragon.dragonMotionZ * dragon.dragonMotionZ);
+    double vnX = (velLen > 0.001) ? dragon.dragonMotionX / velLen : 0.0;
+    double vnZ = (velLen > 0.001) ? dragon.dragonMotionZ / velLen : 0.0;
+
+    double dotVel = vnX * fwdX + vnZ * fwdZ;
+    float f9 = static_cast<float>((dotVel + 1.0) / 2.0);
+    f9 = 0.8f + 0.15f * f9;
+    dragon.dragonMotionX *= static_cast<double>(f9);
+    dragon.dragonMotionZ *= static_cast<double>(f9);
+    dragon.dragonMotionY *= 0.91;
+
+    // Update animation time — Java: animTime += f3 (speed-based)
+    float speedFactor = 0.2f / (static_cast<float>(std::sqrt(dragon.dragonMotionX * dragon.dragonMotionX +
+                                                              dragon.dragonMotionZ * dragon.dragonMotionZ)) * 10.0f + 1.0f);
+    if (dragon.dragonSlowed) {
+        dragon.dragonAnimTime += speedFactor * 0.5f;
+    } else {
+        float powFactor = static_cast<float>(std::pow(2.0, dragon.dragonMotionY));
+        dragon.dragonAnimTime += speedFactor * powFactor;
+    }
+
+    // --- Wing flap sound — Java: cos(animTime*PI*2) crossing -0.3
+    float cosNew = std::cos(dragon.dragonAnimTime * static_cast<float>(M_PI) * 2.0f);
+    float cosOld = std::cos(dragon.dragonPrevAnimTime * static_cast<float>(M_PI) * 2.0f);
+    if (cosOld <= -0.3f && cosNew >= -0.3f) {
+        broadcastSound("mob.enderdragon.wings", dragon.posX, dragon.posY, dragon.posZ,
+                        5.0f, 0.8f + (float)(rand() % 30) / 100.0f);
+    }
+
+    // --- Block destruction — Java: EntityDragon.destroyBlocksInAABB()
+    // Dragon destroys blocks around head and body (except obsidian, end_stone, bedrock)
+    dragon.dragonSlowed = false;
+    {
+        // Head AABB: centered at posX + sin(yaw)*5.5, posY+2, posZ - cos(yaw)*5.5, radius ~3
+        float headYaw = dragon.yaw * static_cast<float>(M_PI) / 180.0f;
+        double headX = dragon.posX + std::sin(headYaw) * 5.5;
+        double headY = dragon.posY + 2.0;
+        double headZ = dragon.posZ - std::cos(headYaw) * 5.5;
+
+        auto destroyBlocks = [&](double cx, double cy, double cz, double hw, double hh) -> bool {
+            bool hitSolid = false;
+            int minX = static_cast<int>(std::floor(cx - hw));
+            int maxX = static_cast<int>(std::floor(cx + hw));
+            int minY = static_cast<int>(std::floor(cy - hh));
+            int maxY = static_cast<int>(std::floor(cy + hh));
+            int minZ = static_cast<int>(std::floor(cz - hw));
+            int maxZ = static_cast<int>(std::floor(cz + hw));
+            bool destroyed = false;
+
+            for (int bx = minX; bx <= maxX; ++bx) {
+                for (int by = minY; by <= maxY; ++by) {
+                    for (int bz = minZ; bz <= maxZ; ++bz) {
+                        int32_t blockId = getBlockIdInWorld(bx, by, bz);
+                        if (blockId == 0) continue;  // air
+                        // Indestructible: obsidian(49), end_stone(121), bedrock(7)
+                        if (blockId == 49 || blockId == 121 || blockId == 7) {
+                            hitSolid = true;
+                            continue;
+                        }
+                        // Destroy block
+                        setBlockInWorld(bx, by, bz, 0, 0);
+                        destroyed = true;
+                    }
+                }
+            }
+            if (destroyed) {
+                broadcastParticle("largeexplode",
+                    static_cast<float>(cx), static_cast<float>(cy), static_cast<float>(cz),
+                    0.0f, 0.0f, 0.0f, 0.0f, 1);
+            }
+            return hitSolid;
+        };
+
+        // Destroy blocks for head (3x3) and body (5x3)
+        bool headHit = destroyBlocks(headX, headY, headZ, 3.0, 3.0);
+        bool bodyHit = destroyBlocks(dragon.posX, dragon.posY + 1.0, dragon.posZ, 5.0, 3.0);
+        dragon.dragonSlowed = headHit || bodyHit;
+    }
+
+    // --- Player knockback (wing collision) + head attack — Java: collideWithEntities + attackEntitiesInList
+    {
+        float yawRadKb = dragon.yaw * static_cast<float>(M_PI) / 180.0f;
+        double wing1X = dragon.posX + std::cos(yawRadKb) * 4.5;
+        double wing1Z = dragon.posZ + std::sin(yawRadKb) * 4.5;
+        double wing2X = dragon.posX - std::cos(yawRadKb) * 4.5;
+        double wing2Z = dragon.posZ - std::sin(yawRadKb) * 4.5;
+        double headX = dragon.posX + std::sin(yawRadKb) * 5.5;
+        double headZ = dragon.posZ - std::cos(yawRadKb) * 5.5;
+
+        std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
+        for (auto& conn : connections_) {
+            if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+            auto handler = conn->getHandler();
+            auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+            if (!ph) continue;
+
+            double px = ph->getPlayerX();
+            double py = ph->getPlayerY();
+            double pz = ph->getPlayerZ();
+
+            // Wing knockback — Java: within 4 blocks of wing, push away from body center
+            auto checkWingKnockback = [&](double wx, double wz) {
+                double wdx = px - wx;
+                double wdz = pz - wz;
+                double wdistSq = wdx * wdx + wdz * wdz;
+                if (wdistSq < 16.0 && wdistSq > 0.01) {  // Within 4 blocks
+                    double bx = px - dragon.posX;
+                    double bz = pz - dragon.posZ;
+                    double bdistSq = bx * bx + bz * bz;
+                    if (bdistSq > 0.01) {
+                        double kbX = (bx / bdistSq) * 4.0;
+                        double kbZ = (bz / bdistSq) * 4.0;
+                        ph->sendEntityVelocity(*conn, ph->getEntityId(), kbX, 0.2, kbZ);
+                    }
+                }
+            };
+            checkWingKnockback(wing1X, wing1Z);
+            checkWingKnockback(wing2X, wing2Z);
+
+            // Head attack — Java: 10 damage if within 1.5 blocks of head
+            double hdx = px - headX;
+            double hdy = py - (dragon.posY + 2.0);
+            double hdz = pz - headZ;
+            double headDistSq = hdx * hdx + hdy * hdy + hdz * hdz;
+            if (headDistSq < 2.25 && currentTick - dragon.lastAttackTick >= 20) {  // 1.5^2 = 2.25
+                // Java: EntityDragon.attackEntitiesInList — 10.0 damage
+                float damageAmount = 10.0f;
+                ph->applyDamage(damageAmount);
+                // Knockback away from head
+                if (headDistSq > 0.01) {
+                    double hd = std::sqrt(headDistSq);
+                    ph->sendEntityVelocity(*conn, ph->getEntityId(),
+                        (hdx / hd) * 0.4, 0.4, (hdz / hd) * 0.4);
+                }
+                dragon.lastAttackTick = currentTick;
+
+                // Death check
+                if (ph->getHealth() <= 0.0f) {
+                    broadcastEntityEvent(ph->getEntityId(), 3);
+                    broadcastChatMessage(ph->getPlayerName() + " was slain by Ender Dragon");
+                }
+            }
+        }
+    }
+
+    // --- Periodic growl — Java: EntityDragon.getLivingSound() = "mob.enderdragon.growl"
+    if (currentTick % 200 == 0) {
+        broadcastSound("mob.enderdragon.growl", dragon.posX, dragon.posY, dragon.posZ,
+                        5.0f, 0.8f + (float)(rand() % 40) / 100.0f);
+    }
+
+    // --- Broadcast entity position to all players
+    {
+        std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
+        for (auto& conn : connections_) {
+            if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+            auto handler = conn->getHandler();
+            auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+            if (!ph) continue;
+            ph->sendEntityTeleport(*conn, dragon.entityId,
+                dragon.posX, dragon.posY, dragon.posZ, dragon.yaw, dragon.pitch);
+        }
+    }
+
+    // Update health metadata for boss bar display
+    {
+        std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
+        for (auto& conn : connections_) {
+            if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+            auto handler = conn->getHandler();
+            auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+            if (!ph) continue;
+            conn->sendPacket(PacketBuilder::entityMetadataFloat(dragon.entityId, 6, dragon.health));
         }
     }
 }

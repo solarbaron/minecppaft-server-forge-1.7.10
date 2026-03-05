@@ -824,6 +824,26 @@ private:
         int32_t villagerProfession = 0;  // DW 16 int: 0=farmer, 1=librarian, 2=priest, 3=blacksmith, 4=butcher
         std::vector<MerchantRecipe> villagerTrades;  // Generated on first interaction
         bool villagerTradesGenerated = false;
+        // ─── Ender Dragon state — Java: EntityDragon ───
+        // Ring buffer for smooth movement interpolation (64 entries of [yaw, posY])
+        double dragonRingBuffer[64][3] = {};  // Java: EntityDragon.ringBuffer[64][3]
+        int32_t dragonRingIndex = -1;          // Java: EntityDragon.ringBufferIndex
+        // Flight target — Java: EntityDragon.targetX/Y/Z
+        double dragonTargetX = 0, dragonTargetY = 100.0, dragonTargetZ = 0;
+        int32_t dragonTargetEntityId = -1;     // Entity ID of target player (-1 = none)
+        // Motion — Java: EntityLivingBase.motionX/Y/Z
+        double dragonMotionX = 0, dragonMotionY = 0, dragonMotionZ = 0;
+        // Animation — Java: EntityDragon.animTime, prevAnimTime
+        float dragonAnimTime = 0.0f;
+        float dragonPrevAnimTime = 0.0f;
+        float dragonRandomYawVelocity = 0.0f; // Java: EntityLiving.randomYawVelocity
+        bool dragonForceNewTarget = false;     // Java: EntityDragon.forceNewTarget
+        bool dragonSlowed = false;             // Java: EntityDragon.slowed
+        // Death sequence — Java: EntityDragon.deathTicks
+        int32_t dragonDeathTicks = 0;          // 0 = alive, 1-200 = dying
+        // Crystal healing — Java: EntityDragon.healingEnderCrystal
+        int32_t dragonHealingCrystalId = -1;   // Entity ID of linked ender crystal (-1 = none)
+        int32_t dragonCrystalSearchTimer = 0;  // Ticks until next crystal search
     };
     mutable std::mutex mobEntitiesMutex_;
     std::vector<SpawnedMob> mobEntities_;
@@ -835,6 +855,8 @@ private:
     void spawnPassiveMobs();
     void tickMobs();
     void tickRandomBlocks();
+    /** Tick a single Ender Dragon — Java: EntityDragon.onLivingUpdate() + onDeathUpdate() */
+    void tickDragon(SpawnedMob& dragon, int64_t currentTick);
 
 public:
     // ─── Arrow projectile entities ──────────────────────────────────
