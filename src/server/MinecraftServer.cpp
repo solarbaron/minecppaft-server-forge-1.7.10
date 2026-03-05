@@ -164,6 +164,12 @@ bool MinecraftServer::init() {
     nether->initialize();
     worlds_.push_back(std::move(nether));
 
+    // Create End world (dimension 1)
+    // Java reference: MinecraftServer creates WorldServer for The End
+    auto end = std::make_unique<WorldServer>(1, "world_the_end");
+    end->initialize();
+    worlds_.push_back(std::move(end));
+
     return true;
 }
 

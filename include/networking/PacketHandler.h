@@ -506,7 +506,7 @@ public:
      * Transfer the player to another dimension (Nether portal transit).
      * Java reference: ServerConfigurationManager.transferPlayerToDimension()
      */
-    void transferDimension(Connection& conn);
+    void transferDimension(Connection& conn, bool isEndPortal);
 
     /**
      * Tick portal standing detection/cooldown. Called once per server tick.
