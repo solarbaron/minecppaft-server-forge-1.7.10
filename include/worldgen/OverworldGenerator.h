@@ -178,7 +178,8 @@ public:
         // ── Step 6.8: Village generation ──
         // Java reference: MapGenVillage + StructureVillagePieces
         villageGen_.generate(seed_, chunkX, chunkZ, blocks.data(), meta.data(),
-                            chunk->pendingSpawners, chunk->pendingChests);
+                            chunk->pendingSpawners, chunk->pendingChests,
+                            chunk->pendingVillagers);
 
         // ── Step 7: Bedrock ──
         placeBedrock(chunkX, chunkZ, blocks.data());

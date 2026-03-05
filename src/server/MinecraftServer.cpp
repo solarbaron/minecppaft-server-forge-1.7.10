@@ -125,6 +125,37 @@ bool MinecraftServer::init() {
         chunk.pendingChests.clear();
     });
 
+    // Set villager registrar callback so freshly-generated village buildings
+    // spawn villager entities with the correct profession.
+    // Java reference: StructureVillagePieces$Village.spawnVillagers()
+    overworld->setVillagerRegistrar([this](Chunk& chunk) {
+        for (auto& info : chunk.pendingVillagers) {
+            int32_t eid = summonMob(120, info.x + 0.5, info.y, info.z + 0.5);
+            if (eid >= 0) {
+                // Set villager profession in SpawnedMob storage
+                {
+                    std::lock_guard<std::mutex> lock(mobEntitiesMutex_);
+                    for (auto& mob : mobEntities_) {
+                        if (mob.entityId == eid) {
+                            mob.villagerProfession = info.profession;
+                            break;
+                        }
+                    }
+                }
+                // Broadcast updated profession via DataWatcher (DW 16 int)
+                if (info.profession != 0) {
+                    auto dw16Pkt = PacketBuilder::entityMetadataInt(eid, 16, info.profession);
+                    std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
+                    for (auto& conn : connections_) {
+                        if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                        conn->sendPacket(dw16Pkt);
+                    }
+                }
+            }
+        }
+        chunk.pendingVillagers.clear();
+    });
+
     worlds_.push_back(std::move(overworld));
 
     return true;
@@ -6062,6 +6093,7 @@ static float getMobMovementSpeed(uint8_t mobType) {
         case 98: return 0.30f;  // Ocelot — Java: EntityOcelot.applyEntityAttributes() movementSpeed=0.3
         case 99: return 0.20f;  // Iron Golem (wander speed)
         case 100: return 0.225f; // Horse — Java: EntityHorse.applyEntityAttributes() movementSpeed=0.225
+        case 120: return 0.50f;  // Villager — Java: EntityVillager.applyEntityAttributes() movementSpeed=0.5
         default: return 0.00f;  // Non-moving mob
     }
 }
@@ -6083,7 +6115,7 @@ int32_t MinecraftServer::summonMob(uint8_t mobType, double x, double y, double z
     mob.health = getMobMaxHealth(mobType);
     mob.spawnTick = currentTick;
     mob.isDead = false;
-    mob.isPassive = (mobType >= 90 && mobType <= 100);
+    mob.isPassive = (mobType >= 90 && mobType <= 100) || mobType == 120;
     mob.lastSentPosX = static_cast<int32_t>(std::floor(x * 32.0));
     mob.lastSentPosY = static_cast<int32_t>(std::floor(y * 32.0));
     mob.lastSentPosZ = static_cast<int32_t>(std::floor(z * 32.0));
@@ -6152,6 +6184,16 @@ int32_t MinecraftServer::summonMob(uint8_t mobType, double x, double y, double z
                 conn->sendPacket(dw20Pkt);
                 conn->sendPacket(dw21Pkt);
                 conn->sendPacket(dw22Pkt);
+            }
+        }
+
+        // Villager-specific DataWatcher metadata — Java: EntityVillager.entityInit()
+        // DW 16: int (profession: 0=farmer, 1=librarian, 2=priest, 3=blacksmith, 4=butcher)
+        if (mobType == 120) {
+            auto dw16Pkt = PacketBuilder::entityMetadataInt(eid, 16, mob.villagerProfession);
+            for (auto& conn : connections_) {
+                if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                conn->sendPacket(dw16Pkt);
             }
         }
     }

@@ -178,6 +178,13 @@ Chunk* ChunkProviderServer::loadChunk(int chunkX, int chunkZ) {
                     registrar(*chunk);
                 }
             }
+            // Spawn any villagers from village generation
+            if (chunk && !chunk->pendingVillagers.empty()) {
+                const auto& registrar = world_->getVillagerRegistrar();
+                if (registrar) {
+                    registrar(*chunk);
+                }
+            }
         } else {
             // Empty chunk fallback
             chunk = std::make_unique<Chunk>(chunkX, chunkZ);

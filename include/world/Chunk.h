@@ -199,6 +199,15 @@ public:
     };
     std::vector<ChestInfo> pendingChests;
 
+    // Villager placements from village generation — consumed on chunk load
+    // to spawn villagers via summonMob with correct profession types.
+    // Java reference: StructureVillagePieces$Village.spawnVillagers()
+    struct VillagerInfo {
+        int32_t x, y, z;        // World coordinates
+        int32_t profession;     // 0=farmer, 1=librarian, 2=priest, 3=blacksmith, 4=butcher
+    };
+    std::vector<VillagerInfo> pendingVillagers;
+
     Chunk() = default;
     Chunk(int x, int z) : xPosition(x), zPosition(z) {
         biomes.fill(0);

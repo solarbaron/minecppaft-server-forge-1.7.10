@@ -364,6 +364,12 @@ public:
     void setChestRegistrar(ChestRegistrar reg) { chestRegistrar_ = std::move(reg); }
     const ChestRegistrar& getChestRegistrar() const { return chestRegistrar_; }
 
+    // ─── Villager Registrar callback ──────────────────────────────────
+    // Called after chunk generation to spawn pending villagers from villages.
+    using VillagerRegistrar = std::function<void(Chunk& chunk)>;
+    void setVillagerRegistrar(VillagerRegistrar reg) { villagerRegistrar_ = std::move(reg); }
+    const VillagerRegistrar& getVillagerRegistrar() const { return villagerRegistrar_; }
+
 private:
     int dimensionId_;
     std::string worldName_;
@@ -396,6 +402,7 @@ private:
     TileEntityLoader tileEntityLoader_;
     SpawnerRegistrar spawnerRegistrar_;
     ChestRegistrar chestRegistrar_;
+    VillagerRegistrar villagerRegistrar_;
 };
 
 } // namespace mccpp

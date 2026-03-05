@@ -42,7 +42,8 @@ public:
     void generate(int64_t seed, int chunkX, int chunkZ,
                   int32_t* blocks, uint8_t* meta,
                   std::vector<Chunk::SpawnerInfo>& spawners,
-                  std::vector<Chunk::ChestInfo>& chests) {
+                  std::vector<Chunk::ChestInfo>& chests,
+                  std::vector<Chunk::VillagerInfo>& villagers) {
         int worldMinX = chunkX * 16;
         int worldMinZ = chunkZ * 16;
 
@@ -59,7 +60,7 @@ public:
                 for (auto& piece : pieces) {
                     if (piece.bb.maxX < worldMinX || piece.bb.minX > worldMinX + 15) continue;
                     if (piece.bb.maxZ < worldMinZ || piece.bb.minZ > worldMinZ + 15) continue;
-                    placePiece(piece, worldMinX, worldMinZ, blocks, meta, chests, isDesert);
+                    placePiece(piece, worldMinX, worldMinZ, blocks, meta, chests, villagers, isDesert);
                 }
             }
         }
@@ -438,6 +439,28 @@ private:
                       getBiomeBlock(blockId, isDesert), getBiomeMeta(blockId, blockMeta, isDesert), lx, ly, lz);
     }
 
+    // ──── Villager spawning (Java: StructureVillagePieces$Village.spawnVillagers) ────
+    // Spawns `count` villagers starting at local coordinates (startX, startY, startZ),
+    // each offset by +1 in the local X direction. Uses getXWithOffset/getZWithOffset
+    // to convert to world coordinates, matching the Java implementation exactly.
+    // The `getVillagerType` callback returns profession for each villager index.
+    void spawnVillagers(const StructureCtx& ctx,
+                        std::vector<Chunk::VillagerInfo>& villagers,
+                        int startX, int startY, int startZ, int count,
+                        std::function<int(int)> getVillagerType) {
+        for (int i = 0; i < count; ++i) {
+            int wx = ctx.getXWithOffset(startX + i, startZ);
+            int wy = ctx.getYWithOffset(startY);
+            int wz = ctx.getZWithOffset(startX + i, startZ);
+            Chunk::VillagerInfo vi;
+            vi.x = wx;
+            vi.y = wy;
+            vi.z = wz;
+            vi.profession = getVillagerType(i);
+            villagers.push_back(std::move(vi));
+        }
+    }
+
     // ──── Piece types ────
     enum class PieceType {
         Well, Path, Torch, WoodHut, Church, House1, House2, House3,
@@ -747,7 +770,8 @@ private:
     // ──── Master piece placement ────
     void placePiece(VillagePiece& piece, int worldMinX, int worldMinZ,
                     int32_t* blocks, uint8_t* meta,
-                    std::vector<Chunk::ChestInfo>& chests, bool isDesert) {
+                    std::vector<Chunk::ChestInfo>& chests,
+                    std::vector<Chunk::VillagerInfo>& villagers, bool isDesert) {
         StructureCtx ctx{piece.bb, piece.coordBaseMode};
         int CBM = piece.coordBaseMode;
 
@@ -766,25 +790,25 @@ private:
                 placeTorch(ctx, blocks, meta, worldMinX, worldMinZ, isDesert, avgY, piece);
                 break;
             case PieceType::WoodHut:
-                placeWoodHut(ctx, blocks, meta, worldMinX, worldMinZ, isDesert, avgY, piece);
+                placeWoodHut(ctx, blocks, meta, worldMinX, worldMinZ, isDesert, avgY, piece, villagers);
                 break;
             case PieceType::Church:
-                placeChurch(ctx, blocks, meta, worldMinX, worldMinZ, isDesert, avgY, piece);
+                placeChurch(ctx, blocks, meta, worldMinX, worldMinZ, isDesert, avgY, piece, villagers);
                 break;
             case PieceType::House1:
-                placeHouse1(ctx, blocks, meta, worldMinX, worldMinZ, isDesert, avgY, piece);
+                placeHouse1(ctx, blocks, meta, worldMinX, worldMinZ, isDesert, avgY, piece, villagers);
                 break;
             case PieceType::House2:
-                placeHouse2(ctx, blocks, meta, worldMinX, worldMinZ, isDesert, avgY, piece, chests);
+                placeHouse2(ctx, blocks, meta, worldMinX, worldMinZ, isDesert, avgY, piece, chests, villagers);
                 break;
             case PieceType::House3:
-                placeHouse3(ctx, blocks, meta, worldMinX, worldMinZ, isDesert, avgY, piece);
+                placeHouse3(ctx, blocks, meta, worldMinX, worldMinZ, isDesert, avgY, piece, villagers);
                 break;
             case PieceType::House4Garden:
-                placeHouse4Garden(ctx, blocks, meta, worldMinX, worldMinZ, isDesert, avgY, piece);
+                placeHouse4Garden(ctx, blocks, meta, worldMinX, worldMinZ, isDesert, avgY, piece, villagers);
                 break;
             case PieceType::Hall:
-                placeHall(ctx, blocks, meta, worldMinX, worldMinZ, isDesert, avgY, piece);
+                placeHall(ctx, blocks, meta, worldMinX, worldMinZ, isDesert, avgY, piece, villagers);
                 break;
             case PieceType::Field1:
                 placeField1(ctx, blocks, meta, worldMinX, worldMinZ, isDesert, avgY, piece);
@@ -875,7 +899,8 @@ private:
 
     // ──── WoodHut (Java: StructureVillagePieces$WoodHut) ────
     void placeWoodHut(StructureCtx& ctx, int32_t* blocks, uint8_t* meta,
-                      int wmx, int wmz, bool desert, int avgY, VillagePiece& piece) {
+                      int wmx, int wmz, bool desert, int avgY, VillagePiece& piece,
+                      std::vector<Chunk::VillagerInfo>& villagers) {
         piece.bb.offset(0, avgY - piece.bb.maxY + 6 - 1, 0);
         ctx.bb = piece.bb;
         int CBM = ctx.coordBaseMode;
@@ -906,11 +931,14 @@ private:
                 clearUpwards(ctx, blocks, meta, wmx, wmz, x, 6, z);
                 fillDownwardsBiome(ctx, blocks, meta, wmx, wmz, desert, COBBLESTONE, 0, x, -1, z);
             }
+        // Java: spawnVillagers(world, bb, 1, 1, 2, 1); getVillagerType → 0 (farmer)
+        spawnVillagers(ctx, villagers, 1, 1, 2, 1, [](int) { return 0; });
     }
 
     // ──── Church (Java: StructureVillagePieces$Church) ────
     void placeChurch(StructureCtx& ctx, int32_t* blocks, uint8_t* meta,
-                     int wmx, int wmz, bool desert, int avgY, VillagePiece& piece) {
+                     int wmx, int wmz, bool desert, int avgY, VillagePiece& piece,
+                     std::vector<Chunk::VillagerInfo>& villagers) {
         piece.bb.offset(0, avgY - piece.bb.maxY + 12 - 1, 0);
         ctx.bb = piece.bb;
         int CBM = ctx.coordBaseMode;
@@ -950,11 +978,14 @@ private:
                 clearUpwards(ctx, blocks, meta, wmx, wmz, x, 12, z);
                 fillDownwardsBiome(ctx, blocks, meta, wmx, wmz, desert, COBBLESTONE, 0, x, -1, z);
             }
+        // Java: spawnVillagers(world, bb, 2, 1, 2, 1); getVillagerType → 2 (priest)
+        spawnVillagers(ctx, villagers, 2, 1, 2, 1, [](int) { return 2; });
     }
 
     // ──── House1/Library (Java: StructureVillagePieces$House1) ────
     void placeHouse1(StructureCtx& ctx, int32_t* blocks, uint8_t* meta,
-                     int wmx, int wmz, bool desert, int avgY, VillagePiece& piece) {
+                     int wmx, int wmz, bool desert, int avgY, VillagePiece& piece,
+                     std::vector<Chunk::VillagerInfo>& villagers) {
         piece.bb.offset(0, avgY - piece.bb.maxY + 9 - 1, 0);
         ctx.bb = piece.bb;
         int CBM = ctx.coordBaseMode;
@@ -1002,12 +1033,15 @@ private:
                 clearUpwards(ctx, blocks, meta, wmx, wmz, x, 9, z);
                 fillDownwardsBiome(ctx, blocks, meta, wmx, wmz, desert, COBBLESTONE, 0, x, -1, z);
             }
+        // Java: spawnVillagers(world, bb, 2, 1, 2, 1); getVillagerType → 1 (librarian)
+        spawnVillagers(ctx, villagers, 2, 1, 2, 1, [](int) { return 1; });
     }
 
     // ──── House2/Blacksmith (Java: StructureVillagePieces$House2) ────
     void placeHouse2(StructureCtx& ctx, int32_t* blocks, uint8_t* meta,
                      int wmx, int wmz, bool desert, int avgY, VillagePiece& piece,
-                     std::vector<Chunk::ChestInfo>& chests) {
+                     std::vector<Chunk::ChestInfo>& chests,
+                     std::vector<Chunk::VillagerInfo>& villagers) {
         piece.bb.offset(0, avgY - piece.bb.maxY + 6 - 1, 0);
         ctx.bb = piece.bb;
         int CBM = ctx.coordBaseMode;
@@ -1053,11 +1087,14 @@ private:
                 clearUpwards(ctx, blocks, meta, wmx, wmz, x, 6, z);
                 fillDownwardsBiome(ctx, blocks, meta, wmx, wmz, desert, COBBLESTONE, 0, x, -1, z);
             }
+        // Java: spawnVillagers(world, bb, 7, 1, 1, 1); getVillagerType → 3 (blacksmith)
+        spawnVillagers(ctx, villagers, 7, 1, 1, 1, [](int) { return 3; });
     }
 
     // ──── House3 (Java: StructureVillagePieces$House3) ────
     void placeHouse3(StructureCtx& ctx, int32_t* blocks, uint8_t* meta,
-                     int wmx, int wmz, bool desert, int avgY, VillagePiece& piece) {
+                     int wmx, int wmz, bool desert, int avgY, VillagePiece& piece,
+                     std::vector<Chunk::VillagerInfo>& villagers) {
         piece.bb.offset(0, avgY - piece.bb.maxY + 7 - 1, 0);
         ctx.bb = piece.bb;
         int CBM = ctx.coordBaseMode;
@@ -1116,11 +1153,14 @@ private:
                 clearUpwards(ctx, blocks, meta, wmx, wmz, x, 7, z);
                 fillDownwardsBiome(ctx, blocks, meta, wmx, wmz, desert, COBBLESTONE, 0, x, -1, z);
             }
+        // Java: spawnVillagers(world, bb, 4, 1, 2, 2); getVillagerType → 0 (farmer)
+        spawnVillagers(ctx, villagers, 4, 1, 2, 2, [](int) { return 0; });
     }
 
     // ──── House4Garden (Java: StructureVillagePieces$House4Garden) ────
     void placeHouse4Garden(StructureCtx& ctx, int32_t* blocks, uint8_t* meta,
-                           int wmx, int wmz, bool desert, int avgY, VillagePiece& piece) {
+                           int wmx, int wmz, bool desert, int avgY, VillagePiece& piece,
+                           std::vector<Chunk::VillagerInfo>& villagers) {
         piece.bb.offset(0, avgY - piece.bb.maxY + 6 - 1, 0);
         ctx.bb = piece.bb;
         int CBM = ctx.coordBaseMode;
@@ -1177,11 +1217,14 @@ private:
                 clearUpwards(ctx, blocks, meta, wmx, wmz, x, 6, z);
                 fillDownwardsBiome(ctx, blocks, meta, wmx, wmz, desert, COBBLESTONE, 0, x, -1, z);
             }
+        // Java: spawnVillagers(world, bb, 1, 1, 2, 1); getVillagerType → 0 (farmer)
+        spawnVillagers(ctx, villagers, 1, 1, 2, 1, [](int) { return 0; });
     }
 
     // ──── Hall/Butcher (Java: StructureVillagePieces$Hall) ────
     void placeHall(StructureCtx& ctx, int32_t* blocks, uint8_t* meta,
-                   int wmx, int wmz, bool desert, int avgY, VillagePiece& piece) {
+                   int wmx, int wmz, bool desert, int avgY, VillagePiece& piece,
+                   std::vector<Chunk::VillagerInfo>& villagers) {
         piece.bb.offset(0, avgY - piece.bb.maxY + 7 - 1, 0);
         ctx.bb = piece.bb;
         int CBM = ctx.coordBaseMode;
@@ -1256,6 +1299,8 @@ private:
                 clearUpwards(ctx, blocks, meta, wmx, wmz, x, 7, z);
                 fillDownwardsBiome(ctx, blocks, meta, wmx, wmz, desert, COBBLESTONE, 0, x, -1, z);
             }
+        // Java: spawnVillagers(world, bb, 4, 1, 2, 2); getVillagerType → i==0?4:0 (butcher/farmer)
+        spawnVillagers(ctx, villagers, 4, 1, 2, 2, [](int i) { return i == 0 ? 4 : 0; });
     }
 
     // ──── Field1 (Java: StructureVillagePieces$Field1) ────

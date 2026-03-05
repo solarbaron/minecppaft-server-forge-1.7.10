@@ -808,6 +808,8 @@ private:
         int32_t horseArmorIndex = 0;     // DW 22 int: 0=none, 1=iron(+5), 2=gold(+7), 3=diamond(+11)
         bool isHorseSaddled = false;     // DW 16 bit 4
         bool isHorseChested = false;     // DW 16 bit 8 (donkey/mule only)
+        // Villager state — Java: EntityVillager DataWatcher(16)
+        int32_t villagerProfession = 0;  // DW 16 int: 0=farmer, 1=librarian, 2=priest, 3=blacksmith, 4=butcher
     };
     mutable std::mutex mobEntitiesMutex_;
     std::vector<SpawnedMob> mobEntities_;
