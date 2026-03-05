@@ -20,6 +20,7 @@
 #include "world/Chunk.h"
 #include "block/Block.h"
 #include "worldgen/NoiseGeneratorOctaves.h"
+#include "worldgen/MapGenNetherFortress.h"
 
 #include <array>
 #include <cmath>
@@ -310,6 +311,11 @@ public:
         // Java uses 128-high block array with (x*16+z)*128+y indexing
         // We use 32768-element array for the generation, then convert to 256-high sections
         std::array<int32_t, 32768> blocks{};
+        std::array<uint8_t, 32768> meta{};  // Block metadata (nether brick stairs, etc.)
+
+        // Fortress structure outputs — spawners (blaze) and chests (corridor loot)
+        std::vector<Chunk::SpawnerInfo> spawners;
+        std::vector<Chunk::ChestInfo> chests;
 
         // ── RNG seeded per-chunk (Java: hellRNG.setSeed) ──
         JavaRandom hellRNG(static_cast<int64_t>(chunkX) * 341873128712LL +
@@ -324,28 +330,44 @@ public:
         // ── Step 3: Nether cave generation ──
         caveGen_.generate(seed_, chunkX, chunkZ, blocks.data());
 
-        // ── Step 4: Quartz ore ──
+        // ── Step 4: Nether Fortress structure generation ──
+        // Java: ChunkProviderHell.provideChunk line 195:
+        //   genNetherBridge.generate(this, worldObj, chunkX, chunkZ, blockArray)
+        fortressGen_.generate(seed_, chunkX, chunkZ,
+                              blocks.data(), meta.data(),
+                              spawners, chests);
+
+        // ── Step 5: Quartz ore ──
         generateQuartzOre(chunkX, chunkZ, blocks.data(), hellRNG);
 
-        // ── Step 5: Glowstone, fire, mushrooms, lava springs ──
+        // ── Step 6: Glowstone, fire, mushrooms, lava springs ──
         generateFeatures(chunkX, chunkZ, blocks.data(), hellRNG);
 
-        // ── Step 6: Fill chunk sections (convert 128-high to 256-high Chunk) ──
+        // ── Step 7: Fill chunk sections (convert 128-high to 256-high Chunk) ──
         for (int x = 0; x < 16; ++x) {
             for (int z = 0; z < 16; ++z) {
                 for (int y = 0; y < 128; ++y) {
-                    int32_t blockId = blocks[(x * 16 + z) * 128 + y];
+                    int idx = (x * 16 + z) * 128 + y;
+                    int32_t blockId = blocks[idx];
                     if (blockId != 0) {
                         int sectionIdx = y >> 4;
                         if (!chunk->sections[sectionIdx]) {
-                            chunk->sections[sectionIdx] = std::make_unique<ChunkSection>(sectionIdx);
+                            chunk->sections[sectionIdx] = std::make_unique<ChunkSection>(sectionIdx << 4);
                         }
                         int localY = y & 0xF;
                         chunk->sections[sectionIdx]->setBlock(x, localY, z, Block::getBlockById(blockId));
+                        // Apply metadata (nether brick stairs, fence orientation, etc.)
+                        if (meta[idx] != 0) {
+                            chunk->sections[sectionIdx]->setBlockMetadata(x, localY, z, meta[idx]);
+                        }
                     }
                 }
             }
         }
+
+        // Propagate spawner/chest placements from fortress generation
+        chunk->pendingSpawners = std::move(spawners);
+        chunk->pendingChests = std::move(chests);
 
         // Biome array: Nether biome = 8 (hell)
         std::memset(chunk->biomes.data(), 8, chunk->biomes.size());
@@ -364,6 +386,9 @@ public:
             }
         }
 
+        // Mark chunk as fully generated
+        chunk->isTerrainPopulated = true;
+
         return chunk;
     }
 
@@ -372,6 +397,7 @@ public:
 private:
     int64_t seed_;
     MapGenCavesHell caveGen_;
+    MapGenNetherFortress fortressGen_;
 
     // 7 noise generators matching Java ChunkProviderHell constructor order
     std::unique_ptr<NoiseGeneratorOctaves> noiseGen1_;  // 16 octaves
