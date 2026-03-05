@@ -3888,6 +3888,31 @@ void MinecraftServer::handleEntityInteract(PlayHandler& player, Connection& conn
         }
     }
 
+    // ─── Villager trading — Java: EntityVillager.interact() ──────────────
+    // Right-click on a villager → open trading GUI
+    {
+        std::lock_guard<std::mutex> lock(mobEntitiesMutex_);
+        for (auto& mob : mobEntities_) {
+            if (mob.entityId != targetEntityId) continue;
+            if (mob.isDead || mob.mobType != 120) break;
+
+            // Generate trades on first interaction — Java: EntityVillager.getRecipes()
+            if (!mob.villagerTradesGenerated) {
+                generateVillagerTrades(mob.villagerProfession, mob.villagerTrades);
+                mob.villagerTradesGenerated = true;
+            }
+
+            // Open trading GUI — Java: EntityVillager.interact() → displayGUIMerchant
+            player.openVillagerTrading(conn, mob.entityId, mob.villagerTrades);
+            broadcastSound("mob.villager.haggle", mob.posX, mob.posY, mob.posZ, 1.0f, 1.0f);
+            std::cout << "[Villager] " << player.getPlayerName()
+                      << " opened trading GUI for villager " << mob.entityId
+                      << " (profession=" << mob.villagerProfession
+                      << ", trades=" << mob.villagerTrades.size() << ")\n";
+            return;
+        }
+    }
+
     // ─── Animal feeding (breeding) — Java: EntityAnimal.interact() ───
     // Feeding the breeding item to a passive mob puts it in love mode (600 ticks)
     // Per-mob breeding items: cow/mooshroom/sheep → wheat (296), pig → carrot (391), chicken → seeds
@@ -6202,6 +6227,177 @@ int32_t MinecraftServer::summonMob(uint8_t mobType, double x, double y, double z
         mobEntities_.push_back(std::move(mob));
     }
     return eid;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Villager trade generation — Java: EntityVillager.addDefaultEquipmentAndRecipies()
+// Generates profession-specific trades using the vanilla 1.7.10 trade tables.
+// villagersSellingList = items villagers BUY from the player (item → emerald)
+// blacksmithSellingList = items villagers SELL to the player (emerald → item)
+// ═══════════════════════════════════════════════════════════════════════════
+void MinecraftServer::generateVillagerTrades(int profession,
+                                              std::vector<MerchantRecipe>& out) {
+    out.clear();
+    static thread_local std::mt19937 rng(std::random_device{}());
+
+    // Helper: add a "villager buys" trade (item → emerald)
+    // Java: func_146091_a — random quantity from villagersSellingList range
+    auto addBuyTrade = [&](int16_t itemId, float probability, int minQty, int maxQty) {
+        if (std::uniform_real_distribution<float>(0.0f, 1.0f)(rng) >= probability) return;
+        int qty = minQty;
+        if (maxQty > minQty)
+            qty = minQty + static_cast<int>(rng() % static_cast<unsigned>(maxQty - minQty));
+        MerchantRecipe r;
+        r.buyItemId1 = itemId;
+        r.buyCount1 = static_cast<int8_t>(std::min(qty, 64));
+        r.buyDamage1 = 0;
+        r.sellItemId = 388; // emerald
+        r.sellCount = 1;
+        r.sellDamage = 0;
+        out.push_back(r);
+    };
+
+    // Helper: add a "villager sells" trade (emerald → item)
+    // Java: func_146089_b — quantity from blacksmithSellingList (negative = multi-item per emerald)
+    auto addSellTrade = [&](int16_t itemId, float probability, int minPrice, int maxPrice) {
+        if (std::uniform_real_distribution<float>(0.0f, 1.0f)(rng) >= probability) return;
+        int price = minPrice;
+        if (maxPrice > minPrice)
+            price = minPrice + static_cast<int>(rng() % static_cast<unsigned>(maxPrice - minPrice));
+        MerchantRecipe r;
+        if (price < 0) {
+            // Negative price = villager sells multiple items for 1 emerald
+            r.buyItemId1 = 388; // emerald
+            r.buyCount1 = 1;
+            r.buyDamage1 = 0;
+            r.sellItemId = itemId;
+            r.sellCount = static_cast<int8_t>(std::min(-price, 64));
+            r.sellDamage = 0;
+        } else {
+            // Positive price = costs N emeralds for 1 item
+            r.buyItemId1 = 388; // emerald
+            r.buyCount1 = static_cast<int8_t>(std::min(price, 64));
+            r.buyDamage1 = 0;
+            r.sellItemId = itemId;
+            r.sellCount = 1;
+            r.sellDamage = 0;
+        }
+        out.push_back(r);
+    };
+
+    switch (profession) {
+        case 0: { // Farmer
+            addBuyTrade(296, 0.9f, 18, 22);   // wheat
+            addBuyTrade(35,  0.5f, 14, 22);   // wool (block)
+            addBuyTrade(365, 0.5f, 14, 18);   // chicken (raw)
+            addBuyTrade(350, 0.4f, 9, 13);    // cooked_fish
+            addSellTrade(297, 0.9f, -4, -2);  // bread
+            addSellTrade(360, 0.3f, -8, -4);  // melon
+            addSellTrade(260, 0.3f, -8, -4);  // apple
+            addSellTrade(357, 0.3f, -10, -7); // cookie
+            addSellTrade(359, 0.3f, 3, 4);    // shears
+            addSellTrade(259, 0.3f, 3, 4);    // flint_and_steel
+            addSellTrade(366, 0.3f, -8, -6);  // cooked_chicken
+            addSellTrade(262, 0.5f, -12, -8); // arrow
+            // Gravel + emerald → flint (special dual-input trade)
+            if (std::uniform_real_distribution<float>(0.0f, 1.0f)(rng) < 0.5f) {
+                MerchantRecipe r;
+                r.buyItemId1 = 13;  // gravel
+                r.buyCount1 = 10;
+                r.buyDamage1 = 0;
+                r.buyItemId2 = 388; // emerald
+                r.buyCount2 = 1;
+                r.buyDamage2 = 0;
+                r.sellItemId = 318; // flint
+                r.sellCount = static_cast<int8_t>(4 + rng() % 2);
+                r.sellDamage = 0;
+                out.push_back(r);
+            }
+            break;
+        }
+        case 1: { // Librarian
+            addBuyTrade(339, 0.8f, 24, 36);   // paper
+            addBuyTrade(340, 0.8f, 11, 13);   // book
+            addBuyTrade(387, 0.3f, 1, 1);     // written_book
+            addSellTrade(47,  0.8f, 3, 4);    // bookshelf (block)
+            addSellTrade(20,  0.2f, -5, -3);  // glass (block)
+            addSellTrade(345, 0.2f, 10, 12);  // compass
+            addSellTrade(347, 0.2f, 10, 12);  // clock
+            // Enchanted book trade (rare) — simplified: sell an enchanted book for emeralds
+            if (std::uniform_real_distribution<float>(0.0f, 1.0f)(rng) < 0.07f) {
+                MerchantRecipe r;
+                r.buyItemId1 = 340; // book
+                r.buyCount1 = 1;
+                r.buyDamage1 = 0;
+                r.buyItemId2 = 388; // emerald
+                r.buyCount2 = static_cast<int8_t>(5 + rng() % 19); // 5-23 emeralds
+                r.buyDamage2 = 0;
+                r.sellItemId = 403; // enchanted_book
+                r.sellCount = 1;
+                r.sellDamage = 0;
+                out.push_back(r);
+            }
+            break;
+        }
+        case 2: { // Priest/Cleric
+            addSellTrade(381, 0.3f, 7, 11);   // eye_of_ender
+            addSellTrade(384, 0.2f, -4, -1);  // experience_bottle
+            addSellTrade(331, 0.4f, -4, -1);  // redstone
+            addSellTrade(89,  0.3f, -3, -1);  // glowstone (block)
+            break;
+        }
+        case 3: { // Blacksmith
+            addBuyTrade(263, 0.7f, 16, 24);   // coal
+            addBuyTrade(265, 0.5f, 8, 10);    // iron_ingot
+            addBuyTrade(266, 0.5f, 8, 10);    // gold_ingot
+            addBuyTrade(264, 0.5f, 4, 6);     // diamond
+            addSellTrade(267, 0.5f, 7, 11);   // iron_sword
+            addSellTrade(276, 0.5f, 12, 14);  // diamond_sword
+            addSellTrade(258, 0.3f, 6, 8);    // iron_axe
+            addSellTrade(279, 0.3f, 9, 12);   // diamond_axe
+            addSellTrade(257, 0.5f, 7, 9);    // iron_pickaxe
+            addSellTrade(278, 0.5f, 10, 12);  // diamond_pickaxe
+            addSellTrade(256, 0.2f, 4, 6);    // iron_shovel
+            addSellTrade(277, 0.2f, 7, 8);    // diamond_shovel
+            addSellTrade(292, 0.2f, 4, 6);    // iron_hoe
+            addSellTrade(293, 0.2f, 7, 8);    // diamond_hoe
+            addSellTrade(309, 0.2f, 4, 6);    // iron_boots
+            addSellTrade(313, 0.2f, 7, 8);    // diamond_boots
+            addSellTrade(306, 0.2f, 4, 6);    // iron_helmet
+            addSellTrade(310, 0.2f, 7, 8);    // diamond_helmet
+            addSellTrade(307, 0.2f, 10, 14);  // iron_chestplate
+            addSellTrade(311, 0.2f, 16, 19);  // diamond_chestplate
+            addSellTrade(308, 0.2f, 8, 10);   // iron_leggings
+            addSellTrade(312, 0.2f, 11, 14);  // diamond_leggings
+            addSellTrade(305, 0.1f, 5, 7);    // chainmail_boots
+            addSellTrade(302, 0.1f, 5, 7);    // chainmail_helmet
+            addSellTrade(303, 0.1f, 11, 15);  // chainmail_chestplate
+            addSellTrade(304, 0.1f, 9, 11);   // chainmail_leggings
+            break;
+        }
+        case 4: { // Butcher
+            addBuyTrade(263, 0.7f, 16, 24);   // coal
+            addBuyTrade(319, 0.5f, 14, 18);   // porkchop
+            addBuyTrade(363, 0.5f, 14, 18);   // beef
+            addSellTrade(329, 0.1f, 6, 8);    // saddle
+            addSellTrade(299, 0.3f, 4, 5);    // leather_chestplate
+            addSellTrade(301, 0.3f, 2, 4);    // leather_boots
+            addSellTrade(298, 0.3f, 2, 4);    // leather_helmet
+            addSellTrade(300, 0.3f, 2, 4);    // leather_leggings
+            addSellTrade(320, 0.3f, -7, -5);  // cooked_porkchop
+            addSellTrade(364, 0.3f, -7, -5);  // cooked_beef
+            break;
+        }
+        default:
+            // Unknown profession — fallback: gold_ingot → emerald
+            addBuyTrade(266, 1.0f, 8, 10);
+            break;
+    }
+
+    // Java: if list empty, add gold_ingot → emerald as fallback
+    if (out.empty()) {
+        addBuyTrade(266, 1.0f, 8, 10);
+    }
 }
 
 bool MinecraftServer::isRaining() const {

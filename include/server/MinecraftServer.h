@@ -28,6 +28,7 @@
 #include "command/CommandSystem.h"
 #include "crafting/Crafting.h"
 #include "scoreboard/Scoreboard.h"
+#include "server/MerchantRecipe.h"
 
 namespace mccpp {
 
@@ -752,6 +753,8 @@ private:
     mutable std::mutex signsMutex_;
     std::map<int64_t, SignData> signs_;  // packed pos → text
 
+    static void generateVillagerTrades(int profession, std::vector<MerchantRecipe>& out);
+
     // ─── Mob entities ───────────────────────────────────────────────
     // Java reference: SpawnerAnimals.findChunksForSpawning()
     struct SpawnedMob {
@@ -818,6 +821,8 @@ private:
         std::optional<ItemStack> horseChestInventory[15]; // Java: AnimalChest slots 2-16 (chested donkey/mule)
         // Villager state — Java: EntityVillager DataWatcher(16)
         int32_t villagerProfession = 0;  // DW 16 int: 0=farmer, 1=librarian, 2=priest, 3=blacksmith, 4=butcher
+        std::vector<MerchantRecipe> villagerTrades;  // Generated on first interaction
+        bool villagerTradesGenerated = false;
     };
     mutable std::mutex mobEntitiesMutex_;
     std::vector<SpawnedMob> mobEntities_;

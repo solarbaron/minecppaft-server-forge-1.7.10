@@ -26,6 +26,7 @@
 #include "command/CommandSystem.h"
 #include "inventory/Inventory.h"
 #include "mechanics/FoodStats.h"
+#include "server/MerchantRecipe.h"
 
 namespace mccpp {
 
@@ -297,6 +298,14 @@ public:
      * Java reference: InventoryEnderChest
      */
     void openEnderChest(Connection& conn, int32_t blockX, int32_t blockY, int32_t blockZ);
+
+    /**
+     * Open a villager trading GUI for this player.
+     * Sends S2D OpenWindow type 6 + S3F MC|TrList + S30 WindowItems.
+     * Java reference: EntityPlayer.displayGUIMerchant() → ContainerMerchant
+     */
+    void openVillagerTrading(Connection& conn, int32_t villagerEntityId,
+                             const std::vector<MerchantRecipe>& trades);
 
     /**
      * Send S31 WindowProperty to the client (furnace progress bars).
@@ -907,6 +916,9 @@ private:
     static bool getIsRepairable(int32_t itemId, int32_t materialId);
     static bool canApplyEnchantment(int32_t enchId, int32_t itemId);
 
+    // ─── Villager trading helpers ───
+    void updateMerchantOutput(Connection& conn);
+
     MinecraftServer& server_;
     std::string playerName_;
     std::string uuid_;
@@ -1001,6 +1013,13 @@ private:
     // Java: ContainerHorseInventory — saddle slot 0, armor slot 1, chest slots 2-16
     int32_t horseEntityId_ = -1;                  // Entity ID of horse with open GUI
     int32_t horseSlotCount_ = 2;                  // 2 (normal horse) or 17 (chested donkey/mule)
+
+    // ─── Villager trading ───
+    // Java: ContainerMerchant — 3 slots (buy1, buy2, result) + trade list
+    int32_t villagerEntityId_ = -1;               // Entity ID of villager being traded with
+    std::vector<MerchantRecipe> villagerRecipes_;  // Copy of trades
+    std::optional<ItemStack> merchantSlots_[3];    // Slot 0=buy1, 1=buy2, 2=result
+    int32_t currentRecipeIndex_ = -1;             // Selected trade index
 
 public:
     // Accessors for server-side furnace ticking

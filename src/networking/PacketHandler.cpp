@@ -634,6 +634,15 @@ void PlayHandler::handlePacket(int32_t packetId,
                 }
                 updateAnvilOutput(conn);
             }
+            // MC|TrSel — villager recipe selection
+            // Java: ContainerMerchant.setCurrentRecipeIndex(int)
+            if (channel == "MC|TrSel" && openWindowType_ == 6) {
+                if (dataLen >= 4 && pr.remaining() >= 4) {
+                    int32_t recipeIndex = pr.readInt();
+                    currentRecipeIndex_ = recipeIndex;
+                    updateMerchantOutput(conn);
+                }
+            }
             // Silently consume other channels (MC|Brand, etc.)
             break;
         }
@@ -1405,6 +1414,23 @@ void PlayHandler::closeOpenWindow(Connection& conn) {
         horseSlotCount_ = 2;
     }
 
+    // Villager trading: drop buy-slot items, reset state
+    // Java: ContainerMerchant.onContainerClosed → dropPlayerItemWithRandomChoice
+    if (openWindowType_ == 6) {
+        for (int i = 0; i < 2; ++i) {
+            if (merchantSlots_[i]) {
+                server_.spawnItemDrop(playerX_, playerY_ + 1.5, playerZ_,
+                    merchantSlots_[i]->getItemId(), merchantSlots_[i]->getDamage(),
+                    merchantSlots_[i]->getStackSize());
+                merchantSlots_[i] = std::nullopt;
+            }
+        }
+        merchantSlots_[2] = std::nullopt;
+        villagerEntityId_ = -1;
+        villagerRecipes_.clear();
+        currentRecipeIndex_ = -1;
+    }
+
     // Drop cursor item
     if (cursorItem_) {
         server_.spawnItemDrop(playerX_, playerY_ + 1.5, playerZ_,
@@ -1582,6 +1608,181 @@ void PlayHandler::openEnderChest(Connection& conn, int32_t blockX, int32_t block
         static_cast<double>(blockY) + 0.5,
         static_cast<double>(blockZ) + 0.5,
         0.5f, 1.0f);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Villager trading — Java: EntityPlayer.displayGUIMerchant()
+// Opens window type 6, sends MC|TrList trade data, sends window contents.
+// ContainerMerchant: slot 0=buy1, slot 1=buy2, slot 2=result, 3-38=player inv
+// ═══════════════════════════════════════════════════════════════════════════
+void PlayHandler::openVillagerTrading(Connection& conn, int32_t villagerEntityId,
+                                       const std::vector<MerchantRecipe>& trades) {
+    if (openWindowId_ > 0) {
+        closeOpenWindow(conn);
+    }
+
+    openWindowId_ = nextWindowId_++;
+    if (nextWindowId_ > 100) nextWindowId_ = 1;
+    openWindowType_ = 6; // minecraft:villager
+
+    villagerEntityId_ = villagerEntityId;
+    villagerRecipes_ = trades;  // Copy
+    for (int i = 0; i < 3; ++i) merchantSlots_[i] = std::nullopt;
+    currentRecipeIndex_ = -1;
+
+    // S2D OpenWindow — type 6 (villager)
+    // Java: S2DPacketOpenWindow(windowId, 6, "mob.villager", 3, useTitle=true)
+    sendOpenWindow(conn, openWindowId_, 6, "mob.villager", 3);
+
+    // S3F PluginMessage — channel "MC|TrList"
+    // Java: EntityPlayerMP.displayGUIMerchant → S3FPacketCustomPayload("MC|TrList", ...)
+    // Payload format (MerchantRecipeList.func_151391_a):
+    //   int windowId
+    //   byte recipeCount
+    //   for each recipe:
+    //     writeItemStack(buy1)
+    //     writeItemStack(sell)
+    //     bool hasSecondItem
+    //     if hasSecondItem: writeItemStack(buy2)
+    //     bool isDisabled
+    {
+        // Build the payload data first
+        std::vector<uint8_t> payload;
+        writeInt(payload, static_cast<int32_t>(openWindowId_));
+        writeByte(payload, static_cast<uint8_t>(trades.size() & 0xFF));
+        for (auto& trade : trades) {
+            // Buy item 1
+            writeShort(payload, trade.buyItemId1);
+            writeByte(payload, static_cast<uint8_t>(trade.buyCount1));
+            writeShort(payload, trade.buyDamage1);
+            writeShort(payload, -1); // No NBT tag
+
+            // Sell item (output)
+            writeShort(payload, trade.sellItemId);
+            writeByte(payload, static_cast<uint8_t>(trade.sellCount));
+            writeShort(payload, trade.sellDamage);
+            writeShort(payload, -1); // No NBT tag
+
+            // Has second buy item?
+            writeByte(payload, trade.hasSecondItem() ? 1 : 0);
+            if (trade.hasSecondItem()) {
+                writeShort(payload, trade.buyItemId2);
+                writeByte(payload, static_cast<uint8_t>(trade.buyCount2));
+                writeShort(payload, trade.buyDamage2);
+                writeShort(payload, -1); // No NBT tag
+            }
+
+            // Is recipe disabled?
+            writeByte(payload, trade.isDisabled() ? 1 : 0);
+        }
+
+        // Wrap in S3F packet
+        std::vector<uint8_t> pkt;
+        writeVarInt(pkt, ClientboundPacket::PluginMessage);
+        writeString(pkt, "MC|TrList");
+        writeShort(pkt, static_cast<int16_t>(payload.size()));
+        pkt.insert(pkt.end(), payload.begin(), payload.end());
+        conn.sendPacket(std::move(pkt));
+    }
+
+    // S30 WindowItems — 39 slots (3 merchant + 36 player inv)
+    {
+        std::vector<uint8_t> pkt;
+        writeVarInt(pkt, ClientboundPacket::WindowItems);
+        writeByte(pkt, static_cast<uint8_t>(openWindowId_));
+        writeShort(pkt, 39); // 3 merchant + 27 main + 9 hotbar
+
+        // Slots 0-2: merchant slots (all empty initially)
+        writeShort(pkt, -1); // buy1 (empty)
+        writeShort(pkt, -1); // buy2 (empty)
+        writeShort(pkt, -1); // result (empty)
+
+        // Slots 3-29: main inventory (player slots 9-35)
+        for (int i = 9; i < 36; ++i) {
+            writeItemStack(pkt, inventory_.getStackInSlot(i));
+        }
+        // Slots 30-38: hotbar (player slots 0-8)
+        for (int i = 0; i < 9; ++i) {
+            writeItemStack(pkt, inventory_.getStackInSlot(i));
+        }
+
+        conn.sendPacket(std::move(pkt));
+    }
+}
+
+// ─── Villager trading helper: update output slot from buy inputs ──────────
+// Java: InventoryMerchant.resetRecipeAndSlots() + MerchantRecipeList.canRecipeBeUsed()
+void PlayHandler::updateMerchantOutput(Connection& conn) {
+    merchantSlots_[2] = std::nullopt;
+
+    if (villagerRecipes_.empty()) goto sendUpdate;
+
+    {
+        auto& slot0 = merchantSlots_[0];
+        auto& slot1 = merchantSlots_[1];
+
+        // If slot 0 is empty but slot 1 has items, swap (Java: InventoryMerchant.resetRecipeAndSlots)
+        const std::optional<ItemStack>* primary = &slot0;
+        const std::optional<ItemStack>* secondary = &slot1;
+        if (!slot0 && slot1) {
+            primary = &slot1;
+            secondary = &slot0;
+        }
+
+        if (!*primary) goto sendUpdate;
+
+        // Try to match recipe — first check currentRecipeIndex_ hint
+        auto tryMatch = [&](const MerchantRecipe& recipe) -> bool {
+            if (recipe.isDisabled()) return false;
+            // Check primary matches buy1
+            if ((*primary)->getItemId() != recipe.buyItemId1) return false;
+            if ((*primary)->getStackSize() < recipe.buyCount1) return false;
+            // Check secondary matches buy2 (if recipe has one)
+            if (recipe.hasSecondItem()) {
+                if (!*secondary) return false;
+                if ((*secondary)->getItemId() != recipe.buyItemId2) return false;
+                if ((*secondary)->getStackSize() < recipe.buyCount2) return false;
+            } else {
+                // Recipe has no second item — secondary should be empty
+                // (allowing it to be present is also fine per Java behavior)
+            }
+            return true;
+        };
+
+        bool matched = false;
+        // Try the selected recipe first (Java: canRecipeBeUsed with index hint)
+        if (currentRecipeIndex_ >= 0 &&
+            currentRecipeIndex_ < static_cast<int32_t>(villagerRecipes_.size())) {
+            if (tryMatch(villagerRecipes_[currentRecipeIndex_])) {
+                auto& recipe = villagerRecipes_[currentRecipeIndex_];
+                merchantSlots_[2] = ItemStack(recipe.sellItemId, recipe.sellCount, recipe.sellDamage);
+                matched = true;
+            }
+        }
+        // Fallback: scan all recipes
+        if (!matched) {
+            for (size_t i = 0; i < villagerRecipes_.size(); ++i) {
+                if (tryMatch(villagerRecipes_[i])) {
+                    auto& recipe = villagerRecipes_[i];
+                    merchantSlots_[2] = ItemStack(recipe.sellItemId, recipe.sellCount, recipe.sellDamage);
+                    currentRecipeIndex_ = static_cast<int32_t>(i);
+                    matched = true;
+                    break;
+                }
+            }
+        }
+    }
+
+sendUpdate:
+    // S2F SetSlot — update slot 2 (result)
+    {
+        std::vector<uint8_t> pkt;
+        writeVarInt(pkt, ClientboundPacket::SetSlot);
+        writeByte(pkt, static_cast<uint8_t>(openWindowId_));
+        writeShort(pkt, 2); // slot 2 = result
+        writeItemStack(pkt, merchantSlots_[2]);
+        conn.sendPacket(std::move(pkt));
+    }
 }
 
 void PlayHandler::openFurnace(Connection& conn, int32_t blockX, int32_t blockY, int32_t blockZ) {
@@ -7030,6 +7231,362 @@ void PlayHandler::handleClickWindow(const uint8_t* data, size_t length, Connecti
         // Other modes — confirm and sync
         sendConfirm(true);
         syncHorseWindow();
+        return;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // Window type 6: Villager trading — ContainerMerchant
+    // Slots: 0=buy1, 1=buy2, 2=result, 3-29=player main inv, 30-38=hotbar
+    // ═══════════════════════════════════════════════════════════════════
+    if (windowId > 0 && windowId == openWindowId_ && openWindowType_ == 6 && villagerEntityId_ >= 0) {
+        const int32_t totalSlots = 39; // 3 merchant + 27 main + 9 hotbar
+
+        // Slot resolution helper: map window slot ↔ inventory slot
+        auto getMerchantSlotRef = [&](int16_t s) -> std::optional<ItemStack>* {
+            if (s >= 0 && s < 3) return &merchantSlots_[s];
+            return nullptr;
+        };
+        auto getInvSlotForMerchant = [&](int16_t s) -> int32_t {
+            if (s >= 3 && s < 30) return s - 3 + 9;     // main inv: 9-35
+            if (s >= 30 && s < 39) return s - 30;        // hotbar: 0-8
+            return -1;
+        };
+
+        // Helper: get whatever stack is in a window slot
+        auto getSlotStack = [&](int16_t s) -> std::optional<ItemStack> {
+            auto* ref = getMerchantSlotRef(s);
+            if (ref) return *ref;
+            int32_t invIdx = getInvSlotForMerchant(s);
+            if (invIdx >= 0) return inventory_.getStackInSlot(invIdx);
+            return std::nullopt;
+        };
+        // Helper: set a window slot
+        auto setSlotStack = [&](int16_t s, const std::optional<ItemStack>& stack) {
+            auto* ref = getMerchantSlotRef(s);
+            if (ref) { *ref = stack; return; }
+            int32_t invIdx = getInvSlotForMerchant(s);
+            if (invIdx >= 0) inventory_.setInventorySlotContents(invIdx, stack);
+        };
+
+        // Sync all merchant window slots to client
+        auto syncMerchantWindow = [&]() {
+            for (int i = 0; i < 3; ++i)
+                sendSetSlot(conn, openWindowId_, static_cast<int16_t>(i), merchantSlots_[i]);
+            for (int i = 9; i < 36; ++i)
+                sendSetSlot(conn, openWindowId_, static_cast<int16_t>(i - 9 + 3), inventory_.getStackInSlot(i));
+            for (int i = 0; i < 9; ++i)
+                sendSetSlot(conn, openWindowId_, static_cast<int16_t>(i + 30), inventory_.getStackInSlot(i));
+            sendSetSlot(conn, -1, -1, cursorItem_);
+        };
+
+        // Helper: execute trade — consume buy items, give result, increment uses
+        auto executeTrade = [&]() -> bool {
+            if (currentRecipeIndex_ < 0 ||
+                currentRecipeIndex_ >= static_cast<int32_t>(villagerRecipes_.size()))
+                return false;
+            auto& recipe = villagerRecipes_[currentRecipeIndex_];
+            if (recipe.isDisabled()) return false;
+            if (!merchantSlots_[2]) return false;
+
+            // Consume buy1
+            if (!merchantSlots_[0] || merchantSlots_[0]->getStackSize() < recipe.buyCount1)
+                return false;
+            int32_t rem1 = merchantSlots_[0]->getStackSize() - recipe.buyCount1;
+            if (rem1 <= 0) merchantSlots_[0] = std::nullopt;
+            else merchantSlots_[0]->setStackSize(rem1);
+
+            // Consume buy2 if needed
+            if (recipe.hasSecondItem()) {
+                if (!merchantSlots_[1] || merchantSlots_[1]->getStackSize() < recipe.buyCount2)
+                    return false;
+                int32_t rem2 = merchantSlots_[1]->getStackSize() - recipe.buyCount2;
+                if (rem2 <= 0) merchantSlots_[1] = std::nullopt;
+                else merchantSlots_[1]->setStackSize(rem2);
+            }
+
+            // Increment trade uses — Java: MerchantRecipe.incrementToolUses()
+            recipe.toolUses++;
+            // Also update the mob entity's trade list
+            {
+                std::lock_guard<std::mutex> lock(server_.mobEntitiesMutex_);
+                for (auto& mob : server_.mobEntities_) {
+                    if (mob.entityId == villagerEntityId_ && !mob.isDead && mob.mobType == 120) {
+                        if (currentRecipeIndex_ < static_cast<int32_t>(mob.villagerTrades.size())) {
+                            mob.villagerTrades[currentRecipeIndex_].toolUses = recipe.toolUses;
+                        }
+                        break;
+                    }
+                }
+            }
+            return true;
+        };
+
+        // ─── Mode 0: Normal click ──────────────────────────────────────
+        if (mode == 0 && (button == 0 || button == 1)) {
+            if (slotId == -999) {
+                // Click outside — drop cursor
+                if (cursorItem_) {
+                    if (button == 0) {
+                        server_.spawnItemDrop(playerX_, playerY_ + 1.5, playerZ_,
+                            cursorItem_->getItemId(), cursorItem_->getDamage(), cursorItem_->getStackSize());
+                        cursorItem_ = std::nullopt;
+                    } else {
+                        server_.spawnItemDrop(playerX_, playerY_ + 1.5, playerZ_,
+                            cursorItem_->getItemId(), cursorItem_->getDamage(), 1);
+                        int32_t rem = cursorItem_->getStackSize() - 1;
+                        if (rem <= 0) cursorItem_ = std::nullopt;
+                        else cursorItem_->setStackSize(rem);
+                    }
+                }
+                sendConfirm(true);
+                syncMerchantWindow();
+                return;
+            }
+
+            if (slotId < 0 || slotId >= totalSlots) {
+                sendConfirm(false);
+                return;
+            }
+
+            if (slotId == 2) {
+                // Result slot — special: picking up result item executes the trade
+                auto resultStack = merchantSlots_[2];
+                if (resultStack && !cursorItem_) {
+                    cursorItem_ = resultStack;
+                    executeTrade();
+                    merchantSlots_[2] = std::nullopt;
+                    updateMerchantOutput(conn);
+                } else if (resultStack && cursorItem_ &&
+                           cursorItem_->getItemId() == resultStack->getItemId() &&
+                           cursorItem_->getDamage() == resultStack->getDamage() &&
+                           cursorItem_->getStackSize() + resultStack->getStackSize() <= 64) {
+                    // Add to existing cursor stack
+                    cursorItem_->setStackSize(cursorItem_->getStackSize() + resultStack->getStackSize());
+                    executeTrade();
+                    merchantSlots_[2] = std::nullopt;
+                    updateMerchantOutput(conn);
+                }
+                sendConfirm(true);
+                syncMerchantWindow();
+                return;
+            }
+
+            if (slotId == 0 || slotId == 1) {
+                // Buy slots — normal slot interaction
+                auto slotStack = merchantSlots_[slotId];
+                if (button == 0) { // left click
+                    if (!cursorItem_ && slotStack) {
+                        cursorItem_ = slotStack;
+                        merchantSlots_[slotId] = std::nullopt;
+                    } else if (cursorItem_ && !slotStack) {
+                        merchantSlots_[slotId] = cursorItem_;
+                        cursorItem_ = std::nullopt;
+                    } else if (cursorItem_ && slotStack) {
+                        if (cursorItem_->getItemId() == slotStack->getItemId() &&
+                            cursorItem_->getDamage() == slotStack->getDamage()) {
+                            int32_t total = cursorItem_->getStackSize() + slotStack->getStackSize();
+                            if (total <= 64) {
+                                slotStack->setStackSize(total);
+                                merchantSlots_[slotId] = slotStack;
+                                cursorItem_ = std::nullopt;
+                            } else {
+                                slotStack->setStackSize(64);
+                                merchantSlots_[slotId] = slotStack;
+                                cursorItem_->setStackSize(total - 64);
+                            }
+                        } else {
+                            merchantSlots_[slotId] = cursorItem_;
+                            cursorItem_ = slotStack;
+                        }
+                    }
+                } else { // right click
+                    if (cursorItem_ && !slotStack) {
+                        merchantSlots_[slotId] = ItemStack(cursorItem_->getItemId(), 1, cursorItem_->getDamage());
+                        int32_t rem = cursorItem_->getStackSize() - 1;
+                        if (rem <= 0) cursorItem_ = std::nullopt;
+                        else cursorItem_->setStackSize(rem);
+                    } else if (cursorItem_ && slotStack &&
+                               cursorItem_->getItemId() == slotStack->getItemId() &&
+                               cursorItem_->getDamage() == slotStack->getDamage() &&
+                               slotStack->getStackSize() < 64) {
+                        slotStack->setStackSize(slotStack->getStackSize() + 1);
+                        merchantSlots_[slotId] = slotStack;
+                        int32_t rem = cursorItem_->getStackSize() - 1;
+                        if (rem <= 0) cursorItem_ = std::nullopt;
+                        else cursorItem_->setStackSize(rem);
+                    } else if (!cursorItem_ && slotStack) {
+                        int32_t half = (slotStack->getStackSize() + 1) / 2;
+                        int32_t remaining = slotStack->getStackSize() - half;
+                        cursorItem_ = ItemStack(slotStack->getItemId(), half, slotStack->getDamage());
+                        if (remaining <= 0) merchantSlots_[slotId] = std::nullopt;
+                        else {
+                            slotStack->setStackSize(remaining);
+                            merchantSlots_[slotId] = slotStack;
+                        }
+                    } else if (!cursorItem_ && !slotStack) {
+                        // nothing
+                    } else {
+                        merchantSlots_[slotId] = cursorItem_;
+                        cursorItem_ = slotStack;
+                    }
+                }
+                updateMerchantOutput(conn);
+                sendConfirm(true);
+                syncMerchantWindow();
+                return;
+            }
+
+            // Player inventory slots (3-38): standard left/right click
+            {
+                int32_t invIdx = getInvSlotForMerchant(slotId);
+                if (invIdx < 0) { sendConfirm(false); return; }
+                auto slotStack = inventory_.getStackInSlot(invIdx);
+                if (button == 0) {
+                    if (!cursorItem_ && slotStack) {
+                        cursorItem_ = slotStack;
+                        inventory_.setInventorySlotContents(invIdx, std::nullopt);
+                    } else if (cursorItem_ && !slotStack) {
+                        inventory_.setInventorySlotContents(invIdx, cursorItem_);
+                        cursorItem_ = std::nullopt;
+                    } else if (cursorItem_ && slotStack) {
+                        if (cursorItem_->getItemId() == slotStack->getItemId() &&
+                            cursorItem_->getDamage() == slotStack->getDamage()) {
+                            int32_t total = cursorItem_->getStackSize() + slotStack->getStackSize();
+                            if (total <= 64) {
+                                slotStack->setStackSize(total);
+                                inventory_.setInventorySlotContents(invIdx, slotStack);
+                                cursorItem_ = std::nullopt;
+                            } else {
+                                slotStack->setStackSize(64);
+                                inventory_.setInventorySlotContents(invIdx, slotStack);
+                                cursorItem_->setStackSize(total - 64);
+                            }
+                        } else {
+                            inventory_.setInventorySlotContents(invIdx, cursorItem_);
+                            cursorItem_ = slotStack;
+                        }
+                    }
+                } else {
+                    if (cursorItem_ && !slotStack) {
+                        inventory_.setInventorySlotContents(invIdx, ItemStack(cursorItem_->getItemId(), 1, cursorItem_->getDamage()));
+                        int32_t rem = cursorItem_->getStackSize() - 1;
+                        if (rem <= 0) cursorItem_ = std::nullopt;
+                        else cursorItem_->setStackSize(rem);
+                    } else if (cursorItem_ && slotStack &&
+                               cursorItem_->getItemId() == slotStack->getItemId() &&
+                               cursorItem_->getDamage() == slotStack->getDamage() &&
+                               slotStack->getStackSize() < 64) {
+                        slotStack->setStackSize(slotStack->getStackSize() + 1);
+                        inventory_.setInventorySlotContents(invIdx, slotStack);
+                        int32_t rem = cursorItem_->getStackSize() - 1;
+                        if (rem <= 0) cursorItem_ = std::nullopt;
+                        else cursorItem_->setStackSize(rem);
+                    } else if (!cursorItem_ && slotStack) {
+                        int32_t half = (slotStack->getStackSize() + 1) / 2;
+                        int32_t remaining = slotStack->getStackSize() - half;
+                        cursorItem_ = ItemStack(slotStack->getItemId(), half, slotStack->getDamage());
+                        if (remaining <= 0) inventory_.setInventorySlotContents(invIdx, std::nullopt);
+                        else {
+                            slotStack->setStackSize(remaining);
+                            inventory_.setInventorySlotContents(invIdx, slotStack);
+                        }
+                    } else if (!cursorItem_ && !slotStack) {
+                        // nothing
+                    } else {
+                        inventory_.setInventorySlotContents(invIdx, cursorItem_);
+                        cursorItem_ = slotStack;
+                    }
+                }
+            }
+            sendConfirm(true);
+            syncMerchantWindow();
+            return;
+        }
+
+        // ─── Mode 1: Shift-click ───────────────────────────────────────
+        if (mode == 1 && (button == 0 || button == 1)) {
+            if (slotId < 0 || slotId >= totalSlots) { sendConfirm(false); return; }
+
+            if (slotId == 2) {
+                // Shift-click result: execute trade repeatedly until ingredients run out
+                // Java: ContainerMerchant.transferStackInSlot — keep trading until can't
+                auto resultStack = merchantSlots_[2];
+                if (resultStack) {
+                    int maxIterations = 64;
+                    while (merchantSlots_[2] && maxIterations-- > 0) {
+                        auto result = merchantSlots_[2];
+                        if (!result) break;
+                        // Try to add to player inventory
+                        ItemStack toAdd(result->getItemId(), result->getStackSize(), result->getDamage());
+                        if (!inventory_.addItemStackToInventory(toAdd)) break;
+                        if (!executeTrade()) break;
+                        merchantSlots_[2] = std::nullopt;
+                        updateMerchantOutput(conn);
+                    }
+                }
+                sendConfirm(true);
+                syncMerchantWindow();
+                return;
+            }
+
+            if (slotId == 0 || slotId == 1) {
+                // Shift-click buy slot → move to player inventory
+                auto slotStack = merchantSlots_[slotId];
+                if (slotStack) {
+                    ItemStack toAdd(slotStack->getItemId(), slotStack->getStackSize(), slotStack->getDamage());
+                    if (inventory_.addItemStackToInventory(toAdd)) {
+                        merchantSlots_[slotId] = std::nullopt;
+                    }
+                }
+                updateMerchantOutput(conn);
+                sendConfirm(true);
+                syncMerchantWindow();
+                return;
+            }
+
+            // Player inventory slot → try to move to buy slot 0 or 1
+            {
+                int32_t invIdx = getInvSlotForMerchant(slotId);
+                if (invIdx < 0) { sendConfirm(false); return; }
+                auto slotStack = inventory_.getStackInSlot(invIdx);
+                if (slotStack) {
+                    // Try to place in merchant buy slots (0 or 1)
+                    bool placed = false;
+                    for (int i = 0; i < 2; ++i) {
+                        if (!merchantSlots_[i]) {
+                            merchantSlots_[i] = slotStack;
+                            inventory_.setInventorySlotContents(invIdx, std::nullopt);
+                            placed = true;
+                            break;
+                        }
+                        if (merchantSlots_[i]->getItemId() == slotStack->getItemId() &&
+                            merchantSlots_[i]->getDamage() == slotStack->getDamage()) {
+                            int32_t space = 64 - merchantSlots_[i]->getStackSize();
+                            if (space > 0) {
+                                int32_t toMove = std::min(space, slotStack->getStackSize());
+                                merchantSlots_[i]->setStackSize(merchantSlots_[i]->getStackSize() + toMove);
+                                int32_t rem = slotStack->getStackSize() - toMove;
+                                if (rem <= 0) inventory_.setInventorySlotContents(invIdx, std::nullopt);
+                                else {
+                                    slotStack->setStackSize(rem);
+                                    inventory_.setInventorySlotContents(invIdx, slotStack);
+                                }
+                                placed = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (placed) updateMerchantOutput(conn);
+                }
+            }
+            sendConfirm(true);
+            syncMerchantWindow();
+            return;
+        }
+
+        // Other modes: confirm and sync
+        sendConfirm(true);
+        syncMerchantWindow();
         return;
     }
 
