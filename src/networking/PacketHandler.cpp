@@ -928,6 +928,17 @@ void PlayHandler::handleSteerVehicle(const uint8_t* data, size_t length, Connect
                 }
             }
         }
+        // Clear rider from mobs (horse, pig) — Java: EntityHorse/EntityPig.riddenByEntity
+        {
+            std::lock_guard<std::mutex> lock(server_.mobEntitiesMutex_);
+            for (auto& mob : server_.mobEntities_) {
+                if (mob.riderEntityId == entityId_) {
+                    mob.riderEntityId = -1;
+                    mob.horseJumpPower = 0.0f;
+                    break;
+                }
+            }
+        }
         // Clear rider from boats
         {
             std::lock_guard<std::mutex> lock(server_.boatEntitiesMutex_);
@@ -1386,6 +1397,12 @@ void PlayHandler::closeOpenWindow(Connection& conn) {
     if (openWindowType_ == 2) {
         furnaceData_ = nullptr;
         openFurnaceKey_ = 0;
+    }
+
+    // Horse inventory: reset state (items already stored directly on mob entity)
+    if (openWindowType_ == 11) {
+        horseEntityId_ = -1;
+        horseSlotCount_ = 2;
     }
 
     // Drop cursor item
@@ -6727,6 +6744,295 @@ void PlayHandler::handleClickWindow(const uint8_t* data, size_t length, Connecti
         return;
     }
 
+    // ═══════════════════════════════════════════════════════════════════
+    // Horse inventory window handler — Java: ContainerHorseInventory
+    // Slots: 0=saddle, 1=armor (normal horse only), 2-16=chest (chested donkey/mule)
+    // Then: player main inv (9-35) + hotbar (0-8)
+    // ═══════════════════════════════════════════════════════════════════
+    if (windowId > 0 && windowId == openWindowId_ && openWindowType_ == 11 && horseEntityId_ >= 0) {
+        const int32_t N = horseSlotCount_; // 2 (normal) or 17 (chested)
+        const int32_t totalSlots = N + 36;
+
+        // Find the mob entity reference
+        MinecraftServer::SpawnedMob* horseMob = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(server_.mobEntitiesMutex_);
+            for (auto& mob : server_.mobEntities_) {
+                if (mob.entityId == horseEntityId_ && !mob.isDead && mob.mobType == 100) {
+                    horseMob = &mob;
+                    break;
+                }
+            }
+        }
+        if (!horseMob) {
+            sendConfirm(false);
+            return;
+        }
+
+        // Slot resolution helpers
+        // Returns pointer to the horse slot storage, or nullptr if not a horse slot
+        auto getHorseSlotRef = [&](int16_t s) -> std::optional<ItemStack>* {
+            // Slot 0 and slot 1 are virtual (saddle/armor) — handled specially
+            if (s >= 2 && s < N) return &horseMob->horseChestInventory[s - 2];
+            return nullptr;
+        };
+        auto getInvSlotForHorse = [&](int16_t s) -> int32_t {
+            if (s >= N && s < N + 27) return s - N + 9;      // main inv: 9-35
+            if (s >= N + 27 && s < N + 36) return s - N - 27; // hotbar: 0-8
+            return -1;
+        };
+
+        // Sync all horse window slots to client
+        auto syncHorseWindow = [&]() {
+            // Slot 0: saddle
+            if (horseMob->isHorseSaddled) {
+                sendSetSlot(conn, openWindowId_, 0,
+                    std::optional<ItemStack>(ItemStack(329, 1, 0)));
+            } else {
+                sendSetSlot(conn, openWindowId_, 0, std::nullopt);
+            }
+            // Slot 1: armor
+            if (horseMob->horseArmorIndex > 0) {
+                int16_t armorId = 0;
+                if (horseMob->horseArmorIndex == 1) armorId = 417;
+                else if (horseMob->horseArmorIndex == 2) armorId = 418;
+                else if (horseMob->horseArmorIndex == 3) armorId = 419;
+                sendSetSlot(conn, openWindowId_, 1,
+                    std::optional<ItemStack>(ItemStack(armorId, 1, 0)));
+            } else {
+                sendSetSlot(conn, openWindowId_, 1, std::nullopt);
+            }
+            // Slots 2-16: chest inventory
+            for (int i = 2; i < N; ++i)
+                sendSetSlot(conn, openWindowId_, static_cast<int16_t>(i), horseMob->horseChestInventory[i - 2]);
+            // Player inventory
+            for (int i = 9; i < 36; ++i)
+                sendSetSlot(conn, openWindowId_, static_cast<int16_t>(N + i - 9), inventory_.getStackInSlot(i));
+            for (int i = 0; i < 9; ++i)
+                sendSetSlot(conn, openWindowId_, static_cast<int16_t>(N + 27 + i), inventory_.getStackInSlot(i));
+            sendSetSlot(conn, -1, -1, cursorItem_);
+        };
+
+        // Helper: broadcast horse DW 16 (bit flags) to all players
+        auto broadcastHorseDW16 = [&]() {
+            int32_t dw16val = 0;
+            if (horseMob->isTamed) dw16val |= 2;
+            if (horseMob->isHorseSaddled) dw16val |= 4;
+            if (horseMob->isHorseChested) dw16val |= 8;
+            auto metaPkt = PacketBuilder::entityMetadataInt(horseMob->entityId, 16, dw16val);
+            std::lock_guard<std::recursive_mutex> connLock(server_.connectionsMutex_);
+            for (auto& c : server_.connections_) {
+                if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
+                c->sendPacket(metaPkt);
+            }
+        };
+        // Helper: broadcast horse DW 22 (armor index) to all players
+        auto broadcastHorseDW22 = [&]() {
+            auto metaPkt = PacketBuilder::entityMetadataInt(horseMob->entityId, 22, horseMob->horseArmorIndex);
+            std::lock_guard<std::recursive_mutex> connLock(server_.connectionsMutex_);
+            for (auto& c : server_.connections_) {
+                if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
+                c->sendPacket(metaPkt);
+            }
+        };
+
+        if (mode == 0 && (button == 0 || button == 1)) {
+            if (slotId == -999) {
+                // Click outside window — drop cursor item
+                if (cursorItem_) {
+                    if (button == 0) {
+                        server_.spawnItemDrop(playerX_, playerY_ + 1.5, playerZ_,
+                            cursorItem_->getItemId(), cursorItem_->getDamage(), cursorItem_->getStackSize());
+                        cursorItem_ = std::nullopt;
+                    } else {
+                        server_.spawnItemDrop(playerX_, playerY_ + 1.5, playerZ_,
+                            cursorItem_->getItemId(), cursorItem_->getDamage(), 1);
+                        int32_t rem = cursorItem_->getStackSize() - 1;
+                        if (rem <= 0) cursorItem_ = std::nullopt;
+                        else cursorItem_->setStackSize(rem);
+                    }
+                }
+                sendConfirm(true);
+                syncHorseWindow();
+                return;
+            }
+
+            if (slotId < 0 || slotId >= totalSlots) { sendConfirm(false); return; }
+
+            // ─── Slot 0: Saddle ───
+            if (slotId == 0) {
+                // Current saddle state as item
+                std::optional<ItemStack> saddleSlot;
+                if (horseMob->isHorseSaddled) saddleSlot = ItemStack(329, 1, 0);
+
+                if (button == 0) {
+                    // Left: swap cursor with saddle slot
+                    if (cursorItem_ && cursorItem_->getItemId() == 329) {
+                        // Place saddle
+                        horseMob->isHorseSaddled = true;
+                        broadcastHorseDW16();
+                        cursorItem_ = saddleSlot; // Pick up old (if was already saddled, pick it back)
+                        // If cursor was a stack of saddles, consume one
+                        // Actually vanilla swaps entire cursor with slot
+                    } else if (!cursorItem_ && saddleSlot) {
+                        // Pick up saddle
+                        horseMob->isHorseSaddled = false;
+                        broadcastHorseDW16();
+                        cursorItem_ = saddleSlot;
+                    } else if (cursorItem_ && cursorItem_->getItemId() != 329) {
+                        // Non-saddle item: can't place, do nothing
+                    } else {
+                        // Empty cursor, empty slot: nothing
+                    }
+                } else {
+                    // Right click on saddle slot: same behavior (saddles don't stack)
+                    if (!cursorItem_ && saddleSlot) {
+                        horseMob->isHorseSaddled = false;
+                        broadcastHorseDW16();
+                        cursorItem_ = saddleSlot;
+                    } else if (cursorItem_ && cursorItem_->getItemId() == 329 && !horseMob->isHorseSaddled) {
+                        horseMob->isHorseSaddled = true;
+                        broadcastHorseDW16();
+                        int32_t rem = cursorItem_->getStackSize() - 1;
+                        if (rem <= 0) cursorItem_ = std::nullopt;
+                        else cursorItem_->setStackSize(rem);
+                    }
+                }
+                sendConfirm(true);
+                syncHorseWindow();
+                return;
+            }
+
+            // ─── Slot 1: Horse Armor (normal horse only, type 0) ───
+            if (slotId == 1) {
+                std::optional<ItemStack> armorSlot;
+                if (horseMob->horseArmorIndex > 0) {
+                    int16_t armorId = 0;
+                    if (horseMob->horseArmorIndex == 1) armorId = 417;
+                    else if (horseMob->horseArmorIndex == 2) armorId = 418;
+                    else if (horseMob->horseArmorIndex == 3) armorId = 419;
+                    armorSlot = ItemStack(armorId, 1, 0);
+                }
+
+                auto getArmorIndex = [](int32_t itemId) -> int32_t {
+                    if (itemId == 417) return 1;
+                    if (itemId == 418) return 2;
+                    if (itemId == 419) return 3;
+                    return 0;
+                };
+
+                if (horseMob->horseType != 0) {
+                    // Donkey/mule/zombie/skeleton horses can't wear armor
+                    sendConfirm(true);
+                    syncHorseWindow();
+                    return;
+                }
+
+                if (button == 0) {
+                    if (cursorItem_) {
+                        int32_t newIdx = getArmorIndex(cursorItem_->getItemId());
+                        if (newIdx > 0) {
+                            // Place armor
+                            horseMob->horseArmorIndex = newIdx;
+                            broadcastHorseDW22();
+                            cursorItem_ = armorSlot;
+                        }
+                        // Non-armor item: can't place
+                    } else if (armorSlot) {
+                        // Pick up armor
+                        horseMob->horseArmorIndex = 0;
+                        broadcastHorseDW22();
+                        cursorItem_ = armorSlot;
+                    }
+                } else {
+                    // Right click on armor slot
+                    if (!cursorItem_ && armorSlot) {
+                        horseMob->horseArmorIndex = 0;
+                        broadcastHorseDW22();
+                        cursorItem_ = armorSlot;
+                    } else if (cursorItem_ && !armorSlot) {
+                        int32_t newIdx = getArmorIndex(cursorItem_->getItemId());
+                        if (newIdx > 0) {
+                            horseMob->horseArmorIndex = newIdx;
+                            broadcastHorseDW22();
+                            int32_t rem = cursorItem_->getStackSize() - 1;
+                            if (rem <= 0) cursorItem_ = std::nullopt;
+                            else cursorItem_->setStackSize(rem);
+                        }
+                    }
+                }
+                sendConfirm(true);
+                syncHorseWindow();
+                return;
+            }
+
+            // ─── Slots 2-16: Chest inventory (chested donkey/mule) ───
+            // ─── Slots N to N+35: Player inventory ───
+            std::optional<ItemStack>* horseRef = getHorseSlotRef(slotId);
+            int32_t invIdx = (horseRef == nullptr) ? getInvSlotForHorse(slotId) : -1;
+
+            std::optional<ItemStack> slotStack;
+            if (horseRef) slotStack = *horseRef;
+            else if (invIdx >= 0) slotStack = inventory_.getStackInSlot(invIdx);
+            else { sendConfirm(false); return; }
+
+            if (button == 0) {
+                // Left click: swap
+                if (horseRef) *horseRef = cursorItem_;
+                else if (invIdx >= 0) inventory_.setInventorySlotContents(invIdx, cursorItem_);
+                cursorItem_ = slotStack;
+            } else {
+                // Right click: place 1 or pick up half
+                if (cursorItem_ && !slotStack) {
+                    ItemStack placed(cursorItem_->getItemId(), 1, cursorItem_->getDamage());
+                    if (horseRef) *horseRef = placed;
+                    else if (invIdx >= 0) inventory_.setInventorySlotContents(invIdx, placed);
+                    int32_t rem = cursorItem_->getStackSize() - 1;
+                    if (rem <= 0) cursorItem_ = std::nullopt;
+                    else cursorItem_->setStackSize(rem);
+                } else if (cursorItem_ && slotStack &&
+                           cursorItem_->getItemId() == slotStack->getItemId() &&
+                           cursorItem_->getDamage() == slotStack->getDamage()) {
+                    int32_t newSize = slotStack->getStackSize() + 1;
+                    if (newSize <= 64) {
+                        slotStack->setStackSize(newSize);
+                        if (horseRef) *horseRef = slotStack;
+                        else if (invIdx >= 0) inventory_.setInventorySlotContents(invIdx, slotStack);
+                        int32_t rem = cursorItem_->getStackSize() - 1;
+                        if (rem <= 0) cursorItem_ = std::nullopt;
+                        else cursorItem_->setStackSize(rem);
+                    }
+                } else if (!cursorItem_ && slotStack) {
+                    int32_t half = (slotStack->getStackSize() + 1) / 2;
+                    int32_t remaining = slotStack->getStackSize() - half;
+                    cursorItem_ = ItemStack(slotStack->getItemId(), half, slotStack->getDamage());
+                    if (remaining <= 0) {
+                        if (horseRef) *horseRef = std::nullopt;
+                        else if (invIdx >= 0) inventory_.setInventorySlotContents(invIdx, std::nullopt);
+                    } else {
+                        slotStack->setStackSize(remaining);
+                        if (horseRef) *horseRef = slotStack;
+                        else if (invIdx >= 0) inventory_.setInventorySlotContents(invIdx, slotStack);
+                    }
+                } else if (!cursorItem_ && !slotStack) {
+                    // Nothing
+                } else {
+                    if (horseRef) *horseRef = cursorItem_;
+                    else if (invIdx >= 0) inventory_.setInventorySlotContents(invIdx, cursorItem_);
+                    cursorItem_ = slotStack;
+                }
+            }
+            sendConfirm(true);
+            syncHorseWindow();
+            return;
+        }
+
+        // Other modes — confirm and sync
+        sendConfirm(true);
+        syncHorseWindow();
+        return;
+    }
+
     if (!container_ || windowId != 0) {
         sendConfirm(false);
         return;
@@ -7769,8 +8075,129 @@ void PlayHandler::handleEntityAction(const uint8_t* data, size_t length, Connect
         case 5: // Stop sprinting
             isSprinting_ = false;
             break;
+        case 6: {
+            // ─── Horse jump — Java: EntityHorse.setJumpPower(int) ─────────
+            // C0B jumpBoost is 0-100 value from client charge bar
+            // Java: if (jumpBoost >= 90) power = 1.0; else power = 0.4 + 0.4 * jumpBoost / 90.0
+            if (ridingEntityId_ >= 0) {
+                float jumpPower = 0.0f;
+                if (pkt.jumpBoost >= 90) {
+                    jumpPower = 1.0f;
+                } else if (pkt.jumpBoost > 0) {
+                    jumpPower = 0.4f + 0.4f * static_cast<float>(pkt.jumpBoost) / 90.0f;
+                }
+                // Store on the ridden horse mob
+                {
+                    std::lock_guard<std::mutex> lock(server_.mobEntitiesMutex_);
+                    for (auto& mob : server_.mobEntities_) {
+                        if (mob.entityId == ridingEntityId_ && mob.mobType == 100 && !mob.isDead) {
+                            mob.horseJumpPower = jumpPower;
+                            break;
+                        }
+                    }
+                }
+            }
+            return; // No metadata broadcast needed
+        }
+        case 7: {
+            // ─── Open horse inventory — Java: EntityPlayer.openGUI → displayGUIHorse ───
+            // C0B action 7: client presses inventory key while riding horse
+            if (ridingEntityId_ < 0) return;
+
+            // Find the ridden horse
+            std::lock_guard<std::mutex> lock(server_.mobEntitiesMutex_);
+            for (auto& mob : server_.mobEntities_) {
+                if (mob.entityId != ridingEntityId_ || mob.isDead || mob.mobType != 100) continue;
+                if (!mob.isTamed) break;  // Java: openGUI checks isTame()
+
+                // Close any existing window
+                if (openWindowId_ > 0) {
+                    closeOpenWindow(conn);
+                }
+
+                // Determine slot count — Java: EntityHorse.func_110225_cC()
+                // 2 base slots (saddle + armor), +15 if chested = 17
+                horseSlotCount_ = 2;
+                if (mob.isHorseChested && (mob.horseType == 1 || mob.horseType == 2)) {
+                    horseSlotCount_ = 17;
+                }
+                horseEntityId_ = mob.entityId;
+
+                openWindowId_ = nextWindowId_++;
+                if (nextWindowId_ > 100) nextWindowId_ = 1;
+                openWindowType_ = 11; // Horse inventory
+
+                // S2D OpenWindow — type 11 has extra int for horse entity ID
+                // Java: S2DPacketOpenWindow(windowId, 11, invName, invSize, useTitle, entityId)
+                {
+                    std::vector<uint8_t> pkt;
+                    writeVarInt(pkt, ClientboundPacket::OpenWindow);
+                    writeByte(pkt, static_cast<uint8_t>(openWindowId_));
+                    writeByte(pkt, 11); // EntityHorse window type
+                    writeString(pkt, "EntityHorse");
+                    writeByte(pkt, static_cast<uint8_t>(horseSlotCount_));
+                    writeByte(pkt, 1); // useProvidedTitle
+                    writeInt(pkt, mob.entityId); // Horse entity ID (extra field for type 11)
+                    conn.sendPacket(std::move(pkt));
+                }
+
+                // S30 WindowItems — horse slots + 36 player inventory
+                int32_t totalSlots = horseSlotCount_ + 36;
+                {
+                    std::vector<uint8_t> pkt;
+                    writeVarInt(pkt, ClientboundPacket::WindowItems);
+                    writeByte(pkt, static_cast<uint8_t>(openWindowId_));
+                    writeShort(pkt, static_cast<int16_t>(totalSlots));
+
+                    // Slot 0: saddle — Java: ContainerHorseInventory slot 0 (accepts saddle only)
+                    if (mob.isHorseSaddled) {
+                        writeShort(pkt, 329); // saddle item ID
+                        writeByte(pkt, 1);    // stack size
+                        writeShort(pkt, 0);   // damage
+                    } else {
+                        writeShort(pkt, -1);  // empty
+                    }
+
+                    // Slot 1: armor — Java: ContainerHorseInventory slot 1 (horse armor)
+                    if (mob.horseArmorIndex > 0) {
+                        // Java: armorValues = {0, iron(417), gold(418), diamond(419)}
+                        int16_t armorItemId = 0;
+                        if (mob.horseArmorIndex == 1) armorItemId = 417; // iron_horse_armor
+                        else if (mob.horseArmorIndex == 2) armorItemId = 418; // golden_horse_armor
+                        else if (mob.horseArmorIndex == 3) armorItemId = 419; // diamond_horse_armor
+                        writeShort(pkt, armorItemId);
+                        writeByte(pkt, 1);
+                        writeShort(pkt, 0);
+                    } else {
+                        writeShort(pkt, -1);
+                    }
+
+                    // Slots 2-16: chest inventory (if chested donkey/mule)
+                    if (horseSlotCount_ > 2) {
+                        for (int i = 2; i < horseSlotCount_; ++i) {
+                            writeItemStack(pkt, mob.horseChestInventory[i - 2]);
+                        }
+                    }
+
+                    // Player inventory: main (9-35) then hotbar (0-8)
+                    for (int i = 9; i < 36; ++i) {
+                        writeItemStack(pkt, inventory_.getStackInSlot(i));
+                    }
+                    for (int i = 0; i < 9; ++i) {
+                        writeItemStack(pkt, inventory_.getStackInSlot(i));
+                    }
+
+                    conn.sendPacket(std::move(pkt));
+                }
+
+                std::cout << "[Horse] " << playerName_
+                          << " opened inventory for horse " << mob.entityId
+                          << " (slots=" << horseSlotCount_ << ")\n";
+                break;
+            }
+            return;
+        }
         default:
-            // Other actions (bed, horse) not yet implemented
             return;
     }
 

@@ -997,6 +997,11 @@ private:
     int32_t anvilMaxCost_ = 0;                    // Java: maximumCost (XP levels)
     int32_t anvilMaterialCost_ = 0;               // Java: materialCost
 
+    // ─── Horse inventory ───
+    // Java: ContainerHorseInventory — saddle slot 0, armor slot 1, chest slots 2-16
+    int32_t horseEntityId_ = -1;                  // Entity ID of horse with open GUI
+    int32_t horseSlotCount_ = 2;                  // 2 (normal horse) or 17 (chested donkey/mule)
+
 public:
     // Accessors for server-side furnace ticking
     int32_t getOpenWindowType() const { return openWindowType_; }

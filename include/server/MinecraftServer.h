@@ -52,6 +52,7 @@ class PlayHandler;   // forward decl
  *   - 50ms tick interval (20 TPS)
  */
 class MinecraftServer {
+    friend class PlayHandler;  // Needs access to mob/connection internals for horse inventory, vehicle dismount
 public:
     static constexpr int PROTOCOL_VERSION = 5;
     static constexpr const char* GAME_VERSION = "1.7.10";
@@ -808,6 +809,13 @@ private:
         int32_t horseArmorIndex = 0;     // DW 22 int: 0=none, 1=iron(+5), 2=gold(+7), 3=diamond(+11)
         bool isHorseSaddled = false;     // DW 16 bit 4
         bool isHorseChested = false;     // DW 16 bit 8 (donkey/mule only)
+        float horseJumpPower = 0.0f;     // Java: EntityHorse.horseJumpPower (0.0-1.0, set by C0B action 6)
+        double horseMotionY = 0.0;       // Java: EntityHorse.motionY — vertical velocity for jump physics
+        double horseJumpStrength = 0.68; // Java: horseJumpStrength attribute — default ~0.7, range [0.4, 1.0]
+        bool horseOnGround = true;       // Java: EntityHorse.onGround — for jump gating
+        bool horseIsJumping = false;     // Java: EntityHorse.isHorseJumping() — mid-jump flag
+        int32_t gallopTime = 0;          // Java: EntityHorse.gallopTime — for gallop sound interval
+        std::optional<ItemStack> horseChestInventory[15]; // Java: AnimalChest slots 2-16 (chested donkey/mule)
         // Villager state — Java: EntityVillager DataWatcher(16)
         int32_t villagerProfession = 0;  // DW 16 int: 0=farmer, 1=librarian, 2=priest, 3=blacksmith, 4=butcher
     };

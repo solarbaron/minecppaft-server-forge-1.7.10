@@ -6837,6 +6837,190 @@ void MinecraftServer::tickMobs() {
             float speed = getMobMovementSpeed(mob.mobType);
             if (speed <= 0.0f) continue; // Non-moving mob
 
+            // ─── Horse riding AI — Java: EntityHorse.moveEntityWithHeading ───
+            // If horse (100) is saddled and ridden, use rider-controlled movement
+            if (mob.mobType == 100 && mob.isHorseSaddled && mob.riderEntityId >= 0) {
+                // Find rider's PlayHandler
+                PlayHandler* rider = nullptr;
+                Connection* riderConn = nullptr;
+                {
+                    std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
+                    for (auto& c : connections_) {
+                        if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
+                        auto handler = c->getHandler();
+                        auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                        if (ph && ph->getEntityId() == mob.riderEntityId) {
+                            rider = ph;
+                            riderConn = c.get();
+                            break;
+                        }
+                    }
+                }
+
+                if (rider) {
+                    // ─── Java: EntityHorse.moveEntityWithHeading (line 918-974) ─────
+                    // Yaw: horse instantly follows rider yaw (not gradual like pig)
+                    mob.yaw = rider->getPlayerYaw();
+                    mob.pitch = rider->getPlayerPitch() * 0.5f;
+
+                    // Java: strafe = rider.moveStrafing * 0.5f, forward = rider.moveForward
+                    float strafeInput = rider->getMoveStrafing() * 0.5f;
+                    float forwardInput = rider->getMoveForward();
+                    // Java: if (f2 <= 0.0f) f2 *= 0.25f — backward is quarter speed
+                    if (forwardInput <= 0.0f) {
+                        forwardInput *= 0.25f;
+                        mob.gallopTime = 0;
+                    }
+
+                    // ─── Jump physics — Java: EntityHorse.moveEntityWithHeading lines 939-953 ───
+                    if (mob.horseJumpPower > 0.0f && !mob.horseIsJumping && mob.horseOnGround) {
+                        // Java: this.motionY = this.getHorseJumpStrength() * (double)this.jumpPower
+                        mob.horseMotionY = mob.horseJumpStrength * static_cast<double>(mob.horseJumpPower);
+                        mob.horseIsJumping = true;
+                        mob.horseOnGround = false;
+
+                        // Java: horizontal boost when moving forward
+                        if (forwardInput > 0.0f) {
+                            float yawRad = mob.yaw / 180.0f * static_cast<float>(M_PI);
+                            // Java: this.motionX += (double)(-0.4f * f3 * this.jumpPower)
+                            mob.posX += static_cast<double>(-0.4f * std::sin(yawRad) * mob.horseJumpPower);
+                            mob.posZ += static_cast<double>(0.4f * std::cos(yawRad) * mob.horseJumpPower);
+                        }
+
+                        broadcastSound("mob.horse.jump", mob.posX, mob.posY, mob.posZ, 0.4f, 1.0f);
+                        mob.horseJumpPower = 0.0f;
+                    }
+                    // Java: if (this.onGround) { this.jumpPower = 0; this.setHorseJumping(false); }
+                    if (mob.horseOnGround) {
+                        mob.horseJumpPower = 0.0f;
+                        mob.horseIsJumping = false;
+                    }
+
+                    // ─── Movement — Java: super.moveEntityWithHeading(strafe, forward) ───
+                    // Java: this.setAIMoveSpeed(getEntityAttribute(movementSpeed).getAttributeValue())
+                    constexpr float HORSE_MOVE_SPEED = 0.225f; // Java: EntityHorse.applyEntityAttributes line 551
+                    float yawRad = mob.yaw / 180.0f * static_cast<float>(M_PI);
+                    float sinYaw = std::sin(yawRad);
+                    float cosYaw = std::cos(yawRad);
+
+                    // Forward + strafe combined movement direction
+                    double moveX = (-sinYaw * forwardInput - cosYaw * strafeInput) * HORSE_MOVE_SPEED;
+                    double moveZ = (cosYaw * forwardInput - sinYaw * strafeInput) * HORSE_MOVE_SPEED;
+
+                    double newX = mob.posX + moveX;
+                    double newZ = mob.posZ + moveZ;
+
+                    // ─── Gravity — Java: EntityLivingBase.moveEntityWithHeading ───
+                    // motionY -= 0.08; motionY *= 0.98
+                    if (!mob.horseOnGround) {
+                        mob.horseMotionY -= 0.08;
+                        mob.horseMotionY *= 0.98;
+                    }
+
+                    double newY = mob.posY + mob.horseMotionY;
+
+                    // ─── Ground/collision check (with 1-block step-up) ───
+                    if (!worlds_.empty()) {
+                        auto* wld = worlds_[0].get();
+                        int bx = static_cast<int>(std::floor(newX));
+                        int bz = static_cast<int>(std::floor(newZ));
+                        int startY = static_cast<int>(std::floor(newY));
+
+                        Block* feetBlock = wld->getBlock(bx, startY, bz);
+                        if (feetBlock != nullptr) {
+                            // Solid at feet level — try step up (step height = 1.0)
+                            Block* stepBlock = wld->getBlock(bx, startY + 1, bz);
+                            Block* headBlock = wld->getBlock(bx, startY + 2, bz);
+                            Block* aboveHead = wld->getBlock(bx, startY + 3, bz);
+                            if (stepBlock == nullptr && headBlock == nullptr && aboveHead == nullptr) {
+                                // Can step up 1 block
+                                mob.posX = newX;
+                                mob.posZ = newZ;
+                                mob.posY = static_cast<double>(startY + 1);
+                                mob.horseMotionY = 0.0;
+                                mob.horseOnGround = true;
+                            }
+                            // else: blocked, stay at current X/Z
+                        } else {
+                            // Air at feet — apply gravity, find ground
+                            int groundY = startY;
+                            bool foundGround = false;
+                            for (int y = startY - 1; y > 0; --y) {
+                                Block* b = wld->getBlock(bx, y, bz);
+                                if (b != nullptr) {
+                                    groundY = y + 1;
+                                    foundGround = true;
+                                    break;
+                                }
+                                if (y == 1) groundY = 1;
+                            }
+
+                            mob.posX = newX;
+                            mob.posZ = newZ;
+                            if (newY <= static_cast<double>(groundY)) {
+                                // Landed on ground
+                                mob.posY = static_cast<double>(groundY);
+                                mob.horseMotionY = 0.0;
+                                mob.horseOnGround = true;
+                            } else {
+                                // Still in air
+                                mob.posY = newY;
+                                mob.horseOnGround = false;
+                            }
+                        }
+                    }
+
+                    // ─── Gallop sounds — Java: EntityHorse.playStepSound ───
+                    bool isMoving = (std::abs(moveX) > 0.001 || std::abs(moveZ) > 0.001);
+                    if (isMoving && mob.horseOnGround) {
+                        ++mob.gallopTime;
+                        if (mob.gallopTime > 5 && mob.gallopTime % 3 == 0) {
+                            broadcastSound("mob.horse.gallop", mob.posX, mob.posY, mob.posZ, 0.15f, 1.0f);
+                            if (mob.horseType == 0 && (rand() % 10) == 0) {
+                                broadcastSound("mob.horse.breathe", mob.posX, mob.posY, mob.posZ, 0.6f, 1.0f);
+                            }
+                        } else if (mob.gallopTime <= 5) {
+                            broadcastSound("mob.horse.wood", mob.posX, mob.posY, mob.posZ, 0.15f, 1.0f);
+                        }
+                    } else {
+                        mob.gallopTime = 0;
+                    }
+
+                    // ─── Update rider position — Java: Entity.updateRiderPosition() ───
+                    // Java: EntityHorse.getMountedYOffset() returns this.height * 0.75
+                    // Horse height = 1.6, so offset ≈ 1.2; rider getYOffset() = -0.35
+                    // Net: posY + 1.2 - 0.35 ≈ posY + 0.85
+                    // In practice the vanilla client uses ~1.36 offset for smooth appearance
+                    rider->setPlayerPosition(mob.posX, mob.posY + 1.36, mob.posZ);
+
+                } else {
+                    // Rider disconnected — dismount
+                    mob.riderEntityId = -1;
+                    mob.horseJumpPower = 0.0f;
+                    mob.horseMotionY = 0.0;
+                    mob.horseIsJumping = false;
+                    mob.gallopTime = 0;
+                }
+
+                // Broadcast position update for ridden horse
+                {
+                    std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
+                    for (auto& c : connections_) {
+                        if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
+                        auto handler = c->getHandler();
+                        auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                        if (ph) {
+                            ph->sendEntityTeleport(*c, mob.entityId,
+                                mob.posX, mob.posY, mob.posZ, mob.yaw, mob.pitch);
+                        }
+                    }
+                }
+                mob.lastSentPosX = static_cast<int32_t>(std::floor(mob.posX * 32.0));
+                mob.lastSentPosY = static_cast<int32_t>(std::floor(mob.posY * 32.0));
+                mob.lastSentPosZ = static_cast<int32_t>(std::floor(mob.posZ * 32.0));
+                continue; // Skip normal wander AI for ridden horse
+            }
+
             // ─── Pig riding AI — Java: EntityAIControlledByPlayer ────────
             // If pig is ridden, use controlled movement instead of wander AI
             if (mob.mobType == 90 && mob.isSaddled && mob.riderEntityId >= 0) {
