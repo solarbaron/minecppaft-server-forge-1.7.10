@@ -68,7 +68,9 @@ public:
         // ── Step 3: End obsidian pillar decoration ──
         // Java: ChunkProviderEnd.populate → BiomeEndDecorator.genDecorations
         //   → WorldGenSpikes.generate with 1/5 chance
+        pendingCrystals_ = &chunk->pendingEnderCrystals;
         generateSpikes(chunkX, chunkZ, blocks.data(), endRNG);
+        pendingCrystals_ = nullptr;
 
         // ── Step 4: End spawn platform (5×5 obsidian at origin y=64) ──
         generateSpawnPlatform(chunkX, chunkZ, blocks.data());
@@ -117,6 +119,7 @@ public:
 
 private:
     int64_t seed_;
+    std::vector<Chunk::EnderCrystalInfo>* pendingCrystals_ = nullptr;  // Set during provideChunk for deferred crystal spawning
 
     // 5 noise generators matching Java ChunkProviderEnd constructor order
     std::unique_ptr<NoiseGeneratorOctaves> noiseGen1_;  // 16 octaves
@@ -227,7 +230,14 @@ private:
         }
 
         // Java: EntityEnderCrystal spawned at (n+0.5, n2+n8, n3+0.5)
-        // Entity spawning deferred — requires entity system integration
+        // Defer entity spawning to chunk load via pendingEnderCrystals
+        if (capY < 128 && pendingCrystals_) {
+            Chunk::EnderCrystalInfo info;
+            info.x = worldX + 0.5;
+            info.y = static_cast<double>(capY + 1);  // On top of bedrock cap
+            info.z = worldZ + 0.5;
+            pendingCrystals_->push_back(info);
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════

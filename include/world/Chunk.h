@@ -208,6 +208,14 @@ public:
     };
     std::vector<VillagerInfo> pendingVillagers;
 
+    // Ender Crystal placements from End world generation — consumed on chunk load
+    // to spawn crystal entities on top of obsidian pillars via spawnEnderCrystal().
+    // Java reference: WorldGenSpikes.generate() → new EntityEnderCrystal(world)
+    struct EnderCrystalInfo {
+        double x, y, z;  // World coordinates (center of pillar top + 0.5)
+    };
+    std::vector<EnderCrystalInfo> pendingEnderCrystals;
+
     Chunk() = default;
     Chunk(int x, int z) : xPosition(x), zPosition(z) {
         biomes.fill(0);

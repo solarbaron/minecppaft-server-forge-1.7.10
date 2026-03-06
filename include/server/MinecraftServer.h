@@ -1187,6 +1187,34 @@ public:
      */
     void interactItemFrame(PlayHandler& player, Connection& conn, int32_t entityId);
 
+    // ─── Ender Crystal entities ─────────────────────────────────────────
+    // Java reference: EntityEnderCrystal — End pillar decoration, dragon healing beam target
+    struct SpawnedEnderCrystal {
+        int32_t entityId = 0;
+        double posX = 0, posY = 0, posZ = 0;
+        int32_t health = 5;              // Java: EntityEnderCrystal.health = 5
+        int32_t innerRotation = 0;       // Java: EntityEnderCrystal.innerRotation (animation)
+        bool isDead = false;
+
+        static constexpr float EXPLOSION_POWER = 6.0f;  // Java: createExplosion(null, x, y, z, 6.0f, true)
+    };
+    mutable std::mutex enderCrystalEntitiesMutex_;
+    std::vector<SpawnedEnderCrystal> enderCrystalEntities_;
+    std::atomic<int32_t> nextEnderCrystalEntityId_{1400000};
+
+    /**
+     * Spawn an Ender Crystal entity and broadcast S0E SpawnObject type 51.
+     * Java reference: EntityEnderCrystal(World) + WorldGenSpikes.generate()
+     * @return entity ID of the spawned crystal
+     */
+    int32_t spawnEnderCrystal(double x, double y, double z);
+
+    /**
+     * Remove an Ender Crystal by ID — creates power 6.0 explosion.
+     * Java reference: EntityEnderCrystal.attackEntityFrom() → createExplosion()
+     */
+    void removeEnderCrystal(int32_t entityId);
+
     // ─── Primed TNT entities ────────────────────────────────────────────
     // Java reference: EntityTNTPrimed — fuse countdown with gravity physics
     struct SpawnedTNTPrimed {

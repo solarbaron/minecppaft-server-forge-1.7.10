@@ -167,6 +167,17 @@ bool MinecraftServer::init() {
     // Create End world (dimension 1)
     // Java reference: MinecraftServer creates WorldServer for The End
     auto end = std::make_unique<WorldServer>(1, "world_the_end");
+
+    // Set ender crystal registrar callback so freshly-generated End pillars
+    // spawn EntityEnderCrystal entities on top of obsidian spikes.
+    // Java reference: WorldGenSpikes.generate() → new EntityEnderCrystal()
+    end->setEnderCrystalRegistrar([this](Chunk& chunk) {
+        for (auto& pos : chunk.pendingEnderCrystals) {
+            spawnEnderCrystal(pos.x + 0.5, pos.y, pos.z + 0.5);
+        }
+        chunk.pendingEnderCrystals.clear();
+    });
+
     end->initialize();
     worlds_.push_back(std::move(end));
 
@@ -14636,6 +14647,107 @@ void MinecraftServer::interactItemFrame(PlayHandler& player, Connection& conn, i
         }
         return;
     }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Ender Crystal entity — Java: EntityEnderCrystal
+// ═══════════════════════════════════════════════════════════════════════════
+
+int32_t MinecraftServer::spawnEnderCrystal(double x, double y, double z) {
+    int32_t eid = nextEnderCrystalEntityId_.fetch_add(1, std::memory_order_relaxed);
+
+    SpawnedEnderCrystal crystal;
+    crystal.entityId = eid;
+    crystal.posX = x;
+    crystal.posY = y;
+    crystal.posZ = z;
+    crystal.health = 5;
+    crystal.innerRotation = rand() % 100000;  // Java: this.rand.nextInt(100000)
+    crystal.isDead = false;
+
+    {
+        std::lock_guard<std::mutex> lock(enderCrystalEntitiesMutex_);
+        enderCrystalEntities_.push_back(std::move(crystal));
+    }
+
+    // Broadcast S0E SpawnObject type 51 (Ender Crystal) to all clients
+    // Java: EntityTrackerEntry → S0EPacketSpawnObject(entity, 51)
+    // data=0 (no extra data), no initial velocity
+    {
+        std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
+        for (auto& conn : connections_) {
+            if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+            auto handler = conn->getHandler();
+            auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+            if (ph) ph->sendSpawnObject(*conn, eid, 51,
+                x, y, z,
+                0.0f, 0.0f, 0, 0.0, 0.0, 0.0);
+        }
+    }
+
+    std::cout << "[EnderCrystal] Spawned entity " << eid
+              << " at " << x << "," << y << "," << z << "\n";
+
+    return eid;
+}
+
+void MinecraftServer::removeEnderCrystal(int32_t entityId) {
+    double cx = 0, cy = 0, cz = 0;
+    bool found = false;
+
+    {
+        std::lock_guard<std::mutex> lock(enderCrystalEntitiesMutex_);
+        for (auto& crystal : enderCrystalEntities_) {
+            if (crystal.entityId != entityId || crystal.isDead) continue;
+            cx = crystal.posX;
+            cy = crystal.posY;
+            cz = crystal.posZ;
+            crystal.isDead = true;
+            found = true;
+            break;
+        }
+    }
+
+    if (!found) return;
+
+    // Broadcast S13 DestroyEntities
+    {
+        std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
+        std::vector<int32_t> dead = {entityId};
+        for (auto& conn : connections_) {
+            if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+            auto handler = conn->getHandler();
+            auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+            if (ph) ph->sendDestroyEntities(*conn, dead);
+        }
+    }
+
+    // Java: EntityEnderCrystal.attackEntityFrom() → createExplosion(null, x, y, z, 6.0f, true)
+    // Power 6.0, causesFire=true (2nd param), damagesTerrain=true
+    createExplosion(cx, cy, cz, SpawnedEnderCrystal::EXPLOSION_POWER, true, true);
+
+    // Break dragon healing link if this crystal was the dragon's healing target
+    {
+        std::lock_guard<std::mutex> mobLock(mobEntitiesMutex_);
+        for (auto& mob : mobEntities_) {
+            if (mob.isDead || mob.mobType != 63) continue;  // Ender Dragon
+            if (mob.dragonHealingCrystalId == entityId) {
+                mob.dragonHealingCrystalId = -1;
+            }
+        }
+    }
+
+    // Remove from vector
+    {
+        std::lock_guard<std::mutex> lock(enderCrystalEntitiesMutex_);
+        enderCrystalEntities_.erase(
+            std::remove_if(enderCrystalEntities_.begin(), enderCrystalEntities_.end(),
+                [](const SpawnedEnderCrystal& c) { return c.isDead; }),
+            enderCrystalEntities_.end());
+    }
+
+    std::cout << "[EnderCrystal] Entity " << entityId
+              << " destroyed at " << cx << "," << cy << "," << cz << "\n";
 }
 
 } // namespace mccpp

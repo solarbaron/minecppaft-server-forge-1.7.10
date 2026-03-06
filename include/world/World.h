@@ -370,6 +370,12 @@ public:
     void setVillagerRegistrar(VillagerRegistrar reg) { villagerRegistrar_ = std::move(reg); }
     const VillagerRegistrar& getVillagerRegistrar() const { return villagerRegistrar_; }
 
+    // ─── Ender Crystal Registrar callback ────────────────────────────
+    // Called after End chunk generation to spawn pending ender crystals on pillars.
+    using EnderCrystalRegistrar = std::function<void(Chunk& chunk)>;
+    void setEnderCrystalRegistrar(EnderCrystalRegistrar reg) { enderCrystalRegistrar_ = std::move(reg); }
+    const EnderCrystalRegistrar& getEnderCrystalRegistrar() const { return enderCrystalRegistrar_; }
+
 private:
     int dimensionId_;
     std::string worldName_;
@@ -403,6 +409,7 @@ private:
     SpawnerRegistrar spawnerRegistrar_;
     ChestRegistrar chestRegistrar_;
     VillagerRegistrar villagerRegistrar_;
+    EnderCrystalRegistrar enderCrystalRegistrar_;
 };
 
 } // namespace mccpp

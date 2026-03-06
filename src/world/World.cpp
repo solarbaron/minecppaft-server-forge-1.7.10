@@ -185,6 +185,13 @@ Chunk* ChunkProviderServer::loadChunk(int chunkX, int chunkZ) {
                     registrar(*chunk);
                 }
             }
+            // Spawn any ender crystals from End pillar generation
+            if (chunk && !chunk->pendingEnderCrystals.empty()) {
+                const auto& registrar = world_->getEnderCrystalRegistrar();
+                if (registrar) {
+                    registrar(*chunk);
+                }
+            }
         } else {
             // Empty chunk fallback
             chunk = std::make_unique<Chunk>(chunkX, chunkZ);
