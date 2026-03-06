@@ -410,6 +410,12 @@ void MinecraftServer::tick() {
     tickMobSpawners();
     tickScheduledBlocks();
 
+    // Beacon ticking — every 80 ticks (4 seconds)
+    // Java reference: TileEntityBeacon.updateEntity() — runs every 80 world ticks
+    if (ticks > 0 && ticks % 80 == 0) {
+        tickBeacons();
+    }
+
     // Tick world time — Java: WorldServer.tick()
     tickCounter_.fetch_add(1);
     if (!worlds_.empty()) {
@@ -1190,6 +1196,138 @@ MinecraftServer::HopperData& MinecraftServer::getOrCreateHopper(int64_t posKey) 
 MinecraftServer::SpawnerData& MinecraftServer::getOrCreateSpawner(int64_t posKey) {
     std::lock_guard<std::mutex> lock(spawnerMutex_);
     return spawnerStorage_[posKey];
+}
+
+MinecraftServer::BeaconData& MinecraftServer::getOrCreateBeacon(int64_t posKey) {
+    std::lock_guard<std::mutex> lock(beaconMutex_);
+    return beaconStorage_[posKey];
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Beacon tile entity ticking — Java: TileEntityBeacon.updateEntity()
+// Runs every 80 ticks: validates pyramid structure, applies potion effects
+// to nearby players within range.
+// ═══════════════════════════════════════════════════════════════════════════
+void MinecraftServer::tickBeacons() {
+    if (worlds_.empty()) return;
+    auto* world = worlds_[0].get();
+    if (!world) return;
+
+    // Helper: unpack a block position key
+    auto unpackBlockPos = [](int64_t packed, int32_t& x, int32_t& y, int32_t& z) {
+        x = static_cast<int32_t>(packed >> 40);
+        z = static_cast<int32_t>((packed >> 20) & 0xFFFFF);
+        y = static_cast<int32_t>(packed & 0xFFFFF);
+        if (z & 0x80000) z |= static_cast<int32_t>(0xFFF00000);
+        if (y & 0x80000) y |= static_cast<int32_t>(0xFFF00000);
+    };
+
+    // Snapshot beacon keys to avoid holding mutex during world lookups
+    std::vector<std::pair<int64_t, BeaconData>> beaconSnapshot;
+    {
+        std::lock_guard<std::mutex> lock(beaconMutex_);
+        for (auto& [key, data] : beaconStorage_) {
+            beaconSnapshot.push_back({key, data});
+        }
+    }
+
+    for (auto& [posKey, beacon] : beaconSnapshot) {
+        int32_t bx, by, bz;
+        unpackBlockPos(posKey, bx, by, bz);
+
+        // ─── Phase 1: Pyramid validation (Java: func_146003_y) ────────────
+        // Check sky visibility: block at y+1 must be air (transparent to sky)
+        int32_t blockAbove = getBlockIdInWorld(bx, by + 1, bz);
+        if (blockAbove != 0) {
+            beacon.isComplete = false;
+            beacon.levels = 0;
+        } else {
+            beacon.isComplete = true;
+            beacon.levels = 0;
+
+            // Scan up to 4 layers below for valid beacon base blocks
+            // Layer n requires a filled (2n+1)×(2n+1) square of valid blocks at y-n
+            // Valid blocks: 41=gold_block, 42=iron_block, 57=diamond_block, 133=emerald_block
+            for (int32_t layer = 1; layer <= 4; ++layer) {
+                int32_t layerY = by - layer;
+                if (layerY < 0) break;
+
+                bool layerComplete = true;
+                for (int32_t lx = bx - layer; lx <= bx + layer && layerComplete; ++lx) {
+                    for (int32_t lz = bz - layer; lz <= bz + layer; ++lz) {
+                        int32_t bid = getBlockIdInWorld(lx, layerY, lz);
+                        if (bid != 41 && bid != 42 && bid != 57 && bid != 133) {
+                            layerComplete = false;
+                            break;
+                        }
+                    }
+                }
+                if (!layerComplete) break;
+                beacon.levels = layer;
+            }
+
+            if (beacon.levels == 0) {
+                beacon.isComplete = false;
+            }
+        }
+
+        // Write validated state back to storage
+        {
+            std::lock_guard<std::mutex> lock(beaconMutex_);
+            auto it = beaconStorage_.find(posKey);
+            if (it != beaconStorage_.end()) {
+                it->second.isComplete = beacon.isComplete;
+                it->second.levels = beacon.levels;
+            }
+        }
+
+        // ─── Phase 2: Effect application (Java: func_146000_x) ────────────
+        if (!beacon.isComplete || beacon.levels <= 0 || beacon.primaryEffect <= 0) {
+            continue;
+        }
+
+        double range = beacon.levels * 10 + 10;
+
+        // Amplifier: level 1 if levels >= 4 and primary == secondary, else 0
+        int32_t amplifier = 0;
+        if (beacon.levels >= 4 && beacon.primaryEffect == beacon.secondaryEffect) {
+            amplifier = 1;
+        }
+
+        // Apply effects to all players within range
+        // Java: AxisAlignedBB.expand(d,d,d) from beacon pos, maxY = world height
+        std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
+        for (auto& conn : connections_) {
+            if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+            auto handler = conn->getHandler();
+            auto* play = dynamic_cast<PlayHandler*>(handler.get());
+            if (!play) continue;
+
+            double px = play->getPlayerX();
+            double py = play->getPlayerY();
+            double pz = play->getPlayerZ();
+
+            // Check if player is within beacon range (XZ + Y)
+            // Java: AABB expand(d,d,d) then maxY = world height
+            // So range check: XZ within ±range from beacon center, Y within range below and unlimited above
+            double dx = px - (bx + 0.5);
+            double dy = py - (by + 0.5);
+            double dz = pz - (bz + 0.5);
+
+            if (dx >= -range && dx <= range + 1 &&
+                dz >= -range && dz <= range + 1 &&
+                dy >= -range) {
+                // Apply primary effect — duration 180 ticks (9 seconds)
+                play->addPotionEffect(*conn, beacon.primaryEffect, 180, amplifier);
+
+                // Apply secondary effect if levels >= 4, secondary differs from primary, and secondary > 0
+                if (beacon.levels >= 4 && beacon.secondaryEffect > 0 &&
+                    beacon.primaryEffect != beacon.secondaryEffect) {
+                    play->addPotionEffect(*conn, beacon.secondaryEffect, 180, 0);
+                }
+            }
+        }
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2188,6 +2326,26 @@ void MinecraftServer::saveTileEntitiesForChunk(nbt::NBTTagCompound& levelTag,
         }
     }
 
+    // ── Beacons ──
+    {
+        std::lock_guard<std::mutex> lock(beaconMutex_);
+        for (auto& [posKey, beacon] : beaconStorage_) {
+            int32_t x, y, z;
+            unpackBlockPos(posKey, x, y, z);
+            if (!inChunk(x, z)) continue;
+
+            auto te = std::make_unique<nbt::NBTTagCompound>();
+            te->setString("id", "Beacon");
+            te->setInteger("x", x);
+            te->setInteger("y", y);
+            te->setInteger("z", z);
+            te->setInteger("Primary", beacon.primaryEffect);
+            te->setInteger("Secondary", beacon.secondaryEffect);
+            te->setInteger("Levels", beacon.levels);
+            tileEntities->appendTag(std::move(te));
+        }
+    }
+
     levelTag.setTag("TileEntities", std::move(tileEntities));
 }
 
@@ -2323,6 +2481,12 @@ void MinecraftServer::loadTileEntitiesFromChunk(const nbt::NBTTagCompound& level
             if (sd.maxNearby == 0) sd.maxNearby = 6;
             if (sd.activatingRange == 0) sd.activatingRange = 16;
             if (sd.spawnRange == 0) sd.spawnRange = 4;
+        } else if (id == "Beacon") {
+            std::lock_guard<std::mutex> lock(beaconMutex_);
+            auto& beacon = beaconStorage_[posKey];
+            beacon.primaryEffect = te->getInteger("Primary");
+            beacon.secondaryEffect = te->getInteger("Secondary");
+            beacon.levels = te->getInteger("Levels");
         }
     }
 }

@@ -1025,6 +1025,10 @@ private:
     void* furnaceData_ = nullptr;
     int64_t openFurnaceKey_ = 0;
 
+    // ─── Beacon container ───
+    // Java: ContainerBeacon — tracks position of open beacon GUI
+    int64_t openBeaconKey_ = 0;
+
     // ─── Enchanting table ───
     // Java: ContainerEnchantment fields
     int32_t enchantTableX_ = 0, enchantTableY_ = 0, enchantTableZ_ = 0;
@@ -1057,6 +1061,7 @@ public:
     int32_t getOpenWindowType() const { return openWindowType_; }
     int32_t getOpenWindowId() const { return openWindowId_; }
     int64_t getOpenFurnaceKey() const { return openFurnaceKey_; }
+    int64_t getOpenBeaconKey() const { return openBeaconKey_; }
     void* getRawFurnaceData() const { return furnaceData_; }
 private:
 

@@ -236,6 +236,24 @@ public:
     mutable std::mutex brewingStandMutex_;
 
     /**
+     * Beacon tile entity storage.
+     * Java reference: TileEntityBeacon
+     * Ticks every 80 ticks: validates pyramid (iron/gold/diamond/emerald blocks,
+     * levels 1-4), applies primary/secondary potion effects to nearby players.
+     */
+    struct BeaconData {
+        int32_t levels = 0;          // Pyramid level 0-4 (validated each tick)
+        int32_t primaryEffect = 0;   // Potion effect ID (1=Speed, 3=Haste, etc.)
+        int32_t secondaryEffect = 0; // Potion effect ID (only at level 4)
+        bool isComplete = false;     // Pyramid fully formed + can see sky
+        std::optional<ItemStack> paymentSlot;  // item in payment slot (iron/gold/diamond/emerald ingot)
+    };
+    BeaconData& getOrCreateBeacon(int64_t posKey);
+    void tickBeacons();
+    std::map<int64_t, BeaconData> beaconStorage_;
+    mutable std::mutex beaconMutex_;
+
+    /**
      * Dispenser/Dropper storage (9 slots each).
      * Java reference: TileEntityDispenser
      */

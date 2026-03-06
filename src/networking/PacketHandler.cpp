@@ -645,6 +645,49 @@ void PlayHandler::handlePacket(int32_t packetId,
                     updateMerchantOutput(conn);
                 }
             }
+            // MC|Beacon — beacon effect selection
+            // Java: NetHandlerPlayServer.processVanilla250Packet — MC|Beacon
+            // Payload: Int primaryEffectId, Int secondaryEffectId
+            if (channel == "MC|Beacon" && openWindowType_ == 7) {
+                if (dataLen >= 8 && pr.remaining() >= 8) {
+                    int32_t primaryId = pr.readInt();
+                    int32_t secondaryId = pr.readInt();
+                    int64_t beaconKey = openBeaconKey_;
+                    if (beaconKey != 0) {
+                        auto& beacon = server_.getOrCreateBeacon(beaconKey);
+                        // Java: ContainerBeacon — validate payment slot has valid item
+                        // Valid payment items: iron ingot (265), gold ingot (266),
+                        //                     diamond (264), emerald (388)
+                        if (beacon.paymentSlot) {
+                            int32_t payId = beacon.paymentSlot->getItemId();
+                            if (payId == 265 || payId == 266 || payId == 264 || payId == 388) {
+                                // Consume payment — Java: slot.decrStackSize(1)
+                                int32_t sz = beacon.paymentSlot->getStackSize() - 1;
+                                if (sz <= 0) beacon.paymentSlot = std::nullopt;
+                                else beacon.paymentSlot->setStackSize(sz);
+                                // Set effects — Java: TileEntityBeacon.setPrimaryEffect/setSecondaryEffect
+                                beacon.primaryEffect = primaryId;
+                                beacon.secondaryEffect = secondaryId;
+                                // Update beacon GUI properties for this player
+                                for (int i = 0; i < 3; ++i) {
+                                    std::vector<uint8_t> propPkt;
+                                    writeVarInt(propPkt, ClientboundPacket::WindowProperty);
+                                    writeByte(propPkt, static_cast<uint8_t>(openWindowId_));
+                                    writeShort(propPkt, static_cast<int16_t>(i));
+                                    int16_t val = 0;
+                                    if (i == 0) val = static_cast<int16_t>(beacon.levels);
+                                    else if (i == 1) val = static_cast<int16_t>(beacon.primaryEffect);
+                                    else if (i == 2) val = static_cast<int16_t>(beacon.secondaryEffect);
+                                    writeShort(propPkt, val);
+                                    conn.sendPacket(std::move(propPkt));
+                                }
+                                // Send updated window contents to sync payment slot
+                                sendWindowItems(conn);
+                            }
+                        }
+                    }
+                }
+            }
             // Silently consume other channels (MC|Brand, etc.)
             break;
         }
@@ -5285,6 +5328,7 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
     if (clickedBlockId == 138 && !isSneaking_) {
         openWindowId_ = 15;
         openWindowType_ = 7; // Beacon
+        openBeaconKey_ = MinecraftServer::packBlockPos(blockX, blockY, blockZ);
 
         {
             std::vector<uint8_t> pkt;
@@ -5301,12 +5345,17 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
         // Property 0 = power level (0-4)
         // Property 1 = primary effect
         // Property 2 = secondary effect
+        auto& beacon = server_.getOrCreateBeacon(openBeaconKey_);
         for (int i = 0; i < 3; ++i) {
             std::vector<uint8_t> propPkt;
             writeVarInt(propPkt, ClientboundPacket::WindowProperty);
             writeByte(propPkt, static_cast<uint8_t>(openWindowId_));
             writeShort(propPkt, static_cast<int16_t>(i));
-            writeShort(propPkt, 0); // Default: no power/effects
+            int16_t val = 0;
+            if (i == 0) val = static_cast<int16_t>(beacon.levels);
+            else if (i == 1) val = static_cast<int16_t>(beacon.primaryEffect);
+            else if (i == 2) val = static_cast<int16_t>(beacon.secondaryEffect);
+            writeShort(propPkt, val);
             conn.sendPacket(std::move(propPkt));
         }
 
