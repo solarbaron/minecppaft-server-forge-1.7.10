@@ -857,6 +857,8 @@ private:
         double witherMotionX = 0, witherMotionY = 0, witherMotionZ = 0;
         int32_t witherTicksExisted = 0;             // Java: ticksExisted counter
         bool isWitherArmored() const { return health <= 150.0f; } // <= maxHealth/2
+        // ─── Snow Golem state — Java: EntitySnowman ───
+        int32_t snowGolemAttackCooldown = 0;        // Java: EntityAIArrowAttack attackTime (20 tick interval)
     };
     mutable std::mutex mobEntitiesMutex_;
     std::vector<SpawnedMob> mobEntities_;
@@ -872,6 +874,8 @@ private:
     void tickDragon(SpawnedMob& dragon, int64_t currentTick);
     /** Tick a single Wither Boss — Java: EntityWither.onLivingUpdate() + updateAITasks() */
     void tickWither(SpawnedMob& wither, int64_t currentTick);
+    /** Tick a single Snow Golem — Java: EntitySnowman.onLivingUpdate() + ranged attack AI */
+    void tickSnowGolem(SpawnedMob& golem, int64_t currentTick);
 
 public:
     // ─── Arrow projectile entities ──────────────────────────────────

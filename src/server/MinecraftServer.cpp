@@ -2821,6 +2821,7 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
                     case 91: hurtSound = "mob.sheep.say"; break;
                     case 93: hurtSound = "mob.chicken.hurt"; break;
                     case 95: hurtSound = "mob.wolf.hurt"; break;
+                    case 97: break; // Snow Golem — no hurt sound in Java
                     case 98: hurtSound = "mob.cat.hitt"; break;  // Ocelot/Cat
                     case 99: hurtSound = "mob.irongolem.hit"; break;
                     case 100: { // Horse — Java: EntityHorse.getHurtSound()
@@ -2968,6 +2969,7 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
                         case 91: deathSound = "mob.sheep.say"; break;
                         case 93: deathSound = "mob.chicken.hurt"; break;
                         case 95: deathSound = "mob.wolf.death"; break;
+                        case 97: break; // Snow Golem — no death sound in Java
                         case 98: deathSound = "mob.cat.hitt"; break;  // Ocelot/Cat
                         case 99: deathSound = "mob.irongolem.death"; break;
                         case 100: { // Horse — Java: EntityHorse.getDeathSound()
@@ -3026,6 +3028,7 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
                         case 91: return 1 + (rand() % 3); // Sheep
                         case 93: return 1 + (rand() % 3); // Chicken
                         case 94: return 1 + (rand() % 3); // Squid
+                        case 97: return 0;   // Snow Golem — no XP in Java (golem)
                         case 99: return 0;   // Iron Golem (gives no XP in Java)
                         default: return 5;   // Default
                     }
@@ -3133,6 +3136,9 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
                             break;
                         case 94: // Squid → ink sac (351 damage 0)
                             dropId = 351; baseCount = 1 + (rand() % 3); break;
+                        case 97: // Snow Golem → snowball (332) × 0-15
+                            dropId = 332; baseCount = rand() % 16;
+                            break;
                         case 99: // Iron Golem → iron ingots (265) + rose (38)
                             dropId = 265; baseCount = 3 + (rand() % 3);
                             spawnItemDrop(mob.posX, mob.posY, mob.posZ, 38, 0, 1 + (rand() % 2));
@@ -6163,6 +6169,7 @@ static float getMobMaxHealth(uint8_t mobType) {
         case 94: return 10.0f;  // Squid
         case 95: return 8.0f;   // Wolf
         case 96: return 6.0f;   // Mooshroom
+        case 97: return 4.0f;   // Snow Golem — Java: EntitySnowman.applyEntityAttributes() maxHealth=4
         case 98: return 10.0f;  // Ocelot — Java: EntityOcelot.applyEntityAttributes() maxHealth=10
         case 99: return 100.0f; // Iron Golem
         case 100: return 26.0f; // Horse (base, varies)
@@ -6193,6 +6200,7 @@ static float getMobMovementSpeed(uint8_t mobType) {
         case 92: return 0.10f;  // Cow (wander speed)
         case 93: return 0.125f; // Chicken (wander speed)
         case 95: return 0.30f;  // Wolf — Java: EntityWolf.movementSpeed
+        case 97: return 0.20f;  // Snow Golem — Java: EntitySnowman.applyEntityAttributes() movementSpeed=0.2
         case 98: return 0.30f;  // Ocelot — Java: EntityOcelot.applyEntityAttributes() movementSpeed=0.3
         case 99: return 0.20f;  // Iron Golem (wander speed)
         case 100: return 0.225f; // Horse — Java: EntityHorse.applyEntityAttributes() movementSpeed=0.225
@@ -6882,6 +6890,17 @@ void MinecraftServer::tickMobs() {
             if (mob.mobType == 64) {
                 tickWither(mob, currentTick);
                 continue;
+            }
+
+            // ─── Snow Golem tick — Java: EntitySnowman.onLivingUpdate() ───
+            // Snow trail, heat/water damage, ranged snowball attacks
+            // Does NOT continue — falls through to passive wander AI for movement
+            if (mob.mobType == 97) {
+                tickSnowGolem(mob, currentTick);
+                if (mob.isDead) {
+                    deadIds.push_back(mob.entityId);
+                    continue;
+                }
             }
 
             // Check distance to nearest player
@@ -12801,6 +12820,187 @@ void MinecraftServer::tickWither(SpawnedMob& wither, int64_t currentTick) {
     if ((rand() % 200) == 0) {
         broadcastSound("mob.wither.idle", wither.posX, wither.posY, wither.posZ,
             1.0f, 0.8f + ((float)(rand() % 40) / 100.0f));
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Snow Golem AI — Java: EntitySnowman.onLivingUpdate() + attackEntityWithRangedAttack()
+// ═══════════════════════════════════════════════════════════════════════════
+void MinecraftServer::tickSnowGolem(SpawnedMob& golem, int64_t currentTick) {
+    if (worlds_.empty()) return;
+    auto* world = worlds_[0].get();
+
+    int bx = static_cast<int>(std::floor(golem.posX));
+    int by = static_cast<int>(std::floor(golem.posY));
+    int bz = static_cast<int>(std::floor(golem.posZ));
+
+    // ─── Water damage — Java: if (this.isWet()) attackEntityFrom(DamageSource.drown, 1.0f) ───
+    // Check if feet block is water (8 or 9) or if it's raining and exposed to sky
+    {
+        int32_t feetBlockId = getBlockIdInWorld(bx, by, bz);
+        bool isWet = (feetBlockId == 8 || feetBlockId == 9);
+        // Also check for rain exposure — Java: isWet() includes rain
+        if (!isWet && isRaining()) {
+            // Check if exposed to sky (no solid block above)
+            int32_t aboveId = getBlockIdInWorld(bx, by + 2, bz);
+            if (aboveId == 0) isWet = true;
+        }
+        if (isWet) {
+            golem.health -= 1.0f;
+            broadcastEntityEvent(golem.entityId, 2); // hurt animation
+            if (golem.health <= 0.0f) {
+                golem.isDead = true;
+                // Drop snowballs — Java: dropFewItems → rand.nextInt(16) snowballs
+                int dropCount = rand() % 16;
+                for (int i = 0; i < dropCount; ++i) {
+                    spawnItemDrop(golem.posX, golem.posY, golem.posZ, 332, 0, 1); // snowball
+                }
+                broadcastSound("mob.snowman.death", golem.posX, golem.posY, golem.posZ, 1.0f, 1.0f);
+                return;
+            }
+        }
+    }
+
+    // ─── Heat damage — Java: getBiomeGenForCoords().getFloatTemperature() > 1.0f ───
+    // No biome system yet; approximate by checking ground material
+    // Hot biomes: desert(sand=12), mesa(hardened clay=172, stained clay=159), nether(netherrack=87)
+    // Also consider savanna-like (red sand meta, etc.)
+    {
+        int32_t groundId = getBlockIdInWorld(bx, by - 1, bz);
+        bool isHot = false;
+        // Desert: sand (12)
+        if (groundId == 12) isHot = true;
+        // Mesa: hardened clay (172) or stained clay (159)
+        if (groundId == 172 || groundId == 159) isHot = true;
+        // Nether: netherrack (87) or soul sand (88) or nether brick (112)
+        if (groundId == 87 || groundId == 88 || groundId == 112) isHot = true;
+        // Jungle: same as warm — podzol (3 meta 2), but we just check general temp
+        // Mushroom island: mycelium (110) is temperate, skip
+
+        if (isHot) {
+            golem.health -= 1.0f;
+            golem.isOnFire = true;
+            broadcastEntityEvent(golem.entityId, 2); // hurt animation
+            if (golem.health <= 0.0f) {
+                golem.isDead = true;
+                int dropCount = rand() % 16;
+                for (int i = 0; i < dropCount; ++i) {
+                    spawnItemDrop(golem.posX, golem.posY, golem.posZ, 332, 0, 1);
+                }
+                broadcastSound("mob.snowman.death", golem.posX, golem.posY, golem.posZ, 1.0f, 1.0f);
+                return;
+            }
+        } else {
+            golem.isOnFire = false;
+        }
+    }
+
+    // ─── Snow trail — Java: EntitySnowman.onLivingUpdate() lines 65-69 ───
+    // Place snow layers at 4 corner positions around the golem
+    // Java: for (int i = 0; i < 4; ++i) { check (x ± 0.25, z ± 0.25) }
+    // Only in cold biomes (temperature < 0.8f) — approximate: not hot ground
+    {
+        int32_t groundId = getBlockIdInWorld(bx, by - 1, bz);
+        bool isCold = !(groundId == 12 || groundId == 172 || groundId == 159 ||
+                        groundId == 87 || groundId == 88 || groundId == 112);
+
+        if (isCold) {
+            for (int i = 0; i < 4; ++i) {
+                int sx = static_cast<int>(std::floor(golem.posX + static_cast<double>((i % 2 * 2 - 1)) * 0.25));
+                int sy = static_cast<int>(std::floor(golem.posY));
+                int sz = static_cast<int>(std::floor(golem.posZ + static_cast<double>((i / 2 % 2 * 2 - 1)) * 0.25));
+
+                // Java: Material.air check + temperature < 0.8 + canPlaceBlockAt
+                int32_t blockHere = getBlockIdInWorld(sx, sy, sz);
+                int32_t blockBelow = getBlockIdInWorld(sx, sy - 1, sz);
+
+                // Only place snow layer if:
+                // - Current position is air (0)
+                // - Block below is solid (not air, water, lava, snow layer)
+                if (blockHere == 0 && blockBelow != 0 && blockBelow != 8 && blockBelow != 9 &&
+                    blockBelow != 10 && blockBelow != 11 && blockBelow != 78) {
+                    setBlockInWorld(sx, sy, sz, 78, 0); // snow_layer = 78
+                }
+            }
+        }
+    }
+
+    // ─── Ranged snowball attack — Java: EntityAIArrowAttack + attackEntityWithRangedAttack() ───
+    // Attack cooldown: 20 ticks (Java: EntityAIArrowAttack(this, 1.25, 20, 10.0f))
+    // Target: nearest hostile mob within 10 blocks
+    if (golem.snowGolemAttackCooldown > 0) {
+        --golem.snowGolemAttackCooldown;
+    }
+
+    if (golem.snowGolemAttackCooldown <= 0) {
+        // Find nearest hostile mob within 10 blocks (100 distSq)
+        // Java: EntityAINearestAttackableTarget(this, EntityLiving.class, 0, true, false, IMob.mobSelector)
+        SpawnedMob* target = nullptr;
+        double nearestDistSq = 100.0;  // 10 blocks squared
+
+        for (auto& other : mobEntities_) {
+            if (other.entityId == golem.entityId || other.isDead) continue;
+            // Only target hostile mobs — Java: IMob.mobSelector
+            // Hostile mob types: 50=creeper, 51=skeleton, 52=spider, 54=zombie, 55=slime,
+            // 56=ghast, 57=zombie pigman, 58=enderman, 59=cave spider, 60=silverfish,
+            // 61=blaze, 62=magma cube, 66=witch
+            bool isHostile = false;
+            switch (other.mobType) {
+                case 50: case 51: case 52: case 54: case 55: case 56:
+                case 57: case 58: case 59: case 60: case 61: case 62: case 66:
+                    isHostile = true;
+                    break;
+            }
+            if (!isHostile) continue;
+
+            double dx = other.posX - golem.posX;
+            double dz = other.posZ - golem.posZ;
+            double dy = other.posY - golem.posY;
+            double distSq = dx * dx + dy * dy + dz * dz;
+            if (distSq < nearestDistSq) {
+                nearestDistSq = distSq;
+                target = &other;
+            }
+        }
+
+        if (target) {
+            // Java: attackEntityWithRangedAttack(target, f)
+            // EntitySnowball thrown at target with heading calculation
+            double dx = target->posX - golem.posX;
+            double dy = target->posY + 1.0 - 1.1 - (golem.posY + 1.0); // Java: target.getEyeHeight() - 1.1f - snowball.posY
+            double dz = target->posZ - golem.posZ;
+            // Java: float f2 = MathHelper.sqrt_double(dx*dx + dz*dz) * 0.2f
+            double horizDist = std::sqrt(dx * dx + dz * dz);
+            dy += horizDist * 0.2; // arc compensation
+
+            // Spawn snowball throwable — Java: setThrowableHeading(dx, dy, dz, 1.6f, 12.0f)
+            // Normalize and scale by speed (1.6) with inaccuracy (12.0)
+            double len = std::sqrt(dx * dx + dy * dy + dz * dz);
+            if (len > 0.0) {
+                dx /= len;
+                dy /= len;
+                dz /= len;
+            }
+            // Add inaccuracy — Java: 12.0f / 180 * 0.0175... ≈ random scatter
+            double scatter = 12.0 / 180.0 * M_PI;
+            dx += ((double)(rand() % 100) / 100.0 - 0.5) * scatter * 0.007499999832361937;
+            dy += ((double)(rand() % 100) / 100.0 - 0.5) * scatter * 0.007499999832361937;
+            dz += ((double)(rand() % 100) / 100.0 - 0.5) * scatter * 0.007499999832361937;
+            double speed = 1.6;
+            dx *= speed;
+            dy *= speed;
+            dz *= speed;
+
+            spawnThrowable(ThrowableType::Snowball,
+                golem.posX, golem.posY + 1.7, golem.posZ,
+                dx, dy, dz, golem.entityId, "");
+
+            // Java: this.playSound("random.bow", 1.0f, 1.0f / (getRNG().nextFloat() * 0.4f + 0.8f))
+            float pitch = 1.0f / (((float)(rand() % 100) / 100.0f) * 0.4f + 0.8f);
+            broadcastSound("random.bow", golem.posX, golem.posY, golem.posZ, 1.0f, pitch);
+
+            golem.snowGolemAttackCooldown = 20; // 20 ticks = 1 second
+        }
     }
 }
 

@@ -5783,6 +5783,62 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
     // Broadcast block change to all players
     server_.broadcastBlockChange(placeX, placeY, placeZ, placeBlockId, meta);
 
+    // ─── Golem building detection — Java: BlockPumpkin.onBlockAdded ───
+    // When pumpkin (86) or jack-o-lantern (91) is placed, check for golem patterns
+    if (placeBlockId == 86 || placeBlockId == 91) {
+        // Snow Golem: pumpkin + 2 snow blocks (80) below
+        int32_t b1 = server_.getBlockIdInWorld(placeX, placeY - 1, placeZ);
+        int32_t b2 = server_.getBlockIdInWorld(placeX, placeY - 2, placeZ);
+        if (b1 == 80 && b2 == 80) {
+            // Clear the 3 structure blocks
+            server_.setBlockInWorld(placeX, placeY,     placeZ, 0, 0);
+            server_.setBlockInWorld(placeX, placeY - 1, placeZ, 0, 0);
+            server_.setBlockInWorld(placeX, placeY - 2, placeZ, 0, 0);
+            // Spawn Snow Golem at center of structure — Java: (x+0.5, y-1.95, z+0.5)
+            server_.summonMob(97,
+                static_cast<double>(placeX) + 0.5,
+                static_cast<double>(placeY) - 1.95,
+                static_cast<double>(placeZ) + 0.5);
+            std::cout << "[Golem] Snow Golem built at " << placeX << "," << (placeY - 1) << "," << placeZ << "\n";
+            return; // Structure consumed, skip remaining placement logic
+        }
+
+        // Iron Golem: pumpkin + T-shape of 4 iron blocks (42) below
+        // Body: 2 iron blocks vertically (y-1 and y-2), Arms: 2 iron blocks horizontally at y-1
+        int32_t bodyTop = server_.getBlockIdInWorld(placeX, placeY - 1, placeZ);
+        int32_t bodyBot = server_.getBlockIdInWorld(placeX, placeY - 2, placeZ);
+        if (bodyTop == 42 && bodyBot == 42) {
+            // Check X-axis arms (east-west)
+            bool xArms = server_.getBlockIdInWorld(placeX - 1, placeY - 1, placeZ) == 42 &&
+                         server_.getBlockIdInWorld(placeX + 1, placeY - 1, placeZ) == 42;
+            // Check Z-axis arms (north-south)
+            bool zArms = server_.getBlockIdInWorld(placeX, placeY - 1, placeZ - 1) == 42 &&
+                         server_.getBlockIdInWorld(placeX, placeY - 1, placeZ + 1) == 42;
+
+            if (xArms || zArms) {
+                // Clear head + body
+                server_.setBlockInWorld(placeX, placeY,     placeZ, 0, 0);
+                server_.setBlockInWorld(placeX, placeY - 1, placeZ, 0, 0);
+                server_.setBlockInWorld(placeX, placeY - 2, placeZ, 0, 0);
+                // Clear arms
+                if (xArms) {
+                    server_.setBlockInWorld(placeX - 1, placeY - 1, placeZ, 0, 0);
+                    server_.setBlockInWorld(placeX + 1, placeY - 1, placeZ, 0, 0);
+                } else {
+                    server_.setBlockInWorld(placeX, placeY - 1, placeZ - 1, 0, 0);
+                    server_.setBlockInWorld(placeX, placeY - 1, placeZ + 1, 0, 0);
+                }
+                // Spawn Iron Golem — Java: (x+0.5, y-1.95, z+0.5)
+                server_.summonMob(99,
+                    static_cast<double>(placeX) + 0.5,
+                    static_cast<double>(placeY) - 1.95,
+                    static_cast<double>(placeZ) + 0.5);
+                std::cout << "[Golem] Iron Golem built at " << placeX << "," << (placeY - 1) << "," << placeZ << "\n";
+                return; // Structure consumed
+            }
+        }
+    }
+
     // ─── Redstone signal propagation on placement ─────────────────────
     // Java: World.notifyBlocksOfNeighborChange after block placement
     // Notify when placing any redstone component, or any block near existing wire
