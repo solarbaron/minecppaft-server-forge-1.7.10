@@ -416,6 +416,7 @@ void MinecraftServer::tick() {
     tickMinecarts();
     tickLightning();
     tickBoats();
+    tickTNTPrimed();
     tickXPOrbs();
 
     // Natural mob spawning every 200 ticks (10 seconds)
@@ -1738,20 +1739,18 @@ void MinecraftServer::createExplosion(double x, double y, double z, float power,
             if (blockId == 0) continue; // air
 
             // TNT chain reaction — Java: BlockTNT.onBlockDestroyedByExplosion
-            // Spawn EntityTNTPrimed with shortened fuse; simplified: instant chain explosion
+            // Spawn EntityTNTPrimed with shortened fuse
             if (blockId == 46) {
                 worlds_[0]->setBlock(bx, by, bz, nullptr);
                 broadcastBlockChange(bx, by, bz, 0, 0);
                 // Java: fuse = rand.nextInt(fuse/4) + fuse/8 ≈ 10-30 ticks
-                // Simplified: immediate chain detonation with primed sound
-                broadcastSound("game.tnt.primed",
-                    static_cast<double>(bx) + 0.5, static_cast<double>(by) + 0.5,
-                    static_cast<double>(bz) + 0.5, 1.0f, 1.0f);
-                createExplosion(
+                static thread_local std::mt19937 tntRng(std::random_device{}());
+                int32_t chainFuse = std::uniform_int_distribution<int32_t>(10, 30)(tntRng);
+                spawnTNTPrimed(
                     static_cast<double>(bx) + 0.5,
                     static_cast<double>(by) + 0.5,
                     static_cast<double>(bz) + 0.5,
-                    4.0f, true, true);
+                    chainFuse);
                 continue;
             }
 
@@ -4930,15 +4929,10 @@ void MinecraftServer::redstoneNotifyNeighbors(int32_t x, int32_t y, int32_t z) {
         if (powered) {
             // Java: onBlockDestroyedByPlayer(world, x,y,z, 1) → func_150114_a → spawn EntityTNTPrimed
             setBlockInWorld(tx, ty, tz, 0, 0); // Remove TNT block
-            broadcastSound("game.tnt.primed",
-                static_cast<double>(tx) + 0.5, static_cast<double>(ty) + 0.5,
-                static_cast<double>(tz) + 0.5, 1.0f, 1.0f);
-            // Schedule explosion (80 tick fuse → instant for our simplified server)
-            createExplosion(
+            spawnTNTPrimed(
                 static_cast<double>(tx) + 0.5,
                 static_cast<double>(ty) + 0.5,
-                static_cast<double>(tz) + 0.5,
-                4.0f, true, true);
+                static_cast<double>(tz) + 0.5);
         }
     };
 
@@ -5470,13 +5464,11 @@ void MinecraftServer::dispenserFire(int32_t x, int32_t y, int32_t z, int32_t blo
                         static_cast<double>(lz) + 0.5, 1.0f, 1.0f);
                     return; // Don't consume  
                 }
-                case 46: { // TNT — ignite TNT
-                    // Place and immediately ignite at target
-                    createExplosion(
+                case 46: { // TNT — ignite TNT via EntityTNTPrimed
+                    spawnTNTPrimed(
                         static_cast<double>(x + dx) + 0.5,
                         static_cast<double>(y + dy) + 0.5,
-                        static_cast<double>(z + dz) + 0.5,
-                        4.0f, true, true);
+                        static_cast<double>(z + dz) + 0.5);
                     break;
                 }
                 case 383: { // Spawn Egg — spawn mob of type from damage value
@@ -5494,13 +5486,12 @@ void MinecraftServer::dispenserFire(int32_t x, int32_t y, int32_t z, int32_t blo
                     if (targetId == 0) {
                         setBlockInWorld(fx, fy, fz, 51, 0); // fire block
                     } else if (targetId == 46) {
-                        // TNT ignition
+                        // TNT ignition via EntityTNTPrimed
                         setBlockInWorld(fx, fy, fz, 0, 0);
-                        createExplosion(
+                        spawnTNTPrimed(
                             static_cast<double>(fx) + 0.5,
                             static_cast<double>(fy) + 0.5,
-                            static_cast<double>(fz) + 0.5,
-                            4.0f, true, true);
+                            static_cast<double>(fz) + 0.5);
                     }
                     broadcastSound("fire.ignite",
                         static_cast<double>(x) + 0.5, static_cast<double>(y) + 0.5,
@@ -12300,6 +12291,210 @@ void MinecraftServer::tickBoats() {
         std::remove_if(boatEntities_.begin(), boatEntities_.end(),
             [](const SpawnedBoat& b) { return b.isDead; }),
         boatEntities_.end());
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Primed TNT entity spawning — Java: EntityTNTPrimed(world, x, y, z, igniter)
+// Spawns a visible TNT entity with 80-tick fuse (4 seconds), initial upward
+// velocity, and random horizontal motion. Broadcasts S0E SpawnObject type 50.
+// ═══════════════════════════════════════════════════════════════════════════
+
+int32_t MinecraftServer::spawnTNTPrimed(double x, double y, double z, int32_t fuseOverride) {
+    int32_t eid = nextTNTPrimedEntityId_.fetch_add(1);
+    static thread_local std::mt19937 rng(std::random_device{}());
+
+    SpawnedTNTPrimed tnt;
+    tnt.entityId = eid;
+    tnt.posX = x;
+    tnt.posY = y;
+    tnt.posZ = z;
+    // Java: float f = (float)(Math.random() * PI * 2.0);
+    //       motionX = -sin(f) * 0.02;  motionY = 0.2;  motionZ = -cos(f) * 0.02;
+    float angle = std::uniform_real_distribution<float>(0.0f, 6.2831853f)(rng);
+    tnt.motionX = -std::sin(angle) * 0.02;
+    tnt.motionY = 0.2;
+    tnt.motionZ = -std::cos(angle) * 0.02;
+    tnt.fuse = fuseOverride;
+    tnt.isDead = false;
+    tnt.onGround = false;
+    tnt.spawnTick = tickCounter_.load();
+    tnt.lastSentPosX = static_cast<int32_t>(x * 32.0);
+    tnt.lastSentPosY = static_cast<int32_t>(y * 32.0);
+    tnt.lastSentPosZ = static_cast<int32_t>(z * 32.0);
+
+    {
+        std::lock_guard<std::mutex> lock(tntPrimedEntitiesMutex_);
+        tntPrimedEntities_.push_back(std::move(tnt));
+    }
+
+    // Broadcast S0E SpawnObject — type 50 = primed TNT
+    // Java: EntityTrackerEntry.func_151260_c → S0EPacketSpawnObject(entity, 50)
+    std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
+    for (auto& conn : connections_) {
+        if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+        auto handler = conn->getHandler();
+        auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+        if (ph) {
+            ph->sendSpawnObject(*conn, eid, 50, x, y, z, 0.0f, 0.0f, 0, 0.0, 0.0, 0.0);
+        }
+    }
+
+    // game.tnt.primed sound — Java: EntityTNTPrimed constructor → World.playSoundAtEntity
+    broadcastSound("game.tnt.primed", x, y, z, 1.0f, 1.0f);
+
+    std::cout << "[TNTPrimed] Spawned entity " << eid << " at " << x << "," << y << "," << z
+              << " fuse=" << fuseOverride << "\n";
+    return eid;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Primed TNT entity ticking — Java: EntityTNTPrimed.onUpdate()
+// Applies gravity 0.04, air friction 0.98, ground friction 0.7, ground
+// bounce -0.5. When fuse reaches 0, creates explosion (power 4.0, causesFire).
+// ═══════════════════════════════════════════════════════════════════════════
+
+void MinecraftServer::tickTNTPrimed() {
+    std::lock_guard<std::mutex> lock(tntPrimedEntitiesMutex_);
+    if (tntPrimedEntities_.empty()) return;
+
+    auto* world = worlds_.empty() ? nullptr : worlds_[0].get();
+
+    std::vector<int32_t> destroyIds;
+
+    for (auto& tnt : tntPrimedEntities_) {
+        if (tnt.isDead) continue;
+
+        // Java: EntityTNTPrimed.onUpdate() — physics
+        // prevPos = pos; motionY -= 0.04; moveEntity(motion); motion *= 0.98;
+        // if (onGround) { motionX *= 0.7; motionZ *= 0.7; motionY *= -0.5; }
+
+        tnt.motionY -= SpawnedTNTPrimed::GRAVITY;
+
+        // Move entity — simplified collision (check block below)
+        double newX = tnt.posX + tnt.motionX;
+        double newY = tnt.posY + tnt.motionY;
+        double newZ = tnt.posZ + tnt.motionZ;
+
+        // Ground collision — check if block below feet is solid
+        tnt.onGround = false;
+        if (world) {
+            int32_t bx = static_cast<int32_t>(std::floor(newX));
+            int32_t by = static_cast<int32_t>(std::floor(newY));
+            int32_t bz = static_cast<int32_t>(std::floor(newZ));
+            Block* below = world->getBlock(bx, by, bz);
+            int32_t belowId = below ? Block::getIdFromBlock(below) : 0;
+            if (belowId != 0 && newY <= static_cast<double>(by + 1)) {
+                // Landed on solid block
+                newY = static_cast<double>(by + 1);
+                tnt.onGround = true;
+            }
+        }
+
+        tnt.posX = newX;
+        tnt.posY = newY;
+        tnt.posZ = newZ;
+
+        // Apply friction
+        tnt.motionX *= SpawnedTNTPrimed::FRICTION;
+        tnt.motionY *= SpawnedTNTPrimed::FRICTION;
+        tnt.motionZ *= SpawnedTNTPrimed::FRICTION;
+
+        if (tnt.onGround) {
+            tnt.motionX *= SpawnedTNTPrimed::GROUND_FRICTION;
+            tnt.motionZ *= SpawnedTNTPrimed::GROUND_FRICTION;
+            tnt.motionY *= SpawnedTNTPrimed::GROUND_BOUNCE;
+        }
+
+        // Fuse countdown — Java: if (this.fuse-- <= 0) { setDead(); explode(); }
+        if (--tnt.fuse <= 0) {
+            tnt.isDead = true;
+            destroyIds.push_back(tnt.entityId);
+            // Java: Explosion power 4.0, causesFire = true
+            createExplosion(tnt.posX, tnt.posY, tnt.posZ,
+                            SpawnedTNTPrimed::EXPLOSION_POWER, true, true);
+            continue;
+        }
+
+        // Broadcast position — S18 EntityTeleport (every 3 ticks or if moved significantly)
+        ++tnt.ticksSinceLastTeleport;
+        int32_t absX = static_cast<int32_t>(tnt.posX * 32.0);
+        int32_t absY = static_cast<int32_t>(tnt.posY * 32.0);
+        int32_t absZ = static_cast<int32_t>(tnt.posZ * 32.0);
+        bool moved = (absX != tnt.lastSentPosX || absY != tnt.lastSentPosY ||
+                      absZ != tnt.lastSentPosZ);
+
+        if (moved && tnt.ticksSinceLastTeleport >= 3) {
+            tnt.lastSentPosX = absX;
+            tnt.lastSentPosY = absY;
+            tnt.lastSentPosZ = absZ;
+            tnt.ticksSinceLastTeleport = 0;
+
+            // S18 EntityTeleport
+            auto writeVarInt = [](std::vector<uint8_t>& buf, int32_t value) {
+                uint32_t uval = static_cast<uint32_t>(value);
+                do {
+                    uint8_t b = uval & 0x7F;
+                    uval >>= 7;
+                    if (uval != 0) b |= 0x80;
+                    buf.push_back(b);
+                } while (uval != 0);
+            };
+
+            std::vector<uint8_t> pkt;
+            writeVarInt(pkt, 0x18); // S18 EntityTeleport
+            writeVarInt(pkt, tnt.entityId);
+            // Absolute position in fixed-point (1/32)
+            int32_t fpX = absX, fpY = absY, fpZ = absZ;
+            pkt.push_back((fpX >> 24) & 0xFF); pkt.push_back((fpX >> 16) & 0xFF);
+            pkt.push_back((fpX >> 8) & 0xFF);  pkt.push_back(fpX & 0xFF);
+            pkt.push_back((fpY >> 24) & 0xFF); pkt.push_back((fpY >> 16) & 0xFF);
+            pkt.push_back((fpY >> 8) & 0xFF);  pkt.push_back(fpY & 0xFF);
+            pkt.push_back((fpZ >> 24) & 0xFF); pkt.push_back((fpZ >> 16) & 0xFF);
+            pkt.push_back((fpZ >> 8) & 0xFF);  pkt.push_back(fpZ & 0xFF);
+            pkt.push_back(0); // yaw (not relevant for TNT)
+            pkt.push_back(0); // pitch
+
+            std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
+            for (auto& conn : connections_) {
+                if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                auto copy = pkt;
+                conn->sendPacket(std::move(copy));
+            }
+        }
+    }
+
+    // Broadcast S13 DestroyEntities for exploded TNT
+    if (!destroyIds.empty()) {
+        auto writeVarInt = [](std::vector<uint8_t>& buf, int32_t value) {
+            uint32_t uval = static_cast<uint32_t>(value);
+            do {
+                uint8_t b = uval & 0x7F;
+                uval >>= 7;
+                if (uval != 0) b |= 0x80;
+                buf.push_back(b);
+            } while (uval != 0);
+        };
+
+        std::vector<uint8_t> dpkt;
+        writeVarInt(dpkt, 0x13); // S13 DestroyEntities
+        writeVarInt(dpkt, static_cast<int32_t>(destroyIds.size()));
+        for (int32_t id : destroyIds) {
+            writeVarInt(dpkt, id);
+        }
+
+        std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
+        for (auto& conn : connections_) {
+            if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+            auto copy = dpkt;
+            conn->sendPacket(std::move(copy));
+        }
+    }
+
+    // Remove dead TNT entities
+    tntPrimedEntities_.erase(
+        std::remove_if(tntPrimedEntities_.begin(), tntPrimedEntities_.end(),
+            [](const SpawnedTNTPrimed& t) { return t.isDead; }),
+        tntPrimedEntities_.end());
 }
 
 // ─── XP Orb Entity System ──────────────────────────────────────────────

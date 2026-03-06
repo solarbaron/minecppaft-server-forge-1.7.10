@@ -1121,6 +1121,41 @@ public:
     /** Tick all boat entities (water physics, steering, collision, broadcast). */
     void tickBoats();
 
+    // ─── Primed TNT entities ────────────────────────────────────────────
+    // Java reference: EntityTNTPrimed — fuse countdown with gravity physics
+    struct SpawnedTNTPrimed {
+        int32_t entityId = 0;
+        double posX = 0, posY = 0, posZ = 0;
+        double motionX = 0, motionY = 0, motionZ = 0;
+        int32_t fuse = 80;              // Java: EntityTNTPrimed.fuse — 80 ticks = 4 seconds
+        bool isDead = false;
+        bool onGround = false;
+        int64_t spawnTick = 0;
+        // Movement tracking for S18 EntityTeleport broadcast
+        int32_t lastSentPosX = 0, lastSentPosY = 0, lastSentPosZ = 0;
+        int32_t ticksSinceLastTeleport = 0;
+
+        static constexpr float GRAVITY = 0.04f;        // Java: motionY -= 0.04
+        static constexpr float FRICTION = 0.98f;        // Java: motionX/Y/Z *= 0.98
+        static constexpr float GROUND_FRICTION = 0.7f;  // Java: motionX/Z *= 0.7 on ground
+        static constexpr float GROUND_BOUNCE = -0.5f;   // Java: motionY *= -0.5 on ground
+        static constexpr float EXPLOSION_POWER = 4.0f;   // Java: Explosion power
+    };
+    mutable std::mutex tntPrimedEntitiesMutex_;
+    std::vector<SpawnedTNTPrimed> tntPrimedEntities_;
+    std::atomic<int32_t> nextTNTPrimedEntityId_{1000000};
+
+    /**
+     * Spawn a primed TNT entity at position with default 80-tick fuse.
+     * Java reference: EntityTNTPrimed(world, x, y, z, igniter)
+     * @param fuseOverride Optional custom fuse (default 80; chain reactions use shorter fuse)
+     * @return entity ID of the spawned TNT
+     */
+    int32_t spawnTNTPrimed(double x, double y, double z, int32_t fuseOverride = 80);
+
+    /** Tick all primed TNT entities (gravity, fuse countdown, explosion on fuse=0). */
+    void tickTNTPrimed();
+
     // ─── XP orb entities ────────────────────────────────────────────────
     // Java reference: EntityXPOrb — experience orb physics, player attraction, pickup
     struct SpawnedXPOrb {

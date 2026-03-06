@@ -4462,7 +4462,7 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
     }
 
     // TNT (block ID 46) — right-click with flint & steel (item 259) ignites
-    // Java: BlockTNT.onBlockActivated → ItemFlintAndSteel
+    // Java: BlockTNT.onBlockActivated → ItemFlintAndSteel → EntityTNTPrimed
     if (clickedBlockId == 46) {
         auto held = inventory_.getCurrentItem();
         if (held && held->getItemId() == 259) { // Flint and steel
@@ -4472,24 +4472,18 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
             }
             server_.broadcastBlockChange(blockX, static_cast<int32_t>(blockY), blockZ, 0, 0);
 
-            // Play TNT fuse sound
-            server_.broadcastSound("game.tnt.primed",
-                static_cast<double>(blockX) + 0.5,
-                static_cast<double>(blockY) + 0.5,
-                static_cast<double>(blockZ) + 0.5,
-                1.0f, 1.0f);
-
             // Damage flint & steel
             damageHeldItem(1);
             sendWindowItems(conn);
 
-            // Create explosion (power 4.0, no fire, break blocks)
-            // In vanilla, TNT has a 4-second fuse — we do instant for simplicity
-            server_.createExplosion(
+            // Spawn primed TNT entity with 80-tick fuse (4 seconds)
+            // Java: BlockTNT.func_150114_a → new EntityTNTPrimed(world, x+0.5, y+0.5, z+0.5, igniter)
+            // Sound is broadcast by spawnTNTPrimed()
+            server_.spawnTNTPrimed(
                 static_cast<double>(blockX) + 0.5,
                 static_cast<double>(blockY) + 0.5,
                 static_cast<double>(blockZ) + 0.5,
-                4.0f, false, true);
+                80);
             return;
         }
     }
