@@ -1150,6 +1150,43 @@ public:
      */
     void removePainting(int32_t entityId, bool dropItem);
 
+    // ─── Item frame entities ────────────────────────────────────────────
+    // Java reference: EntityItemFrame — wall-hung entity that displays an item
+    struct SpawnedItemFrame {
+        int32_t entityId = 0;
+        int32_t blockX = 0, blockY = 0, blockZ = 0;  // Java: field_146063_b/c/d (tile position)
+        int32_t hangingDirection = 0;   // Java: EntityHanging.hangingDirection (0-3)
+        // Displayed item — Java: EntityItemFrame.getDisplayedItem() (DataWatcher index 2)
+        int32_t displayedItemId = 0;    // 0 = no item
+        int32_t displayedItemDamage = 0;
+        int32_t displayedItemCount = 0;
+        int32_t rotation = 0;           // Java: EntityItemFrame.getRotation() (DataWatcher index 3, 0-7)
+        bool isDead = false;
+    };
+    mutable std::mutex itemFrameEntitiesMutex_;
+    std::vector<SpawnedItemFrame> itemFrameEntities_;
+    std::atomic<int32_t> nextItemFrameEntityId_{1300000};
+
+    /**
+     * Spawn an item frame entity on a wall and broadcast S0E type 71 to all clients.
+     * Java reference: EntityItemFrame(World, x, y, z, direction) + ItemHangingEntity.onItemUse()
+     * @return entity ID of the spawned item frame, or -1 on failure
+     */
+    int32_t spawnItemFrame(int32_t blockX, int32_t blockY, int32_t blockZ,
+                           int32_t hangingDirection);
+
+    /**
+     * Remove an item frame entity by ID, broadcast S13, drop item frame + contents in survival.
+     * Java reference: EntityItemFrame.attackEntityFrom() → onBroken() → dropItemOrSelf()
+     */
+    void removeItemFrame(int32_t entityId, bool dropItem);
+
+    /**
+     * Interact with an item frame (right-click) — place/rotate displayed item.
+     * Java reference: EntityItemFrame.interactFirst() + setDisplayedItem() / func_82334_a()
+     */
+    void interactItemFrame(PlayHandler& player, Connection& conn, int32_t entityId);
+
     // ─── Primed TNT entities ────────────────────────────────────────────
     // Java reference: EntityTNTPrimed — fuse countdown with gravity physics
     struct SpawnedTNTPrimed {

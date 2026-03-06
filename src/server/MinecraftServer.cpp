@@ -601,6 +601,28 @@ void MinecraftServer::onPlayerJoined(Connection& joinedConn, PlayHandler& joined
         }
     }
 
+    // ─── Send existing item frame entities to joining player ──────────────
+    // Java: EntityTrackerEntry.func_151259_a() → S0EPacketSpawnObject type 71
+    {
+        std::lock_guard<std::mutex> ifLock(itemFrameEntitiesMutex_);
+        for (auto& frame : itemFrameEntities_) {
+            if (frame.isDead) continue;
+            joinedHandler.sendSpawnObject(joinedConn, frame.entityId, 71,
+                static_cast<double>(frame.blockX) + 0.5,
+                static_cast<double>(frame.blockY) + 0.5,
+                static_cast<double>(frame.blockZ) + 0.5,
+                0.0f, 0.0f, frame.hangingDirection, 0.0, 0.0, 0.0);
+            // Send displayed item metadata if frame has an item
+            if (frame.displayedItemId > 0) {
+                joinedHandler.sendEntityMetadataItemFrame(joinedConn, frame.entityId,
+                    static_cast<int16_t>(frame.displayedItemId),
+                    static_cast<int8_t>(frame.displayedItemCount),
+                    static_cast<int16_t>(frame.displayedItemDamage),
+                    static_cast<int8_t>(frame.rotation));
+            }
+        }
+    }
+
     // ─── Send current scoreboard state to joining player ─────────────────
     // Java: ServerConfigurationManager.playerLoggedIn() → sends scoreboard packets
     sendScoreboardState(joinedConn);
@@ -2755,6 +2777,54 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
             }
         }
 
+        // ─── Player-vs-ItemFrame attack ──────────────────────────────
+        // Java: EntityItemFrame.attackEntityFrom() → dropItemOrSelf()
+        // If frame has an item: first hit drops the displayed item (not the frame)
+        // If frame is empty: hit destroys the frame itself
+        {
+            std::lock_guard<std::mutex> ifLock(itemFrameEntitiesMutex_);
+            for (auto& frame : itemFrameEntities_) {
+                if (frame.entityId != targetEntityId || frame.isDead) continue;
+
+                bool isCreative = (attacker.getGameMode() == 1);
+
+                if (frame.displayedItemId > 0) {
+                    // First hit: drop the displayed item — Java: EntityItemFrame.func_146065_b()
+                    if (!isCreative) {
+                        double dropX = static_cast<double>(frame.blockX) + 0.5;
+                        double dropY = static_cast<double>(frame.blockY) + 0.5;
+                        double dropZ = static_cast<double>(frame.blockZ) + 0.5;
+                        spawnItemDrop(dropX, dropY, dropZ,
+                            frame.displayedItemId, frame.displayedItemDamage, frame.displayedItemCount);
+                    }
+                    // Clear displayed item
+                    frame.displayedItemId = 0;
+                    frame.displayedItemDamage = 0;
+                    frame.displayedItemCount = 0;
+                    frame.rotation = 0;
+
+                    // Broadcast metadata update (empty frame) to all clients
+                    {
+                        std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
+                        for (auto& c : connections_) {
+                            if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
+                            auto handler = c->getHandler();
+                            auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                            if (ph) ph->sendEntityMetadataItemFrame(*c, frame.entityId, 0, 0, 0, 0);
+                        }
+                    }
+                    std::cout << "[ItemFrame] Dropped item from entity " << frame.entityId
+                              << " by " << attacker.getPlayerName() << "\n";
+                } else {
+                    // Second hit (empty frame): destroy the frame
+                    removeItemFrame(frame.entityId, !isCreative);
+                    std::cout << "[ItemFrame] Entity " << frame.entityId
+                              << " destroyed by " << attacker.getPlayerName() << "\n";
+                }
+                return;
+            }
+        }
+
         // ─── Player-vs-Mob attack ────────────────────────────────────
         // If not a player target, check if it's a mob entity
         std::lock_guard<std::mutex> mobLock(mobEntitiesMutex_);
@@ -3413,6 +3483,17 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
 void MinecraftServer::handleEntityInteract(PlayHandler& player, Connection& conn, int32_t targetEntityId) {
     // Java: EntityPlayer.interactWith(targetEntity)
     // Handles: sheep shearing/dyeing, cow/mooshroom milking, mooshroom stew/shearing, pig saddling
+    // ─── Item frame interaction — Java: EntityItemFrame.interactFirst() ──
+    // Must check before any mob interactions since item frames have their own entity IDs
+    {
+        std::lock_guard<std::mutex> ifLock(itemFrameEntitiesMutex_);
+        for (auto& frame : itemFrameEntities_) {
+            if (frame.entityId != targetEntityId || frame.isDead) continue;
+            interactItemFrame(player, conn, targetEntityId);
+            return;
+        }
+    }
+
     auto heldItem = player.getHeldItem();
     int32_t heldId = heldItem ? heldItem->getItemId() : 0;
     int32_t gameMode = player.getGameMode();
@@ -14404,6 +14485,157 @@ void MinecraftServer::removePainting(int32_t entityId, bool dropItem) {
     }
 
     std::cout << "[Painting] Removed entity " << entityId << "\n";
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Item frame entity — Java: EntityItemFrame + ItemHangingEntity.onItemUse()
+// ═══════════════════════════════════════════════════════════════════════════════
+
+int32_t MinecraftServer::spawnItemFrame(int32_t blockX, int32_t blockY, int32_t blockZ,
+                                         int32_t hangingDirection) {
+    int32_t eid = nextItemFrameEntityId_.fetch_add(1, std::memory_order_relaxed);
+
+    SpawnedItemFrame frame;
+    frame.entityId = eid;
+    frame.blockX = blockX;
+    frame.blockY = blockY;
+    frame.blockZ = blockZ;
+    frame.hangingDirection = hangingDirection;
+    frame.displayedItemId = 0;
+    frame.displayedItemDamage = 0;
+    frame.displayedItemCount = 0;
+    frame.rotation = 0;
+    frame.isDead = false;
+
+    {
+        std::lock_guard<std::mutex> lock(itemFrameEntitiesMutex_);
+        itemFrameEntities_.push_back(std::move(frame));
+    }
+
+    // Broadcast S0E SpawnObject type 71 (item frame) to all clients
+    // Java: EntityTrackerEntry → S0EPacketSpawnObject(entity, 71)
+    // data field = hangingDirection (0-3), position = block center
+    {
+        std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
+        for (auto& conn : connections_) {
+            if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+            auto handler = conn->getHandler();
+            auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+            if (ph) ph->sendSpawnObject(*conn, eid, 71,
+                static_cast<double>(blockX) + 0.5,
+                static_cast<double>(blockY) + 0.5,
+                static_cast<double>(blockZ) + 0.5,
+                0.0f, 0.0f, hangingDirection, 0.0, 0.0, 0.0);
+        }
+    }
+
+    std::cout << "[ItemFrame] Spawned entity " << eid
+              << " at " << blockX << "," << blockY << "," << blockZ
+              << " dir=" << hangingDirection << "\n";
+
+    return eid;
+}
+
+void MinecraftServer::removeItemFrame(int32_t entityId, bool dropItem) {
+    double dropX = 0, dropY = 0, dropZ = 0;
+    int32_t displayedItemId = 0, displayedItemDamage = 0, displayedItemCount = 0;
+    bool found = false;
+
+    {
+        std::lock_guard<std::mutex> lock(itemFrameEntitiesMutex_);
+        for (auto& f : itemFrameEntities_) {
+            if (f.entityId == entityId && !f.isDead) {
+                f.isDead = true;
+                dropX = static_cast<double>(f.blockX) + 0.5;
+                dropY = static_cast<double>(f.blockY) + 0.5;
+                dropZ = static_cast<double>(f.blockZ) + 0.5;
+                displayedItemId = f.displayedItemId;
+                displayedItemDamage = f.displayedItemDamage;
+                displayedItemCount = f.displayedItemCount;
+                found = true;
+                break;
+            }
+        }
+    }
+
+    if (!found) return;
+
+    // Broadcast S13 DestroyEntities
+    {
+        std::vector<int32_t> destroyIds = { entityId };
+        std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
+        for (auto& conn : connections_) {
+            if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+            auto handler = conn->getHandler();
+            auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+            if (ph) ph->sendDestroyEntities(*conn, destroyIds);
+        }
+    }
+
+    if (dropItem) {
+        // Drop item frame item (389) — Java: EntityItemFrame.dropItemOrSelf()
+        spawnItemDrop(dropX, dropY, dropZ, 389, 0, 1);
+        // Drop displayed item if any — Java: EntityItemFrame.func_146065_b()
+        if (displayedItemId > 0) {
+            spawnItemDrop(dropX, dropY, dropZ, displayedItemId, displayedItemDamage, displayedItemCount);
+        }
+    }
+
+    std::cout << "[ItemFrame] Removed entity " << entityId << "\n";
+}
+
+void MinecraftServer::interactItemFrame(PlayHandler& player, Connection& conn, int32_t entityId) {
+    // Java: EntityItemFrame.interactFirst(EntityPlayer)
+    // If empty: place player's held item into the frame
+    // If has item: rotate it (0→1→2→…→7→0)
+
+    std::lock_guard<std::mutex> lock(itemFrameEntitiesMutex_);
+    for (auto& frame : itemFrameEntities_) {
+        if (frame.entityId != entityId || frame.isDead) continue;
+
+        if (frame.displayedItemId == 0) {
+            // ─── Place item — Java: EntityItemFrame.setDisplayedItem() ───
+            auto heldItem = player.getHeldItem();
+            if (!heldItem || heldItem->isEmpty()) return; // Nothing to place
+
+            frame.displayedItemId = heldItem->getItemId();
+            frame.displayedItemDamage = heldItem->getDamage();
+            frame.displayedItemCount = 1; // Frames always display exactly 1 item
+            frame.rotation = 0;
+
+            // Consume one item in survival — Java: --itemStack.stackSize
+            if (player.getGameMode() != 1) {
+                player.decrHeldItem();
+            }
+            player.sendWindowItems(conn);
+
+            std::cout << "[ItemFrame] Item " << frame.displayedItemId
+                      << " placed in entity " << entityId << "\n";
+        } else {
+            // ─── Rotate — Java: EntityItemFrame.func_82334_a() ───
+            // Cycles through 8 rotations (0-7), each adds 45 degrees
+            frame.rotation = (frame.rotation + 1) % 8;
+
+            std::cout << "[ItemFrame] Rotated entity " << entityId
+                      << " to rotation " << frame.rotation << "\n";
+        }
+
+        // Broadcast metadata update to all clients
+        {
+            std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
+            for (auto& c : connections_) {
+                if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
+                auto handler = c->getHandler();
+                auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                if (ph) ph->sendEntityMetadataItemFrame(*c, frame.entityId,
+                    static_cast<int16_t>(frame.displayedItemId),
+                    static_cast<int8_t>(frame.displayedItemCount),
+                    static_cast<int16_t>(frame.displayedItemDamage),
+                    static_cast<int8_t>(frame.rotation));
+            }
+        }
+        return;
+    }
 }
 
 } // namespace mccpp

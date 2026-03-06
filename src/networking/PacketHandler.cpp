@@ -2066,6 +2066,36 @@ void PlayHandler::sendEntityMetadataItemStack(Connection& conn, int32_t entityId
     conn.sendPacket(std::move(pkt));
 }
 
+void PlayHandler::sendEntityMetadataItemFrame(Connection& conn, int32_t entityId,
+                                                int16_t itemId, int8_t stackSize, int16_t damage,
+                                                int8_t rotation) {
+    // Java reference: S1CPacketEntityMetadata + DataWatcher serialization
+    // EntityItemFrame DataWatcher:
+    //   Index 2 (ItemStack) — displayed item  → header = (5 << 5) | 2 = 0xA2
+    //   Index 3 (Byte)      — rotation (0-7)  → header = (0 << 5) | 3 = 0x03
+    std::vector<uint8_t> pkt;
+    writeVarInt(pkt, ClientboundPacket::EntityMetadata);
+    writeInt(pkt, entityId);
+
+    // DataWatcher entry: type=5 (ItemStack), index=2
+    writeByte(pkt, 0xA2);
+    if (itemId > 0) {
+        writeShort(pkt, itemId);
+        writeByte(pkt, static_cast<uint8_t>(stackSize));
+        writeShort(pkt, damage);
+        writeShort(pkt, -1); // no NBT
+    } else {
+        writeShort(pkt, -1); // empty item slot
+    }
+
+    // DataWatcher entry: type=0 (Byte), index=3
+    writeByte(pkt, 0x03);
+    writeByte(pkt, static_cast<uint8_t>(rotation));
+
+    writeByte(pkt, 0x7F); // DataWatcher terminator
+    conn.sendPacket(std::move(pkt));
+}
+
 void PlayHandler::sendCollectItem(Connection& conn, int32_t collectedEntityId, int32_t collectorEntityId) {
     // Java reference: S0DPacketCollectItem.writePacketData()
     // Format: Int collectedEntityId, Int collectorEntityId
@@ -5448,7 +5478,63 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
                     }
                     return; // Painting handled — don't continue to block placement
                 }
-                case 389: placeBlockId = 140; break; // Flower pot item → flower pot block
+                case 389: {
+                    // ─── Item frame placement — Java: ItemHangingEntity.onItemUse() ───
+                    // Item frames are entities (like paintings), not blocks.
+                    // Only wall faces (2-5) are valid; map face → hangingDirection
+                    static const int ifFacingToDirection[6] = {-1, -1, 2, 0, 1, 3};
+                    if (direction < 2 || direction > 5) break; // top/bottom → invalid
+                    int32_t ifHangDir = ifFacingToDirection[direction];
+                    if (ifHangDir < 0) break;
+
+                    // Check that the wall behind is solid — Java: EntityHanging.onValidSurface()
+                    // The wall block is the originally clicked block (blockX/blockY/blockZ)
+                    Block* wallBlock = world->getBlock(blockX, blockY, blockZ);
+                    int32_t wallId = wallBlock ? Block::getIdFromBlock(wallBlock) : 0;
+                    if (wallId == 0) break; // No wall to hang on
+
+                    // Check that the placement position (placeX/Y/Z) is air
+                    Block* placeBlock = world->getBlock(placeX, placeY, placeZ);
+                    int32_t placeId = placeBlock ? Block::getIdFromBlock(placeBlock) : 0;
+                    if (placeId != 0) break; // Blocked
+
+                    // Check no existing item frame at this position — prevent stacking
+                    {
+                        bool occupied = false;
+                        std::lock_guard<std::mutex> ifLock(server_.itemFrameEntitiesMutex_);
+                        for (auto& frame : server_.itemFrameEntities_) {
+                            if (frame.isDead) continue;
+                            if (frame.blockX == placeX && frame.blockY == placeY &&
+                                frame.blockZ == placeZ) {
+                                occupied = true;
+                                break;
+                            }
+                        }
+                        if (occupied) break;
+                    }
+
+                    // Spawn the item frame entity
+                    server_.spawnItemFrame(placeX, placeY, placeZ, ifHangDir);
+
+                    // Consume item in survival — Java: --itemstack.stackSize
+                    if (gameMode_ != 1) {
+                        auto held = inventory_.getCurrentItem();
+                        if (held) {
+                            int newSize = held->getStackSize() - 1;
+                            if (newSize <= 0) {
+                                inventory_.setInventorySlotContents(currentSlot_, std::nullopt);
+                            } else {
+                                ItemStack updated = *held;
+                                updated.setStackSize(newSize);
+                                inventory_.setInventorySlotContents(currentSlot_, updated);
+                            }
+                            sendSetSlot(conn, 0, static_cast<int16_t>(36 + currentSlot_),
+                                        inventory_.getStackInSlot(currentSlot_));
+                        }
+                    }
+                    return; // Item frame handled — don't continue to block placement
+                }
+                case 390: placeBlockId = 140; break; // Flower pot item → flower pot block
                 case 397: placeBlockId = 144; break; // Skull item → skull block
                 case 287: placeBlockId = 132; break; // String → tripwire wire block
                 default: break;

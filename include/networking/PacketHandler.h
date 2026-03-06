@@ -432,6 +432,15 @@ public:
                            int32_t direction);
 
     /**
+     * Send S1C EntityMetadata for an item frame entity.
+     * Java reference: EntityItemFrame DataWatcher: index 2 (ItemStack), index 3 (Byte rotation)
+     * If itemId == 0, sends an empty item slot (Short -1).
+     */
+    void sendEntityMetadataItemFrame(Connection& conn, int32_t entityId,
+                                      int16_t itemId, int8_t stackSize, int16_t damage,
+                                      int8_t rotation);
+
+    /**
      * Send S0F SpawnMob to the client.
      * Java reference: S0FPacketSpawnMob
      */
