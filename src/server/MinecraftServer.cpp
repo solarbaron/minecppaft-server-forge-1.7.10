@@ -1203,6 +1203,11 @@ MinecraftServer::BeaconData& MinecraftServer::getOrCreateBeacon(int64_t posKey) 
     return beaconStorage_[posKey];
 }
 
+MinecraftServer::NoteBlockData& MinecraftServer::getOrCreateNoteBlock(int64_t posKey) {
+    std::lock_guard<std::mutex> lock(noteBlockMutex_);
+    return noteBlockStorage_[posKey];
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Beacon tile entity ticking — Java: TileEntityBeacon.updateEntity()
 // Runs every 80 ticks: validates pyramid structure, applies potion effects
@@ -2346,6 +2351,24 @@ void MinecraftServer::saveTileEntitiesForChunk(nbt::NBTTagCompound& levelTag,
         }
     }
 
+    // ── Note Blocks (Java tile entity id: "Music") ──
+    {
+        std::lock_guard<std::mutex> lock(noteBlockMutex_);
+        for (auto& [posKey, noteData] : noteBlockStorage_) {
+            int32_t x, y, z;
+            unpackBlockPos(posKey, x, y, z);
+            if (!inChunk(x, z)) continue;
+
+            auto te = std::make_unique<nbt::NBTTagCompound>();
+            te->setString("id", "Music");
+            te->setInteger("x", x);
+            te->setInteger("y", y);
+            te->setInteger("z", z);
+            te->setByte("note", noteData.note);
+            tileEntities->appendTag(std::move(te));
+        }
+    }
+
     levelTag.setTag("TileEntities", std::move(tileEntities));
 }
 
@@ -2487,6 +2510,13 @@ void MinecraftServer::loadTileEntitiesFromChunk(const nbt::NBTTagCompound& level
             beacon.primaryEffect = te->getInteger("Primary");
             beacon.secondaryEffect = te->getInteger("Secondary");
             beacon.levels = te->getInteger("Levels");
+        } else if (id == "Music") {
+            // Java: TileEntityNote — note block pitch persistence
+            std::lock_guard<std::mutex> lock(noteBlockMutex_);
+            auto& noteData = noteBlockStorage_[posKey];
+            noteData.note = static_cast<int8_t>(te->getByte("note"));
+            if (noteData.note < 0) noteData.note = 0;
+            if (noteData.note > 24) noteData.note = 24;
         }
     }
 }
@@ -5530,6 +5560,8 @@ void MinecraftServer::redstoneNotifyNeighbors(int32_t x, int32_t y, int32_t z) {
 
     // ─── Note block — Java: BlockNote.onNeighborBlockChange ─────────────
     // Rising-edge: play note when receiving power
+    // Java: BlockNote.onNeighborBlockChange — uses TileEntityNote.previousRedstoneState
+    // for rising-edge detection. Play note only on rising edge (unpowered → powered).
     auto noteBlockCheckPowered = [this](int32_t nx, int32_t ny, int32_t nz) {
         bool powered = false;
         for (int face = 0; face < 6; ++face) {
@@ -5558,8 +5590,17 @@ void MinecraftServer::redstoneNotifyNeighbors(int32_t x, int32_t y, int32_t z) {
             // Detector rail — provides power when entity on rail
             if (adjId == 28 && (adjMeta & 0x08)) { powered = true; break; }
         }
-        if (powered) {
-            playNoteBlock(nx, ny, nz);
+        // Java: TileEntityNote.previousRedstoneState — only trigger on rising edge
+        int64_t noteKey = packBlockPos(nx, ny, nz);
+        {
+            std::lock_guard<std::mutex> lock(noteBlockMutex_);
+            auto& noteData = noteBlockStorage_[noteKey];
+            if (noteData.previousRedstoneState != powered) {
+                if (powered) {
+                    playNoteBlock(nx, ny, nz);
+                }
+                noteData.previousRedstoneState = powered;
+            }
         }
     };
 
@@ -6149,7 +6190,17 @@ void MinecraftServer::playNoteBlock(int32_t x, int32_t y, int32_t z) {
     if (worlds_.empty()) return;
     auto& world = worlds_[0];
 
-    int32_t meta = getBlockMetaInWorld(x, y, z); // pitch 0-24
+    // Read pitch from NoteBlockData tile entity (0-24) instead of block metadata
+    int8_t notePitch = 0;
+    {
+        int64_t noteKey = packBlockPos(x, y, z);
+        std::lock_guard<std::mutex> lock(noteBlockMutex_);
+        auto it = noteBlockStorage_.find(noteKey);
+        if (it != noteBlockStorage_.end()) {
+            notePitch = it->second.note;
+        }
+    }
+    int32_t meta = static_cast<int32_t>(notePitch); // pitch 0-24 from TileEntityNote
 
     // Java: BlockNote.onBlockEventReceived — instrument from block below
     // 0=harp (default), 1=bass drum (rock), 2=snare (sand), 3=hat (glass), 4=bass attack (wood)
@@ -10125,6 +10176,24 @@ void MinecraftServer::dropContainerContents(int32_t x, int32_t y, int32_t z, int
                 // Drop plant as item entity
                 spawnItemDrop(dx, dy, dz, plantId, plantMeta, 1);
             }
+            break;
+        }
+        // Beacon — erase beacon tile entity data + drop payment slot
+        // Java: TileEntityBeacon is a lockable container; on break, drop payment slot
+        case 138: {
+            std::lock_guard<std::mutex> lock(beaconMutex_);
+            auto it = beaconStorage_.find(key);
+            if (it != beaconStorage_.end()) {
+                dropSlot(it->second.paymentSlot);
+                beaconStorage_.erase(it);
+            }
+            break;
+        }
+        // Note Block — erase note block tile entity data
+        // Java: TileEntityNote is removed on block break
+        case 25: {
+            std::lock_guard<std::mutex> lock(noteBlockMutex_);
+            noteBlockStorage_.erase(key);
             break;
         }
         default:

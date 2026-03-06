@@ -149,7 +149,7 @@
 - ✅ **Comparator** — compare/subtract modes, rear + side signal levels, container input override (chest/furnace/hopper/dispenser/dropper/brewing stand/cauldron), through-block container reading
 - ✅ **Pistons** — normal/sticky extend+retract, 12-block push limit, unpushable blocks, head placement
 - ✅ **Dispensers/Droppers** — 9-slot storage, random slot selection, dropper inject-or-drop, item type behaviors
-- ✅ **Note blocks** — redstone activation, pitch cycle, instrument from block below
+- ✅ **Note blocks** — redstone activation (rising-edge via previousRedstoneState), pitch cycle 0-24 via NoteBlockData tile entity, instrument from block below, NBT persistence id="Music"
 - ✅ **Redstone lamps** — ON/OFF toggle from power state
 - ✅ **Power sources** — lever, button, pressure plate, redstone block, redstone torch, repeater, comparator
 - ✅ Tripwire (hook + wire entity detection, redstone output)
@@ -166,7 +166,8 @@
 - ✅ **Dispenser** — per-position 9-slot storage, S2D type 3
 - ✅ **Dropper** — per-position 9-slot storage, S2D type 6
 - ✅ **Hopper** — per-position storage, S2D type 9, 5 slots, **automated item transfer** (8-tick pull/push to chest/hopper)
-- ✅ **Beacon** — S2D type 7, S31 properties (power/effects)
+- ✅ **Beacon** — S2D type 7, S31 properties (power/effects), break cleanup (erase storage + drop payment slot)
+- ✅ **Note Block** — NoteBlockData tile entity (note 0-24, previousRedstoneState), NBT persistence id="Music"
 - ✅ **Enchanting Table** — S2D type 4, bookshelf counting, S31 enchantment levels, **C11 EnchantItem handler** (24 vanilla enchantments, weighted random selection, conflict resolution, enchanted book support, XP cost, click handler for slot 0)
 - ✅ **Anvil** — S2D type 8, repair/rename GUI, **full ContainerRepair parity** (updateAnvilOutput: material repair 25%/material, item merge with 12% durability bonus, enchanted book application with weight-to-cost mapping, rename cost 7/stack×5, XP cap 40 "Too Expensive!", rename-only 39 cap, repair cost escalation; click handler: input/output/inventory slots, XP deduction, material consumption, shift-click, MC|ItemName rename)
 - ✅ **Brewing Stand** — per-position 4-slot storage, S2D type 5, S31 brew time, **automated brewing** (400-tick timer, 12 ingredients, 7 effect potions + extend/amplify/splash/corrupt)
@@ -189,7 +190,7 @@
 - ✅ **Fence gates** (107) — toggle meta 0x04
 - ✅ **Levers** (69) — toggle meta 0x08 with click sound
 - ✅ **Buttons** (77/143) — momentary press meta 0x08
-- ✅ **Note blocks** (25) — pitch 0-24, harp sound + note particle
+- ✅ **Note blocks** (25) — pitch 0-24 via NoteBlockData tile entity, instrument detection from block below (harp/basedrum/snare/hat/bass/pling), note particle, redstone rising-edge, break cleanup
 - ✅ **Repeaters** (93/94) — delay cycle bits 2-3, 4 states
 - ✅ **Comparators** (149/150) — subtract mode toggle bit 0x04
 - ✅ **Cake** (92) — eat slices meta 0-6, +2 food per slice
@@ -570,7 +571,7 @@
 248. **Double chest** — ✅ Done (Java BlockChest.getInventory + InventoryLargeChest parity: adjacent same-type chest detection in 4 cardinal directions, upper/lower half ordering by -X/-Z = upper, 54-slot "Large Chest" S2D OpenWindow, 90-slot S30 WindowItems, dynamic click handler with chestSlotCount_ 27/54, close handler clears both halves, double trapped chest redstone notification)
 249. **Container break drops** — ✅ Done (Java BlockContainer.breakBlock → InventoryHelper.dropInventoryItems parity: chest/trapped chest 54/146 27 slots, furnace 61/62 3 slots, dispenser 23 9 slots, dropper 158 9 slots, hopper 154 5 slots, brewing stand 117 4 slots, jukebox 84 disc + stop music, flower pot 140 plant+meta; drops all items + removes tile entity data from storage; integrated into all 3 break paths: creative, instant-break, survival)
 250. **Chest placement restriction** — ✅ Done (Java BlockChest.canPlaceBlockAt + isDoubleChest parity: prevents triple chests by checking adjacent same-type chest neighbors for existing double-chest pairs; applies to both chest 54 and trapped chest 146; sends block correction on rejection)
-251. **Tile entity persistence** — ✅ Done (Java AnvilChunkLoader.writeChunkToNBT/readChunkFromNBT parity: saveTileEntitiesForChunk injects NBT compounds for 6 tile entity types — Chest, Furnace, Trap, Hopper, Cauldron, Sign — into chunk Level compound before region file write; loadTileEntitiesFromChunk parses TileEntities tag list on chunk load from disk; ChunkProviderServer.loadChunk reads from region file before generating; ItemStack NBT serialization with enchantments/RepairCost/display.Name)
+251. **Tile entity persistence** — ✅ Done (Java AnvilChunkLoader.writeChunkToNBT/readChunkFromNBT parity: saveTileEntitiesForChunk injects NBT compounds for 9 tile entity types — Chest, Furnace, Trap, Hopper, Cauldron, Sign, MobSpawner, Beacon, Music — into chunk Level compound before region file write; loadTileEntitiesFromChunk parses TileEntities tag list on chunk load from disk; ChunkProviderServer.loadChunk reads from region file before generating; ItemStack NBT serialization with enchantments/RepairCost/display.Name)
 252. **Player inventory persistence** — ✅ Done (Java InventoryPlayer.writeToNBT/readFromNBT + EntityPlayer.writeEntityToNBT parity: Inventory tag list with mainInventory slots 0-35 + armorInventory slots 100-103, SelectedItemSlot, playerGameType, EnderItems tag list slots 0-26; readFromNBT clears then restores all 40 inventory slots + 27 ender chest slots; writeItemStackToNBT/readItemStackFromNBT with enchantments/RepairCost/display.Name)
 253. **Death inventory drops** — ✅ Done (Java EntityPlayer.onDeath + InventoryPlayer.dropAllItems parity: mainInventory[0-35] + armorInventory[0-3] dropped with func_146097_a circular scatter motion -sin(angle)*radius/cos(angle)*radius/0.2; XP orbs dropped level*7 capped 100; keepInventory gamerule check; /gamerule keepInventory command; NBT-preserved item drops via spawnItemDropStack + sendEntityMetadataItemStack; respawn clears potions + syncs XP + inventory to client; ender chest persists through death per Java)
 254. **Scoreboard packet wiring** — ✅ Done (Java ServerScoreboard parity: S3B ScoreboardObjective create/remove/update, S3C UpdateScore set/remove, S3D DisplayScoreboard slot assignment, S3E Teams create/remove/update/add players/remove players; broadcastScoreboardObjective/broadcastUpdateScore/broadcastRemoveScore/broadcastDisplayScoreboard/broadcastTeams methods; sendScoreboardState on player join sends all objectives+scores+display slots+teams; /scoreboard command fully wired to Scoreboard class with real data + packet broadcast)
@@ -605,4 +606,6 @@
 283. **Boat entity** — ✅ Done (Java EntityBoat parity: SpawnedBoat struct with water physics; spawnBoat creates entity + S0E SpawnObject type 1 broadcast; tickBoats handles 5-point water submersion check with buoyancy, rider steering via yaw/strafe/forward input with speedMultiplier 0.07-0.35 ramp, 0.35 speed cap, ground friction 0.5×, block collision breaking with plank/stick drops + rider dismount; item 333 right-click on water spawns boat; timeSinceHit/damageTaken damage tracking)
 284. **Jukebox block-break drops** — ✅ Done (Java BlockJukebox.breakBlock → func_149925_e parity: stop music via broadcastEffect(1005, x, y, z, 0), drop stored disc as item entity via spawnItemDrop, erase jukeboxDiscs_ entry; integrated into dropContainerContents case 84)
 285. **Flower Pot block-break drops** — ✅ Done (Java BlockFlowerPot.breakBlock parity: drop contained plant with stored itemId+metadata as item entity via spawnItemDrop, erase flowerPots_ entry; integrated into dropContainerContents case 140)
+286. **Beacon block-break cleanup** — ✅ Done (Java BlockBeacon.breakBlock parity: erase beaconStorage_ entry + drop paymentSlot item via spawnItemDrop; integrated into dropContainerContents case 138)
+287. **Note Block tile entity** — ✅ Done (Java TileEntityNote parity: NoteBlockData struct with note 0-24 + previousRedstoneState, getOrCreateNoteBlock() thread-safe accessor, playNoteBlock() with instrument detection from block below (harp/basedrum/snare/hat/bass/pling), right-click pitch cycle (note+1)%25, redstone rising-edge detection, break cleanup erases noteBlockStorage_, NBT persistence save/load id="Music" note=pitch)
 

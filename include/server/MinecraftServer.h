@@ -254,6 +254,19 @@ public:
     mutable std::mutex beaconMutex_;
 
     /**
+     * Note block tile entity storage.
+     * Java reference: TileEntityNote — stores pitch (0-24) and previousRedstoneState
+     * for rising-edge detection. Block metadata is NOT used for pitch; pitch lives here.
+     */
+    struct NoteBlockData {
+        int8_t note = 0;                     // 0-24 pitch (Java: TileEntityNote.note)
+        bool previousRedstoneState = false;  // Java: TileEntityNote.previousRedstoneState
+    };
+    NoteBlockData& getOrCreateNoteBlock(int64_t posKey);
+    std::map<int64_t, NoteBlockData> noteBlockStorage_;
+    mutable std::mutex noteBlockMutex_;
+
+    /**
      * Dispenser/Dropper storage (9 slots each).
      * Java reference: TileEntityDispenser
      */

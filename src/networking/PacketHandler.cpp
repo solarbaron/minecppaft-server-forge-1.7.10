@@ -4439,13 +4439,13 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
     }
 
     // ─── Note Block (block ID 25) — Java: BlockNote.onBlockActivated() ─
-    // Increment meta 0-24 (wraps), play note sound via TileEntityNote.triggerNote
+    // Java: TileEntityNote.changePitch() → (note + 1) % 25, then triggerNote()
+    // Pitch lives in NoteBlockData tile entity, NOT block metadata.
     if (clickedBlockId == 25 && !isSneaking_) {
         int32_t by = static_cast<int32_t>(blockY);
-        int meta = world->getBlockMetadata(blockX, by, blockZ);
-        meta = (meta + 1) % 25;
-        world->setBlockMetadata(blockX, by, blockZ, meta);
-        server_.broadcastBlockChange(blockX, by, blockZ, 25, meta);
+        int64_t noteKey = MinecraftServer::packBlockPos(blockX, by, blockZ);
+        auto& noteData = server_.getOrCreateNoteBlock(noteKey);
+        noteData.note = static_cast<int8_t>((noteData.note + 1) % 25);
         // Play note with proper instrument detection
         server_.playNoteBlock(blockX, by, blockZ);
         return;
