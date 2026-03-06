@@ -589,6 +589,18 @@ void MinecraftServer::onPlayerJoined(Connection& joinedConn, PlayHandler& joined
         }
     }
 
+    // ─── Send existing painting entities to joining player ─────────────────
+    // Java: EntityTrackerEntry.func_151259_a() → S10PacketSpawnPainting
+    {
+        std::lock_guard<std::mutex> paintingLock(paintingEntitiesMutex_);
+        for (auto& painting : paintingEntities_) {
+            if (painting.isDead) continue;
+            joinedHandler.sendSpawnPainting(joinedConn, painting.entityId,
+                painting.artTitle, painting.blockX, painting.blockY, painting.blockZ,
+                painting.hangingDirection);
+        }
+    }
+
     // ─── Send current scoreboard state to joining player ─────────────────
     // Java: ServerConfigurationManager.playerLoggedIn() → sends scoreboard packets
     sendScoreboardState(joinedConn);
@@ -2722,6 +2734,23 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
                     // Hurt animation — S19 EntityStatus byte 2
                     broadcastEntityEvent(boat.entityId, 2);
                 }
+                return;
+            }
+        }
+
+        // ─── Player-vs-Painting attack ──────────────────────────────
+        // Java: EntityPainting.attackEntityFrom() → onBroken()
+        // Paintings are destroyed instantly on hit, dropping the item in survival
+        {
+            std::lock_guard<std::mutex> paintingLock(paintingEntitiesMutex_);
+            for (auto& painting : paintingEntities_) {
+                if (painting.entityId != targetEntityId || painting.isDead) continue;
+
+                bool isCreative = (attacker.getGameMode() == 1);
+                // removePainting handles isDead, S13 broadcast, and item drop
+                removePainting(painting.entityId, !isCreative);
+                std::cout << "[Painting] Entity " << painting.entityId
+                          << " destroyed by " << attacker.getPlayerName() << "\n";
                 return;
             }
         }
@@ -14292,6 +14321,89 @@ void MinecraftServer::tickSilverfish(SpawnedMob& sf, int64_t currentTick) {
             }
         }
     }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Painting entity — Java: EntityPainting + ItemHangingEntity.onItemUse()
+// ═══════════════════════════════════════════════════════════════════════════════
+
+int32_t MinecraftServer::spawnPainting(int32_t blockX, int32_t blockY, int32_t blockZ,
+                                        int32_t hangingDirection, const std::string& artTitle,
+                                        int32_t sizeX, int32_t sizeY) {
+    int32_t eid = nextPaintingEntityId_.fetch_add(1, std::memory_order_relaxed);
+
+    SpawnedPainting painting;
+    painting.entityId = eid;
+    painting.blockX = blockX;
+    painting.blockY = blockY;
+    painting.blockZ = blockZ;
+    painting.hangingDirection = hangingDirection;
+    painting.artTitle = artTitle;
+    painting.sizeX = sizeX;
+    painting.sizeY = sizeY;
+    painting.isDead = false;
+
+    {
+        std::lock_guard<std::mutex> lock(paintingEntitiesMutex_);
+        paintingEntities_.push_back(std::move(painting));
+    }
+
+    // Broadcast S10 SpawnPainting to all clients
+    {
+        std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
+        for (auto& conn : connections_) {
+            if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+            auto handler = conn->getHandler();
+            auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+            if (ph) ph->sendSpawnPainting(*conn, eid, artTitle, blockX, blockY, blockZ, hangingDirection);
+        }
+    }
+
+    std::cout << "[Painting] Spawned \"" << artTitle << "\" (entity " << eid
+              << ") at " << blockX << "," << blockY << "," << blockZ
+              << " dir=" << hangingDirection << "\n";
+
+    return eid;
+}
+
+void MinecraftServer::removePainting(int32_t entityId, bool dropItem) {
+    double dropX = 0, dropY = 0, dropZ = 0;
+    bool found = false;
+
+    {
+        std::lock_guard<std::mutex> lock(paintingEntitiesMutex_);
+        for (auto& p : paintingEntities_) {
+            if (p.entityId == entityId && !p.isDead) {
+                p.isDead = true;
+                dropX = static_cast<double>(p.blockX) + 0.5;
+                dropY = static_cast<double>(p.blockY) + 0.5;
+                dropZ = static_cast<double>(p.blockZ) + 0.5;
+                found = true;
+                break;
+            }
+        }
+    }
+
+    if (!found) return;
+
+    // Broadcast S13 DestroyEntities
+    {
+        std::vector<int32_t> destroyIds = { entityId };
+        std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
+        for (auto& conn : connections_) {
+            if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+            auto handler = conn->getHandler();
+            auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+            if (ph) ph->sendDestroyEntities(*conn, destroyIds);
+        }
+    }
+
+    // Drop painting item (321) in survival — Java: EntityPainting.onBroken()
+    if (dropItem) {
+        spawnItemDrop(dropX, dropY, dropZ, 321, 0, 1);
+    }
+
+    std::cout << "[Painting] Removed entity " << entityId << "\n";
 }
 
 } // namespace mccpp

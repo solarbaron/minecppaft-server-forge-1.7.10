@@ -1121,6 +1121,35 @@ public:
     /** Tick all boat entities (water physics, steering, collision, broadcast). */
     void tickBoats();
 
+    // ─── Painting entities ──────────────────────────────────────────────
+    // Java reference: EntityPainting — wall-hung decorative entity
+    struct SpawnedPainting {
+        int32_t entityId = 0;
+        int32_t blockX = 0, blockY = 0, blockZ = 0;  // Java: field_146063_b/c/d (tile position)
+        int32_t hangingDirection = 0;   // Java: EntityHanging.hangingDirection (0-3)
+        std::string artTitle;           // Java: EntityPainting.art.title
+        int32_t sizeX = 16, sizeY = 16; // Pixel dimensions (16/32/48/64)
+        bool isDead = false;
+    };
+    mutable std::mutex paintingEntitiesMutex_;
+    std::vector<SpawnedPainting> paintingEntities_;
+    std::atomic<int32_t> nextPaintingEntityId_{1200000};
+
+    /**
+     * Spawn a painting entity on a wall and broadcast S10 to all clients.
+     * Java reference: EntityPainting(World, x, y, z, direction) + ItemHangingEntity.onItemUse()
+     * @return entity ID of the spawned painting, or -1 on failure
+     */
+    int32_t spawnPainting(int32_t blockX, int32_t blockY, int32_t blockZ,
+                          int32_t hangingDirection, const std::string& artTitle,
+                          int32_t sizeX, int32_t sizeY);
+
+    /**
+     * Remove a painting entity by ID, broadcast S13, drop item in survival.
+     * Java reference: EntityHanging.attackEntityFrom() → onBroken()
+     */
+    void removePainting(int32_t entityId, bool dropItem);
+
     // ─── Primed TNT entities ────────────────────────────────────────────
     // Java reference: EntityTNTPrimed — fuse countdown with gravity physics
     struct SpawnedTNTPrimed {

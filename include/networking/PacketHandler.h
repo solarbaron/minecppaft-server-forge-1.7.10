@@ -423,6 +423,15 @@ public:
                          double x, double y, double z, int16_t xpValue);
 
     /**
+     * Send S10 SpawnPainting to the client.
+     * Java reference: S10PacketSpawnPainting
+     */
+    void sendSpawnPainting(Connection& conn, int32_t entityId,
+                           const std::string& artTitle,
+                           int32_t blockX, int32_t blockY, int32_t blockZ,
+                           int32_t direction);
+
+    /**
      * Send S0F SpawnMob to the client.
      * Java reference: S0FPacketSpawnMob
      */

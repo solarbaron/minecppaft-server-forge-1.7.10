@@ -2010,6 +2010,23 @@ void PlayHandler::sendSpawnExpOrb(Connection& conn, int32_t entityId,
     conn.sendPacket(std::move(pkt));
 }
 
+void PlayHandler::sendSpawnPainting(Connection& conn, int32_t entityId,
+                                     const std::string& artTitle,
+                                     int32_t blockX, int32_t blockY, int32_t blockZ,
+                                     int32_t direction) {
+    // Java reference: S10PacketSpawnPainting.writePacketData()
+    // Format: VarInt entityId, String title, Int x, Int y, Int z, Int direction
+    std::vector<uint8_t> pkt;
+    writeVarInt(pkt, ClientboundPacket::SpawnPainting);
+    writeVarInt(pkt, entityId);
+    writeString(pkt, artTitle);
+    writeInt(pkt, blockX);
+    writeInt(pkt, blockY);
+    writeInt(pkt, blockZ);
+    writeInt(pkt, direction);
+    conn.sendPacket(std::move(pkt));
+}
+
 void PlayHandler::sendEntityMetadataItem(Connection& conn, int32_t entityId,
                                           int16_t itemId, int8_t stackSize, int16_t damage) {
     // Java reference: S1CPacketEntityMetadata + DataWatcher serialization
@@ -5305,7 +5322,132 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
                 case 392: placeBlockId = 142; break; // Potato → potato crop
                 case 360: placeBlockId = 105; break; // Melon seeds → melon stem
                 case 361: placeBlockId = 104; break; // Pumpkin seeds → pumpkin stem
-                case 321: break; // Paintings — entity, not block
+                case 321: {
+                    // ─── Painting placement — Java: ItemHangingEntity.onItemUse() ───
+                    // Paintings are entities, not blocks. Handle immediately and return.
+                    // Only wall faces (2-5) are valid; map face → hangingDirection
+                    static const int facingToDirection[6] = {-1, -1, 2, 0, 1, 3};
+                    if (direction < 2 || direction > 5) break; // top/bottom → invalid
+                    int32_t hangDir = facingToDirection[direction];
+                    if (hangDir < 0) break;
+
+                    // EnumArt table — Java: EntityPainting$EnumArt
+                    struct EnumArt { const char* title; int sizeX; int sizeY; };
+                    static const EnumArt allArt[] = {
+                        {"Kebab",16,16}, {"Aztec",16,16}, {"Alban",16,16},
+                        {"Aztec2",16,16}, {"Bomb",16,16}, {"Plant",16,16},
+                        {"Wasteland",16,16}, {"Pool",32,16}, {"Courbet",32,16},
+                        {"Sea",32,16}, {"Sunset",32,16}, {"Creebet",32,16},
+                        {"Wanderer",16,32}, {"Graham",16,32}, {"Match",32,32},
+                        {"Bust",32,32}, {"Stage",32,32}, {"Void",32,32},
+                        {"SkullAndRoses",32,32}, {"Wither",32,32},
+                        {"Fighters",64,32}, {"Pointer",64,64}, {"Pigscene",64,64},
+                        {"BurningSkull",64,64}, {"Skeleton",64,48}, {"DonkeyKong",64,48}
+                    };
+                    static const int artCount = sizeof(allArt) / sizeof(allArt[0]);
+
+                    // The block position where the painting hangs is the adjacent-to-wall block
+                    // (placeX/Y/Z is the air block offset by face direction, already computed)
+                    // Actually, paintings use the clicked block position (blockX/blockY/blockZ)
+                    // and the face direction — Java: EntityHanging stores field_146063_b/c/d
+                    // which is the block the painting is hung on (the wall block side)
+
+                    // Collect valid candidates
+                    struct Candidate { int artIdx; };
+                    std::vector<Candidate> candidates;
+
+                    for (int ai = 0; ai < artCount; ++ai) {
+                        int blocksW = allArt[ai].sizeX / 16;  // width in blocks
+                        int blocksH = allArt[ai].sizeY / 16;  // height in blocks
+
+                        // Java: EntityHanging.setDirection() computes bounding box
+                        // For 1×1 paintings, the painting occupies exactly placeX/Y/Z
+                        // For larger paintings, it's centered on the placement point
+                        // Center offsets: centerX = blocksW/2, centerY = blocksH/2
+                        // (integer division — e.g. 2/2=1, 1/2=0)
+
+                        // Compute the area the painting would cover
+                        // hangDir: 0=south(+Z), 1=west(-X), 2=north(-Z), 3=east(+X)
+                        // Horizontal axis perpendicular to the wall face
+                        int hDirX = 0, hDirZ = 0; // horizontal painting expansion dir
+                        int wallDx = 0, wallDz = 0; // direction INTO the wall (for support check)
+                        switch (hangDir) {
+                            case 0: hDirX = 1;  wallDz = 1;  break; // south: expands +X, wall is +Z
+                            case 1: hDirZ = 1;  wallDx = -1; break; // west: expands +Z, wall is -X
+                            case 2: hDirX = -1; wallDz = -1; break; // north: expands -X, wall is -Z
+                            case 3: hDirZ = -1; wallDx = 1;  break; // east: expands -Z, wall is +X
+                        }
+
+                        // Anchor: center the painting on placeX/placeZ for horizontal,
+                        // placeY for vertical. Java uses integer centering.
+                        int centerH = blocksW / 2;  // horizontal center offset
+                        int startH = -centerH;      // start of horizontal range (relative)
+                        int endH = startH + blocksW; // end (exclusive)
+                        int startV = 0;              // vertical start: bottom
+                        int endV = blocksH;          // vertical end (exclusive)
+
+                        // Check all blocks: painting must be in air, wall behind must be solid
+                        bool valid = true;
+                        for (int h = startH; h < endH && valid; ++h) {
+                            for (int v = startV; v < endV && valid; ++v) {
+                                int cx = placeX + hDirX * h;
+                                int cy = placeY + v;
+                                int cz = placeZ + hDirZ * h;
+
+                                // The painting position must be air (or replaceable)
+                                int airId = server_.getBlockIdInWorld(cx, cy, cz);
+                                if (airId != 0 && airId != 8 && airId != 9 &&
+                                    airId != 31 && airId != 32 && airId != 37 &&
+                                    airId != 38 && airId != 106) {
+                                    valid = false;
+                                    break;
+                                }
+
+                                // The wall block behind the painting must be solid
+                                int wallX = cx + wallDx;
+                                int wallZ = cz + wallDz;
+                                int wallId = server_.getBlockIdInWorld(wallX, cy, wallZ);
+                                if (wallId == 0) {
+                                    valid = false;
+                                    break;
+                                }
+                            }
+                        }
+
+                        if (valid) {
+                            candidates.push_back({ai});
+                        }
+                    }
+
+                    if (candidates.empty()) break; // No valid placement
+
+                    // Pick random candidate — Java: ArrayList.get(rand.nextInt(list.size()))
+                    int pick = std::rand() % static_cast<int>(candidates.size());
+                    int chosenIdx = candidates[pick].artIdx;
+
+                    // Spawn the painting entity
+                    server_.spawnPainting(placeX, placeY, placeZ, hangDir,
+                        allArt[chosenIdx].title,
+                        allArt[chosenIdx].sizeX, allArt[chosenIdx].sizeY);
+
+                    // Consume item in survival — Java: --itemstack.stackSize
+                    if (gameMode_ != 1) {
+                        auto held = inventory_.getCurrentItem();
+                        if (held) {
+                            int newSize = held->getStackSize() - 1;
+                            if (newSize <= 0) {
+                                inventory_.setInventorySlotContents(currentSlot_, std::nullopt);
+                            } else {
+                                ItemStack updated = *held;
+                                updated.setStackSize(newSize);
+                                inventory_.setInventorySlotContents(currentSlot_, updated);
+                            }
+                            sendSetSlot(conn, 0, static_cast<int16_t>(36 + currentSlot_),
+                                        inventory_.getStackInSlot(currentSlot_));
+                        }
+                    }
+                    return; // Painting handled — don't continue to block placement
+                }
                 case 389: placeBlockId = 140; break; // Flower pot item → flower pot block
                 case 397: placeBlockId = 144; break; // Skull item → skull block
                 case 287: placeBlockId = 132; break; // String → tripwire wire block
