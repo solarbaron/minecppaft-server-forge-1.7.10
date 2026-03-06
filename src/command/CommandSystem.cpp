@@ -386,6 +386,7 @@ void CommandGameRule::processCommand(ICommandSender& sender, const std::vector<s
                 if (args[0] == "doDaylightCycle") val = worlds[0]->doDaylightCycle ? "true" : "false";
                 else if (args[0] == "doMobSpawning") val = worlds[0]->doMobSpawning ? "true" : "false";
                 else if (args[0] == "doMobLoot") val = worlds[0]->doMobLoot ? "true" : "false";
+                else if (args[0] == "doFireTick") val = worlds[0]->doFireTick ? "true" : "false";
                 else if (args[0] == "keepInventory") val = worlds[0]->keepInventory ? "true" : "false";
                 sender.addChatMessage(args[0] + " = " + val);
             }
@@ -399,6 +400,7 @@ void CommandGameRule::processCommand(ICommandSender& sender, const std::vector<s
                 if (args[0] == "doDaylightCycle") worlds[0]->doDaylightCycle = val;
                 else if (args[0] == "doMobSpawning") worlds[0]->doMobSpawning = val;
                 else if (args[0] == "doMobLoot") worlds[0]->doMobLoot = val;
+                else if (args[0] == "doFireTick") worlds[0]->doFireTick = val;
                 else if (args[0] == "keepInventory") worlds[0]->keepInventory = val;
                 sender.addChatMessage("Game rule " + args[0] + " set to " + args[1]);
                 std::cout << "[Server] " << sender.getCommandSenderName() << " set gamerule "

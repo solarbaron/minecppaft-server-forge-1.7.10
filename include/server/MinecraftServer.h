@@ -885,6 +885,13 @@ private:
         int32_t allySummonCooldown = 0;              // Java: allySummonCooldown — 20 ticks after hit, triggers monster_egg search
         // ─── Skeleton type — Java: EntitySkeleton DataWatcher(13) ───
         int32_t skeletonType = 0;                    // 0=normal skeleton (bow), 1=wither skeleton (sword, Wither I on hit)
+        // ─── Leash state — Java: EntityLiving.isLeashed / leashedToEntity ───
+        bool isLeashed = false;                      // Java: EntityLiving.isLeashed
+        int32_t leashedToEntityId = -1;              // Entity ID of leash holder (player or leash knot, -1 = none)
+        // ─── Custom name — Java: EntityLiving DataWatcher(10) string, DataWatcher(11) byte ───
+        std::string customName;                      // Java: EntityLiving.getCustomNameTag() — DW 10
+        bool alwaysShowName = false;                 // Java: EntityLiving.getAlwaysRenderNameTag() — DW 11
+        bool isPersistenceRequired = false;          // Java: EntityLiving.persistenceRequired — prevents despawn
     };
     mutable std::mutex mobEntitiesMutex_;
     std::vector<SpawnedMob> mobEntities_;
@@ -893,10 +900,24 @@ private:
     static constexpr int MAX_PASSIVE_MOBS = 10;  // Java: EnumCreatureType.creature.maxNumber
     static constexpr int MAX_WATER_MOBS = 5;     // Java: EnumCreatureType.waterCreature.maxNumber
 
+    // ─── Leash knot entities ────────────────────────────────────────────
+    // Java reference: EntityLeashKnot — spawned on fence posts when tying mobs with leads
+    struct SpawnedLeashKnot {
+        int32_t entityId = 0;
+        int32_t blockX = 0, blockY = 0, blockZ = 0;  // Java: field_146063_b/c/d (fence position)
+        bool isDead = false;
+        int32_t tickCounter = 0;  // Java: EntityHanging.tickCounter1 — check onValidSurface every 100 ticks
+    };
+    mutable std::mutex leashKnotEntitiesMutex_;
+    std::vector<SpawnedLeashKnot> leashKnotEntities_;
+    std::atomic<int32_t> nextLeashKnotEntityId_{1500000};
+
     void spawnNaturalMobs();
     void spawnPassiveMobs();
     void spawnWaterMobs();
     void tickMobs();
+    /** Tick leash knot entities — Java: EntityHanging.onUpdate() + EntityLeashKnot.onValidSurface() */
+    void tickLeashKnots();
     void tickRandomBlocks();
     /** Tick a single Ender Dragon — Java: EntityDragon.onLivingUpdate() + onDeathUpdate() */
     void tickDragon(SpawnedMob& dragon, int64_t currentTick);

@@ -20,6 +20,7 @@
 #include "networking/TcpListener.h"
 #include "mechanics/FoodStats.h"
 #include "world/World.h"
+#include "world/WorldServer.h"
 #include "redstone/Redstone.h"
 #include "entity/EntityList.h"
 #include "worldgen/LootTables.h"
@@ -421,6 +422,7 @@ void MinecraftServer::tick() {
 
     // Tick mob entities (despawn tracking)
     tickMobs();
+    tickLeashKnots();
     tickArrows();
     tickThrowables();
     tickFishHooks();
@@ -2836,6 +2838,75 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
             }
         }
 
+        // ─── Player-vs-LeashKnot attack ──────────────────────────────
+        // Java: EntityLeashKnot inherits EntityHanging.attackEntityFrom()
+        // Leash knots are destroyed instantly on hit, releasing all attached mobs
+        {
+            std::lock_guard<std::mutex> knotLock(leashKnotEntitiesMutex_);
+            for (auto& knot : leashKnotEntities_) {
+                if (knot.entityId != targetEntityId || knot.isDead) continue;
+
+                bool isCreative = (attacker.getGameMode() == 1);
+                knot.isDead = true;
+
+                // Drop lead item (420) in survival — Java: EntityLeashKnot.onBroken
+                if (!isCreative) {
+                    spawnItemDrop(
+                        static_cast<double>(knot.blockX) + 0.5,
+                        static_cast<double>(knot.blockY) + 0.5,
+                        static_cast<double>(knot.blockZ) + 0.5,
+                        420, 0, 1);
+                }
+
+                // Unleash all mobs attached to this knot
+                // Java: EntityLiving.updateLeashedState → clearLeashed when holder isDead
+                {
+                    std::lock_guard<std::mutex> mobLock(mobEntitiesMutex_);
+                    for (auto& mob : mobEntities_) {
+                        if (mob.isDead || !mob.isLeashed) continue;
+                        if (mob.leashedToEntityId != knot.entityId) continue;
+
+                        mob.isLeashed = false;
+                        mob.leashedToEntityId = -1;
+
+                        // Drop lead per mob in survival — Java: clearLeashed(true, true)
+                        if (!isCreative) {
+                            spawnItemDrop(mob.posX, mob.posY, mob.posZ, 420, 0, 1);
+                        }
+
+                        // Broadcast S1B AttachEntity(leash=1, mobId, -1) — detach
+                        broadcastAttachEntity(1, mob.entityId, -1);
+
+                        std::cout << "[Lead] Mob " << mob.entityId
+                                  << " unleashed (knot " << knot.entityId << " destroyed)\n";
+                    }
+                }
+
+                // Broadcast S13 DestroyEntities for the knot
+                {
+                    std::vector<int32_t> destroyIds = { knot.entityId };
+                    std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
+                    for (auto& conn : connections_) {
+                        if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                        auto handler = conn->getHandler();
+                        auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                        if (ph) ph->sendDestroyEntities(*conn, destroyIds);
+                    }
+                }
+
+                // Play leash knot break sound
+                broadcastSound("leashknot.break",
+                    static_cast<double>(knot.blockX) + 0.5,
+                    static_cast<double>(knot.blockY) + 0.5,
+                    static_cast<double>(knot.blockZ) + 0.5,
+                    1.0f, 1.0f);
+
+                std::cout << "[LeashKnot] Entity " << knot.entityId
+                          << " destroyed by " << attacker.getPlayerName() << "\n";
+                return;
+            }
+        }
+
         // ─── Player-vs-Mob attack ────────────────────────────────────
         // If not a player target, check if it's a mob entity
         std::lock_guard<std::mutex> mobLock(mobEntitiesMutex_);
@@ -3508,6 +3579,230 @@ void MinecraftServer::handleEntityInteract(PlayHandler& player, Connection& conn
     auto heldItem = player.getHeldItem();
     int32_t heldId = heldItem ? heldItem->getItemId() : 0;
     int32_t gameMode = player.getGameMode();
+
+    // ─── Leash knot right-click — Java: EntityLeashKnot.interactFirst() ───
+    // If player holds lead: tie more leashed mobs to this knot
+    // If no mobs tied: destroy the knot (setDead)
+    // Creative: unleash all mobs attached to dying knot without dropping leads
+    {
+        bool foundKnot = false;
+        int32_t knotEntityId = -1;
+        int32_t knotBlockX = 0, knotBlockY = 0, knotBlockZ = 0;
+        {
+            std::lock_guard<std::mutex> knotLock(leashKnotEntitiesMutex_);
+            for (auto& knot : leashKnotEntities_) {
+                if (knot.entityId != targetEntityId || knot.isDead) continue;
+                foundKnot = true;
+                knotEntityId = knot.entityId;
+                knotBlockX = knot.blockX;
+                knotBlockY = knot.blockY;
+                knotBlockZ = knot.blockZ;
+                break;
+            }
+        }
+
+        if (foundKnot) {
+            bool anyTied = false;
+
+            // Java: if (itemStack != null && itemStack.getItem() == Items.lead)
+            // Try to tie more mobs to this knot
+            if (heldId == 420) {
+                double d = 7.0;
+                double kx = static_cast<double>(knotBlockX) + 0.5;
+                double ky = static_cast<double>(knotBlockY) + 0.5;
+                double kz = static_cast<double>(knotBlockZ) + 0.5;
+
+                std::lock_guard<std::mutex> lock(mobEntitiesMutex_);
+                for (auto& mob : mobEntities_) {
+                    if (mob.isDead || !mob.isLeashed) continue;
+                    if (mob.leashedToEntityId != player.getEntityId()) continue;
+                    double dx = mob.posX - kx;
+                    double dy = mob.posY - ky;
+                    double dz = mob.posZ - kz;
+                    if (std::abs(dx) > d || std::abs(dy) > d || std::abs(dz) > d) continue;
+
+                    mob.leashedToEntityId = knotEntityId;
+                    broadcastAttachEntity(1, mob.entityId, knotEntityId);
+                    anyTied = true;
+
+                    std::cout << "[Lead] " << player.getPlayerName()
+                              << " tied mob " << mob.entityId
+                              << " (type=" << mob.mobType << ") to knot " << knotEntityId << "\n";
+                }
+            }
+
+            // Java: if (!bl) { this.setDead(); ... }
+            // No mobs were tied → destroy the knot
+            if (!anyTied) {
+                // Mark knot as dead
+                {
+                    std::lock_guard<std::mutex> knotLock(leashKnotEntitiesMutex_);
+                    for (auto& knot : leashKnotEntities_) {
+                        if (knot.entityId == knotEntityId) {
+                            knot.isDead = true;
+                            break;
+                        }
+                    }
+                }
+
+                // If creative, unleash all mobs attached to this knot without dropping leads
+                // Java: if (entityPlayer.capabilities.isCreativeMode) { clearLeashed(true, false) }
+                if (gameMode == 1) {
+                    std::lock_guard<std::mutex> mobLock(mobEntitiesMutex_);
+                    for (auto& mob : mobEntities_) {
+                        if (mob.isDead || !mob.isLeashed) continue;
+                        if (mob.leashedToEntityId != knotEntityId) continue;
+                        mob.isLeashed = false;
+                        mob.leashedToEntityId = -1;
+                        broadcastAttachEntity(1, mob.entityId, -1);
+                    }
+                }
+
+                // Broadcast S13 DestroyEntities
+                {
+                    std::vector<int32_t> destroyIds = { knotEntityId };
+                    std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
+                    for (auto& c : connections_) {
+                        if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
+                        auto handler = c->getHandler();
+                        auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                        if (ph) ph->sendDestroyEntities(*c, destroyIds);
+                    }
+                }
+
+                broadcastSound("leashknot.break",
+                    static_cast<double>(knotBlockX) + 0.5,
+                    static_cast<double>(knotBlockY) + 0.5,
+                    static_cast<double>(knotBlockZ) + 0.5,
+                    1.0f, 1.0f);
+
+                std::cout << "[LeashKnot] Entity " << knotEntityId
+                          << " destroyed via interact by " << player.getPlayerName() << "\n";
+            } else {
+                broadcastSound("leashknot.place",
+                    static_cast<double>(knotBlockX) + 0.5,
+                    static_cast<double>(knotBlockY) + 0.5,
+                    static_cast<double>(knotBlockZ) + 0.5,
+                    1.0f, 1.0f);
+            }
+            return;
+        }
+    }
+
+
+    // ─── Leash interactions — Java: EntityLiving.interactFirst() ──────
+    // This fires BEFORE any mob-specific interact(), matching Java's ordering.
+    // 1) If mob is already leashed to THIS player → unleash, drop lead (survival)
+    // 2) If player holds lead (420) and mob allows leashing → leash to player
+    {
+        std::lock_guard<std::mutex> lock(mobEntitiesMutex_);
+        for (auto& mob : mobEntities_) {
+            if (mob.entityId != targetEntityId) continue;
+            if (mob.isDead) break;
+
+            // Case 1: mob already leashed to this player → unleash
+            // Java: if (this.getLeashed() && this.getLeashedToEntity() == entityPlayer)
+            if (mob.isLeashed && mob.leashedToEntityId == player.getEntityId()) {
+                mob.isLeashed = false;
+                mob.leashedToEntityId = -1;
+
+                // Java: clearLeashed(true, !isCreativeMode) — drop lead in survival
+                if (gameMode != 1) {
+                    spawnItemDrop(mob.posX, mob.posY, mob.posZ, 420, 0, 1);
+                }
+
+                // Broadcast S1B AttachEntity(leash=1, mobId, -1) — detach
+                // Java: EntityTracker.sendToAllTrackingEntity(this, new S1BPacketEntityAttach(1, this, null))
+                broadcastAttachEntity(1, mob.entityId, -1);
+
+                std::cout << "[Lead] " << player.getPlayerName()
+                          << " unleashed mob " << mob.entityId
+                          << " (type=" << mob.mobType << ")\n";
+                return;
+            }
+
+            // Case 2: player holds lead (420) and mob allows leashing
+            // Java: if (itemStack.getItem() == Items.lead && this.allowLeashing())
+            if (heldId == 420) {
+                // Java: allowLeashing() = !getLeashed() && !(this instanceof IMob)
+                // Only passive mobs (not hostile) can be leashed, and must not already be leashed
+                if (!mob.isLeashed && mob.isPassive) {
+                    // Tameable mobs: only owner can leash
+                    // Java: if (this instanceof EntityTameable && ((EntityTameable)this).isTamed())
+                    //          → only if func_152114_e(player) (owner check)
+                    bool canLeash = true;
+                    if (mob.isTamed) {
+                        // Only owner can leash tamed mobs
+                        canLeash = (mob.ownerUuid == player.getUuid());
+                    }
+
+                    if (canLeash) {
+                        mob.isLeashed = true;
+                        mob.leashedToEntityId = player.getEntityId();
+
+                        // Consume lead in survival — Java: --itemStack.stackSize
+                        if (gameMode != 1) {
+                            player.decrHeldItem();
+                        }
+                        player.sendWindowItems(conn);
+
+                        // Broadcast S1B AttachEntity(leash=1, mobId, playerEntityId)
+                        // Java: EntityTracker.sendToAllTrackingEntity(this, new S1BPacketEntityAttach(1, this, leashedToEntity))
+                        broadcastAttachEntity(1, mob.entityId, player.getEntityId());
+
+                        std::cout << "[Lead] " << player.getPlayerName()
+                                  << " leashed mob " << mob.entityId
+                                  << " (type=" << mob.mobType << ")\n";
+                        return;
+                    }
+                }
+            }
+            break;
+        }
+    }
+
+    // ─── Name Tag interaction (item 421) — Java: ItemNameTag.itemInteractionForEntity() ──
+    // Right-click mob with a renamed name tag → sets custom name on mob
+    // Java: if (!itemStack.hasDisplayName()) return false;
+    //       entityLiving.setCustomNameTag(itemStack.getDisplayName());
+    //       entityLiving.enablePersistence();
+    //       --itemStack.stackSize;
+    if (heldId == 421 && heldItem && heldItem->hasCustomName()) {
+        std::lock_guard<std::mutex> lock(mobEntitiesMutex_);
+        for (auto& mob : mobEntities_) {
+            if (mob.entityId != targetEntityId) continue;
+            if (mob.isDead) break;
+
+            // Java: entityLiving.setCustomNameTag(displayName) — DataWatcher 10 (string)
+            mob.customName = heldItem->getCustomName();
+            mob.alwaysShowName = true;
+            mob.isPersistenceRequired = true;
+
+            // Consume name tag in survival — Java: --itemStack.stackSize
+            if (gameMode != 1) {
+                player.decrHeldItem();
+            }
+            player.sendWindowItems(conn);
+
+            // Broadcast DataWatcher 10 (string: custom name) + 11 (byte: always show = 1)
+            {
+                auto namePkt = PacketBuilder::entityMetadataString(mob.entityId, 10, mob.customName);
+                auto showPkt = PacketBuilder::entityMetadataByte(mob.entityId, 11, 1);
+                std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
+                for (auto& c : connections_) {
+                    if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
+                    c->sendPacket(namePkt);
+                    c->sendPacket(showPkt);
+                }
+            }
+
+            std::cout << "[NameTag] " << player.getPlayerName()
+                      << " named mob " << mob.entityId
+                      << " (type=" << mob.mobType << ") → \""
+                      << mob.customName << "\"\n";
+            return;
+        }
+    }
 
     // ─── Shears interactions (item 359) ──────────────────────────────
     // Java: EntitySheep.interact() + EntityMooshroom.interact()
@@ -7044,6 +7339,98 @@ void MinecraftServer::spawnPassiveMobs() {
     }
 }
 
+void MinecraftServer::tickLeashKnots() {
+    // Java reference: EntityHanging.onUpdate() — increments tickCounter1, checks
+    // onValidSurface() every 100 ticks. EntityLeashKnot.onValidSurface() returns
+    // true only if block.getRenderType() == 11 (fence-type blocks).
+    std::vector<int32_t> deadKnotIds;
+
+    {
+        std::lock_guard<std::mutex> lock(leashKnotEntitiesMutex_);
+        for (auto& knot : leashKnotEntities_) {
+            if (knot.isDead) continue;
+            ++knot.tickCounter;
+            if (knot.tickCounter % 100 != 0) continue;
+
+            // Check if fence block still exists at knot position
+            int32_t blockId = getBlockIdInWorld(knot.blockX, knot.blockY, knot.blockZ);
+            // Fence block IDs: 85=oak fence, 113=nether brick fence, 188-192=other wood fences
+            bool isFence = (blockId == 85 || blockId == 113 ||
+                            (blockId >= 188 && blockId <= 192));
+            if (isFence) continue;
+
+            // Fence gone — destroy this knot
+            knot.isDead = true;
+            deadKnotIds.push_back(knot.entityId);
+        }
+    }
+
+    // Process dead knots: unleash attached mobs, drop leads, broadcast
+    for (int32_t knotId : deadKnotIds) {
+        // Find knot position for sound
+        double knotX = 0, knotY = 0, knotZ = 0;
+        {
+            std::lock_guard<std::mutex> lock(leashKnotEntitiesMutex_);
+            for (auto& knot : leashKnotEntities_) {
+                if (knot.entityId == knotId) {
+                    knotX = static_cast<double>(knot.blockX) + 0.5;
+                    knotY = static_cast<double>(knot.blockY) + 0.5;
+                    knotZ = static_cast<double>(knot.blockZ) + 0.5;
+                    break;
+                }
+            }
+        }
+
+        // Unleash all mobs tied to this knot — Java: clearLeashed(true, true)
+        {
+            std::lock_guard<std::mutex> lock(mobEntitiesMutex_);
+            for (auto& mob : mobEntities_) {
+                if (mob.isDead || !mob.isLeashed) continue;
+                if (mob.leashedToEntityId != knotId) continue;
+
+                mob.isLeashed = false;
+                mob.leashedToEntityId = -1;
+
+                // Drop lead — Java: clearLeashed(true, true) → entityDropItem(Items.lead)
+                spawnItemDrop(mob.posX, mob.posY, mob.posZ, 420, 0, 1);
+
+                // Broadcast S1B AttachEntity(leash=1, mobId, -1) — detach
+                broadcastAttachEntity(1, mob.entityId, -1);
+
+                std::cout << "[LeashKnot] Mob " << mob.entityId
+                          << " unleashed (knot " << knotId << " invalid surface)\n";
+            }
+        }
+
+        // Broadcast S13 DestroyEntities for the knot
+        {
+            std::vector<int32_t> destroyIds = { knotId };
+            std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
+            for (auto& conn : connections_) {
+                if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                auto handler = conn->getHandler();
+                auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                if (ph) ph->sendDestroyEntities(*conn, destroyIds);
+            }
+        }
+
+        // Play leash knot break sound
+        broadcastSound("leashknot.break", knotX, knotY, knotZ, 1.0f, 1.0f);
+
+        std::cout << "[LeashKnot] Entity " << knotId
+                  << " destroyed (fence block removed)\n";
+    }
+
+    // Clean up dead knots from vector
+    if (!deadKnotIds.empty()) {
+        std::lock_guard<std::mutex> lock(leashKnotEntitiesMutex_);
+        leashKnotEntities_.erase(
+            std::remove_if(leashKnotEntities_.begin(), leashKnotEntities_.end(),
+                [](const SpawnedLeashKnot& k) { return k.isDead; }),
+            leashKnotEntities_.end());
+    }
+}
+
 void MinecraftServer::tickMobs() {
     // Despawn mobs that are old AND far from all players
     // Java reference: EntityLiving.despawnEntity() — >600 ticks + >32 blocks
@@ -7208,6 +7595,69 @@ void MinecraftServer::tickMobs() {
                     float basePitch = 0.8f + ((float)(rand() % 40) / 100.0f);
                     if (mob.mobType == 65) basePitch *= 0.95f;
                     broadcastSound(sound, mob.posX, mob.posY, mob.posZ, vol, basePitch);
+                }
+            }
+
+            // ─── Leash distance break — Java: EntityCreature.updateLeashedState() ──
+            // Every tick, check if leashed mob is >10 blocks from holder → break leash
+            if (mob.isLeashed && mob.leashedToEntityId >= 0) {
+                double holderX = 0, holderY = 0, holderZ = 0;
+                bool holderFound = false;
+
+                // Check if holder is a player
+                {
+                    std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
+                    for (auto& c : connections_) {
+                        if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
+                        auto handler = c->getHandler();
+                        auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                        if (ph && ph->getEntityId() == mob.leashedToEntityId) {
+                            holderX = ph->getPlayerX();
+                            holderY = ph->getPlayerY();
+                            holderZ = ph->getPlayerZ();
+                            holderFound = true;
+                            break;
+                        }
+                    }
+                }
+
+                // Check if holder is a leash knot
+                if (!holderFound) {
+                    std::lock_guard<std::mutex> knotLock(leashKnotEntitiesMutex_);
+                    for (auto& knot : leashKnotEntities_) {
+                        if (!knot.isDead && knot.entityId == mob.leashedToEntityId) {
+                            holderX = static_cast<double>(knot.blockX) + 0.5;
+                            holderY = static_cast<double>(knot.blockY) + 0.5;
+                            holderZ = static_cast<double>(knot.blockZ) + 0.5;
+                            holderFound = true;
+                            break;
+                        }
+                    }
+                }
+
+                // Java: if holder is null/dead → clearLeashed(true, true)
+                // If distance > 10.0 → clearLeashed(true, true)
+                bool shouldBreak = !holderFound;
+                if (holderFound) {
+                    double dx = mob.posX - holderX;
+                    double dy = mob.posY - holderY;
+                    double dz = mob.posZ - holderZ;
+                    double dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+                    if (dist > 10.0) shouldBreak = true;
+                }
+
+                if (shouldBreak) {
+                    mob.isLeashed = false;
+                    mob.leashedToEntityId = -1;
+
+                    // Drop lead at mob position — Java: clearLeashed(true, true)
+                    spawnItemDrop(mob.posX, mob.posY, mob.posZ, 420, 0, 1);
+
+                    // Broadcast S1B AttachEntity(leash=1, mobId, -1) — detach
+                    broadcastAttachEntity(1, mob.entityId, -1);
+
+                    std::cout << "[Lead] Mob " << mob.entityId
+                              << " leash broken (holder too far or missing)\n";
                 }
             }
 
@@ -11978,33 +12428,39 @@ int32_t MinecraftServer::spawnLightning(double x, double y, double z) {
         EntityLightningBolt::EXPLODE_VOLUME,
         0.5f + static_cast<float>(rand() % 200) / 1000.0f);
 
-    // Fire at impact — Java: setFire at posX/posY/posZ if air + doFireTick
+    // Fire at impact — Java: EntityLightningBolt constructor
+    // Fire only on Normal/Hard difficulty AND doFireTick gamerule
+    // Java: World.difficultySetting >= 2 && World.getGameRuleBooleanValue("doFireTick")
     if (!worlds_.empty()) {
         auto* world = worlds_[0].get();
-        int32_t fx = static_cast<int32_t>(std::floor(x));
-        int32_t fy = static_cast<int32_t>(std::floor(y));
-        int32_t fz = static_cast<int32_t>(std::floor(z));
+        bool canPlaceFire = world->doFireTick &&
+                            (world->difficulty == Difficulty::NORMAL ||
+                             world->difficulty == Difficulty::HARD);
+        if (canPlaceFire) {
+            int32_t fx = static_cast<int32_t>(std::floor(x));
+            int32_t fy = static_cast<int32_t>(std::floor(y));
+            int32_t fz = static_cast<int32_t>(std::floor(z));
 
-        Block* atPos = world->getBlock(fx, fy, fz);
-        if (!atPos || Block::getIdFromBlock(atPos) == 0) {
-            world->setBlock(fx, fy, fz, Block::getBlockById(51)); // fire
-            world->setBlockMetadata(fx, fy, fz, 0);
-            broadcastBlockChange(fx, fy, fz, 51, 0);
-        }
+            Block* atPos = world->getBlock(fx, fy, fz);
+            if (!atPos || Block::getIdFromBlock(atPos) == 0) {
+                world->setBlock(fx, fy, fz, Block::getBlockById(51)); // fire
+                world->setBlockMetadata(fx, fy, fz, 0);
+                broadcastBlockChange(fx, fy, fz, 51, 0);
+            }
 
-        // 4 random nearby fires — Java: ±1 block XYZ
-        for (int i = 0; i < EntityLightningBolt::INITIAL_FIRE_ATTEMPTS; ++i) {
-            int32_t rx = fx + (rand() % 3) - 1;
-            int32_t ry = fy + (rand() % 3) - 1;
-            int32_t rz = fz + (rand() % 3) - 1;
-            Block* nearBlock = world->getBlock(rx, ry, rz);
-            if (!nearBlock || Block::getIdFromBlock(nearBlock) == 0) {
-                // Check below has solid block
-                Block* belowBlock = world->getBlock(rx, ry - 1, rz);
-                if (belowBlock && Block::getIdFromBlock(belowBlock) != 0) {
-                    world->setBlock(rx, ry, rz, Block::getBlockById(51));
-                    world->setBlockMetadata(rx, ry, rz, 0);
-                    broadcastBlockChange(rx, ry, rz, 51, 0);
+            // 4 random nearby fires — Java: ±1 block XYZ
+            for (int i = 0; i < EntityLightningBolt::INITIAL_FIRE_ATTEMPTS; ++i) {
+                int32_t rx = fx + (rand() % 3) - 1;
+                int32_t ry = fy + (rand() % 3) - 1;
+                int32_t rz = fz + (rand() % 3) - 1;
+                Block* nearBlock = world->getBlock(rx, ry, rz);
+                if (!nearBlock || Block::getIdFromBlock(nearBlock) == 0) {
+                    Block* belowBlock = world->getBlock(rx, ry - 1, rz);
+                    if (belowBlock && Block::getIdFromBlock(belowBlock) != 0) {
+                        world->setBlock(rx, ry, rz, Block::getBlockById(51));
+                        world->setBlockMetadata(rx, ry, rz, 0);
+                        broadcastBlockChange(rx, ry, rz, 51, 0);
+                    }
                 }
             }
         }
@@ -12056,7 +12512,8 @@ void MinecraftServer::tickLightning() {
             double minX, minY, minZ, maxX, maxY, maxZ;
             bolt.logic.getDamageBounds(minX, minY, minZ, maxX, maxY, maxZ);
 
-            // Damage nearby players — Java: 5 hearts (10 damage)
+            // Damage nearby players — Java: Entity.onStruckByLightning
+            // dealFireDamage(5) + setFire(8) → 5.0f damage + 160 fire ticks
             std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
             for (auto& conn : connections_) {
                 if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
@@ -12066,19 +12523,54 @@ void MinecraftServer::tickLightning() {
 
                 double px = ph->getPlayerX(), py = ph->getPlayerY(), pz = ph->getPlayerZ();
                 if (px >= minX && px <= maxX && py >= minY && py <= maxY && pz >= minZ && pz <= maxZ) {
-                    // Java: entity.attackEntityFrom(DamageSource.lightning, 5.0f)
+                    // Java: Entity.onStruckByLightning → dealFireDamage(5) + setFire(8)
                     ph->applyDamage(5.0f);
+                    ph->setOnFire(160);  // 8 seconds = 160 ticks
                 }
             }
 
-            // Damage nearby mobs
+            // Mob onStruckByLightning — per-type handling
             {
                 std::lock_guard<std::mutex> mobLock(mobEntitiesMutex_);
+                std::vector<std::pair<uint8_t, std::array<double, 3>>> spawnQueue; // mobType, {x,y,z}
                 for (auto& mob : mobEntities_) {
                     if (mob.isDead) continue;
                     if (mob.posX >= minX && mob.posX <= maxX &&
                         mob.posY >= minY && mob.posY <= maxY &&
                         mob.posZ >= minZ && mob.posZ <= maxZ) {
+
+                        // Pig (90) → Zombie Pigman (57)
+                        // Java: EntityPig.onStruckByLightning — no super call,
+                        // spawns pigman with golden sword, kills pig
+                        if (mob.mobType == 90) {
+                            spawnQueue.push_back({57, {mob.posX, mob.posY, mob.posZ}});
+                            mob.isDead = true;
+                            mob.health = 0;
+                            continue;
+                        }
+
+                        // Creeper (50) → Charged Creeper
+                        // Java: EntityCreeper.onStruckByLightning — super + DW 17 = 1
+                        if (mob.mobType == 50) {
+                            mob.health -= 5.0f;
+                            if (mob.health <= 0) {
+                                mob.isDead = true;
+                                mob.health = 0;
+                            } else {
+                                // Set powered flag — DataWatcher index 17 = byte 1
+                                auto dw17Pkt = PacketBuilder::entityMetadataByte(
+                                    mob.entityId, 17, 1);
+                                for (auto& c : connections_) {
+                                    if (!c->isConnected() ||
+                                        c->getState() != ConnectionState::Play) continue;
+                                    c->sendPacket(dw17Pkt);
+                                }
+                            }
+                            continue;
+                        }
+
+                        // All other mobs — Java: Entity.onStruckByLightning
+                        // dealFireDamage(5) — SpawnedMob has no fire-tick field
                         mob.health -= 5.0f;
                         if (mob.health <= 0) {
                             mob.isDead = true;
@@ -12086,20 +12578,43 @@ void MinecraftServer::tickLightning() {
                         }
                     }
                 }
+
+                // Spawn queued pigmen outside the mob iteration loop
+                for (auto& [mobType, pos] : spawnQueue) {
+                    // summonMob handles entity creation + broadcast
+                    int32_t pigmanEid = summonMob(mobType, pos[0], pos[1], pos[2]);
+                    // Equip golden sword (item 283) in slot 0 (held item)
+                    // Java: EntityPigZombie.setCurrentItemOrArmor(0, new ItemStack(Items.golden_sword))
+                    ItemStack goldenSword(283, 1, 0);
+                    for (auto& c : connections_) {
+                        if (!c->isConnected() ||
+                            c->getState() != ConnectionState::Play) continue;
+                        auto h = c->getHandler();
+                        auto* p = dynamic_cast<PlayHandler*>(h.get());
+                        if (p) p->sendEntityEquipment(*c, pigmanEid, 0,
+                                                      std::optional<ItemStack>(goldenSword));
+                    }
+                }
             }
         }
 
-        // Re-strike fire
+        // Re-strike fire — gated by doFireTick gamerule AND difficulty (Normal/Hard)
+        // Java: World.getGameRuleBooleanValue("doFireTick") && difficultySetting >= 2
         if (result.tryFire && !worlds_.empty()) {
             auto* world = worlds_[0].get();
-            int32_t fx = static_cast<int32_t>(std::floor(bolt.logic.posX));
-            int32_t fy = static_cast<int32_t>(std::floor(bolt.logic.posY));
-            int32_t fz = static_cast<int32_t>(std::floor(bolt.logic.posZ));
-            Block* atPos = world->getBlock(fx, fy, fz);
-            if (!atPos || Block::getIdFromBlock(atPos) == 0) {
-                world->setBlock(fx, fy, fz, Block::getBlockById(51));
-                world->setBlockMetadata(fx, fy, fz, 0);
-                broadcastBlockChange(fx, fy, fz, 51, 0);
+            bool canPlaceFire = world->doFireTick &&
+                                (world->difficulty == Difficulty::NORMAL ||
+                                 world->difficulty == Difficulty::HARD);
+            if (canPlaceFire) {
+                int32_t fx = static_cast<int32_t>(std::floor(bolt.logic.posX));
+                int32_t fy = static_cast<int32_t>(std::floor(bolt.logic.posY));
+                int32_t fz = static_cast<int32_t>(std::floor(bolt.logic.posZ));
+                Block* atPos = world->getBlock(fx, fy, fz);
+                if (!atPos || Block::getIdFromBlock(atPos) == 0) {
+                    world->setBlock(fx, fy, fz, Block::getBlockById(51));
+                    world->setBlockMetadata(fx, fy, fz, 0);
+                    broadcastBlockChange(fx, fy, fz, 51, 0);
+                }
             }
         }
     }

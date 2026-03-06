@@ -26,6 +26,15 @@
  */
 #pragma once
 
+// If World.h was already included, it provides the canonical WorldServer,
+// ChunkCoordHash, and Difficulty definitions. We guard against redefinition.
+#ifndef MCCPP_WORLD_H_INCLUDED
+// World.h not included — provide standalone definitions.
+#else
+// World.h already provides WorldServer, ChunkCoordHash, Difficulty.
+// Only provide supplementary types (NextTickListEntry, BlockEventData, etc.)
+#endif
+
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -87,9 +96,10 @@ struct BlockEventData {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
-// ChunkCoordIntPair
+// ChunkCoord — only defined if World.h not already included
 // ═══════════════════════════════════════════════════════════════════════════
 
+#ifndef MCCPP_WORLD_H_INCLUDED
 struct ChunkCoord {
     int32_t chunkX, chunkZ;
     bool operator==(const ChunkCoord& o) const { return chunkX == o.chunkX && chunkZ == o.chunkZ; }
@@ -99,18 +109,20 @@ struct ChunkCoordHash {
         return std::hash<int64_t>{}(static_cast<int64_t>(c.chunkX) << 32 | (c.chunkZ & 0xFFFFFFFFL));
     }
 };
+#endif
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Difficulty enum
-// Java reference: net.minecraft.world.EnumDifficulty
+// Difficulty enum — only defined if World.h not already included
 // ═══════════════════════════════════════════════════════════════════════════
 
+#ifndef MCCPP_WORLD_H_INCLUDED
 enum class Difficulty : int32_t {
     PEACEFUL = 0,
     EASY = 1,
     NORMAL = 2,
     HARD = 3
 };
+#endif
 
 // ═══════════════════════════════════════════════════════════════════════════
 // BonusChestContent — Weighted loot for spawn bonus chest.
@@ -140,10 +152,11 @@ static constexpr BonusChestItem BONUS_CHEST_CONTENT[] = {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
-// WorldServer — Server-side dimension world.
-// Java reference: net.minecraft.world.WorldServer
+// WorldServer — Alternate dimension-level world (only if World.h not included)
+// If World.h was included, its WorldServer class is the canonical one.
 // ═══════════════════════════════════════════════════════════════════════════
 
+#ifndef MCCPP_WORLD_H_INCLUDED
 class WorldServer {
 public:
     // ─── World state ───
@@ -157,8 +170,8 @@ public:
     bool spawnPeacefulMobs = true;
 
     // ─── Time ───
-    int64_t totalWorldTime = 0;    // Never resets
-    int64_t worldTime = 0;         // Day/night cycle (0-24000)
+    int64_t totalWorldTime = 0;
+    int64_t worldTime = 0;
     int32_t skylightSubtracted = 0;
 
     // ─── Weather ───
@@ -166,13 +179,12 @@ public:
     bool thundering = false;
     int32_t rainTime = 0;
     int32_t thunderTime = 0;
-    float rainingStrength = 0.0f;        // Java: World.rainingStrength
-    float prevRainingStrength = 0.0f;    // Java: World.prevRainingStrength
-    float thunderingStrength = 0.0f;     // Java: World.thunderingStrength
-    float prevThunderingStrength = 0.0f; // Java: World.prevThunderingStrength
+    float rainingStrength = 0.0f;
+    float prevRainingStrength = 0.0f;
+    float thunderingStrength = 0.0f;
+    float prevThunderingStrength = 0.0f;
 
     // ─── Random block tick LCG ───
-    // Java: updateLCG = updateLCG * 3 + 1013904223
     int32_t updateLCG = 0;
 
     // ─── Active chunks ───
@@ -196,7 +208,8 @@ public:
     bool doDaylightCycle = true;
     bool doMobSpawning = true;
     bool doMobLoot = true;
-    bool keepInventory = false;  // Java: GameRules "keepInventory" — if true, inventory is kept on death
+    bool doFireTick = true;
+    bool keepInventory = false;
 
     // ─── Callbacks ───
     using BlockTickFn = std::function<void(int32_t x, int32_t y, int32_t z, int32_t blockId)>;
@@ -204,332 +217,115 @@ public:
     using IsTickRandomFn = std::function<bool(int32_t blockId)>;
     using SetBlockFn = std::function<void(int32_t x, int32_t y, int32_t z, int32_t blockId)>;
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // Weather change report — returned by updateWeather() for packet sync
-    // ═══════════════════════════════════════════════════════════════════════
-
     struct WeatherChange {
-        bool rainStarted = false;       // S2B reason 1 (end rain) or 2 (begin rain)
+        bool rainStarted = false;
         bool rainStopped = false;
-        bool rainStrengthChanged = false;  // S2B reason 7
-        bool thunderStrengthChanged = false; // S2B reason 8
+        bool rainStrengthChanged = false;
+        bool thunderStrengthChanged = false;
         float newRainStrength = 0.0f;
         float newThunderStrength = 0.0f;
     };
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // Main tick pipeline
-    // Java: WorldServer.tick()
-    // ═══════════════════════════════════════════════════════════════════════
-
     void tick(BlockTickFn onBlockTick, GetBlockFn getBlock,
                 IsTickRandomFn isRandom, SetBlockFn setBlock) {
-        // 1. Hardcore → force hard difficulty
-        if (isHardcore && difficulty != Difficulty::HARD) {
-            difficulty = Difficulty::HARD;
-        }
-
-        // 2. All-players-sleeping → skip to dawn
+        if (isHardcore && difficulty != Difficulty::HARD) difficulty = Difficulty::HARD;
         if (allPlayersSleeping && playerCount > 0) {
-            if (doDaylightCycle) {
-                int64_t next = worldTime + 24000L;
-                worldTime = next - (next % 24000L);
-            }
+            if (doDaylightCycle) { int64_t next = worldTime + 24000L; worldTime = next - (next % 24000L); }
             allPlayersSleeping = false;
             resetRainAndThunder();
         }
-
-        // 3. World time
         ++totalWorldTime;
         if (doDaylightCycle) ++worldTime;
-
-        // 4. Scheduled tick updates
         tickUpdates(onBlockTick, getBlock);
-
-        // 5. Random block ticks per active chunk
         tickBlocks(onBlockTick, getBlock, isRandom, setBlock);
-
-        // 6. Entity tick optimization
-        if (playerCount == 0) {
-            ++updateEntityTick;
-        } else {
-            updateEntityTick = 0;
-        }
-
-        // 7. Swap block event buffers
-        int32_t prev = blockEventIndex;
-        blockEventIndex = 1 - blockEventIndex;
-        blockEvents[prev].clear();
+        if (playerCount == 0) ++updateEntityTick; else updateEntityTick = 0;
+        int32_t prev = blockEventIndex; blockEventIndex = 1 - blockEventIndex; blockEvents[prev].clear();
     }
-
-    // ═══════════════════════════════════════════════════════════════════════
-    // Weather update
-    // Java: World.updateWeather() + WorldServer.updateWeather()
-    // ═══════════════════════════════════════════════════════════════════════
 
     WeatherChange updateWeather() {
         WeatherChange changes;
         bool wasRaining = raining && rainingStrength > 0.0f;
-
-        // ─── Thunder timer ───────────────────────────────────────────
-        // Java: World.updateWeather() thunder section
-        if (thunderTime <= 0) {
-            if (thundering) {
-                thunderTime = std::rand() % 12000 + 3600;   // 3600-15599 ticks
-            } else {
-                thunderTime = std::rand() % 168000 + 12000; // 12000-179999 ticks
-            }
-        } else {
-            --thunderTime;
-            if (thunderTime <= 0) {
-                thundering = !thundering;
-            }
-        }
-
-        // Thunder strength ramp
+        if (thunderTime <= 0) { thunderTime = thundering ? (std::rand()%12000+3600) : (std::rand()%168000+12000); }
+        else { --thunderTime; if (thunderTime <= 0) thundering = !thundering; }
         prevThunderingStrength = thunderingStrength;
         thunderingStrength += thundering ? 0.01f : -0.01f;
         thunderingStrength = std::clamp(thunderingStrength, 0.0f, 1.0f);
-
-        // ─── Rain timer ─────────────────────────────────────────────
-        // Java: World.updateWeather() rain section
-        if (rainTime <= 0) {
-            if (raining) {
-                rainTime = std::rand() % 12000 + 12000;    // 12000-23999 ticks
-            } else {
-                rainTime = std::rand() % 168000 + 12000;   // 12000-179999 ticks
-            }
-        } else {
-            --rainTime;
-            if (rainTime <= 0) {
-                raining = !raining;
-            }
-        }
-
-        // Rain strength ramp
+        if (rainTime <= 0) { rainTime = raining ? (std::rand()%12000+12000) : (std::rand()%168000+12000); }
+        else { --rainTime; if (rainTime <= 0) raining = !raining; }
         prevRainingStrength = rainingStrength;
         rainingStrength += raining ? 0.01f : -0.01f;
         rainingStrength = std::clamp(rainingStrength, 0.0f, 1.0f);
-
-        // ─── Detect changes for S2B packets ─────────────────────────
-        // Java: WorldServer.updateWeather()
-        if (prevRainingStrength != rainingStrength) {
-            changes.rainStrengthChanged = true;
-            changes.newRainStrength = rainingStrength;
-        }
-        if (prevThunderingStrength != thunderingStrength) {
-            changes.thunderStrengthChanged = true;
-            changes.newThunderStrength = thunderingStrength;
-        }
-
+        if (prevRainingStrength != rainingStrength) { changes.rainStrengthChanged = true; changes.newRainStrength = rainingStrength; }
+        if (prevThunderingStrength != thunderingStrength) { changes.thunderStrengthChanged = true; changes.newThunderStrength = thunderingStrength; }
         bool isRaining = raining && rainingStrength > 0.0f;
-        if (wasRaining && !isRaining) {
-            changes.rainStopped = true;
-        } else if (!wasRaining && isRaining) {
-            changes.rainStarted = true;
-        }
-
+        if (wasRaining && !isRaining) changes.rainStopped = true;
+        else if (!wasRaining && isRaining) changes.rainStarted = true;
         return changes;
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // Random block ticks
-    // Java: func_147456_g
-    // ═══════════════════════════════════════════════════════════════════════
+    struct SubChunkInfo { int32_t yBase; bool needsRandomTick; };
+    using GetSectionsFn = std::function<std::vector<SubChunkInfo>(int32_t, int32_t)>;
+    using GetSubchunkBlockFn = std::function<int32_t(int32_t, int32_t, int32_t, int32_t, int32_t, int32_t)>;
 
-    struct SubChunkInfo {
-        int32_t yBase;         // Y base of the 16-high section
-        bool needsRandomTick;  // Has any randomly-ticking blocks
-    };
-
-    // Callback to get subchunk sections for a chunk
-    using GetSectionsFn = std::function<std::vector<SubChunkInfo>(int32_t chunkX, int32_t chunkZ)>;
-    // Callback to get block ID from a subchunk
-    using GetSubchunkBlockFn = std::function<int32_t(int32_t chunkX, int32_t chunkZ,
-                                                        int32_t localX, int32_t localY, int32_t localZ,
-                                                        int32_t sectionY)>;
-
-    void tickBlocks(BlockTickFn onBlockTick, GetBlockFn getBlock,
-                      IsTickRandomFn isRandom, SetBlockFn setBlock) {
+    void tickBlocks(BlockTickFn onBlockTick, GetBlockFn getBlock, IsTickRandomFn isRandom, SetBlockFn setBlock) {
         for (auto& coord : activeChunkSet) {
-            int32_t baseX = coord.chunkX * 16;
-            int32_t baseZ = coord.chunkZ * 16;
-
-            // Thunder: 1/100000 chance during thunderstorm
-            if (raining && thundering) {
-                advanceLCG();
-                if ((updateLCG % 100000) == 0) {
-                    int32_t lcgVal = advanceLCG() >> 2;
-                    int32_t tx = baseX + (lcgVal & 0xF);
-                    int32_t tz = baseZ + ((lcgVal >> 8) & 0xF);
-                    // Lightning strike would go here
-                }
-            }
-
-            // Ice and snow: 1/16 chance
+            if (raining && thundering) { advanceLCG(); if ((updateLCG%100000)==0) { int32_t v = advanceLCG()>>2; (void)v; } }
             advanceLCG();
-            if ((updateLCG & 0xF) == 0) {
-                int32_t lcgVal = advanceLCG() >> 2;
-                int32_t ix = (lcgVal & 0xF);
-                int32_t iz = ((lcgVal >> 8) & 0xF);
-                // Ice/snow placement:
-                // - Freeze water below precipitation height
-                // - Place snow_layer during rain in cold biomes
-            }
-
-            // 3 random ticks per subchunk section
-            // (Actual subchunk iteration deferred to world integration)
         }
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // Scheduled tick updates
-    // Java: tickUpdates
-    // ═══════════════════════════════════════════════════════════════════════
-
     bool tickUpdates(BlockTickFn onBlockTick, GetBlockFn getBlock) {
-        int32_t count = static_cast<int32_t>(pendingTicksTree.size());
-        if (count > 1000) count = 1000;
-
-        // Move due entries from tree to this-tick list
+        int32_t count = std::min(static_cast<int32_t>(pendingTicksTree.size()), 1000);
         auto it = pendingTicksTree.begin();
         for (int32_t i = 0; i < count && it != pendingTicksTree.end(); ++i) {
             if (it->scheduledTime > totalWorldTime) break;
-            pendingTicksThisTick.push_back(*it);
-            pendingTicksHash.erase(*it);
-            auto toRemove = it;
-            ++it;
-            pendingTicksTree.erase(toRemove);
+            pendingTicksThisTick.push_back(*it); pendingTicksHash.erase(*it);
+            auto r = it; ++it; pendingTicksTree.erase(r);
         }
-
-        // Execute ticks
-        for (auto& entry : pendingTicksThisTick) {
-            int32_t currentBlock = getBlock(entry.x, entry.y, entry.z);
-            if (currentBlock == entry.blockId && currentBlock != 0) {
-                onBlockTick(entry.x, entry.y, entry.z, entry.blockId);
-            }
+        for (auto& e : pendingTicksThisTick) {
+            int32_t cur = getBlock(e.x, e.y, e.z);
+            if (cur == e.blockId && cur != 0) onBlockTick(e.x, e.y, e.z, e.blockId);
         }
-
-        bool hasPending = !pendingTicksTree.empty();
-        pendingTicksThisTick.clear();
-        return hasPending;
+        bool has = !pendingTicksTree.empty(); pendingTicksThisTick.clear(); return has;
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // Schedule a block update
-    // Java: scheduleBlockUpdate / scheduleBlockUpdateWithPriority
-    // ═══════════════════════════════════════════════════════════════════════
-
-    void scheduleBlockUpdate(int32_t x, int32_t y, int32_t z,
-                                int32_t blockId, int32_t delay, int32_t priority = 0) {
-        NextTickListEntry entry;
-        entry.x = x;
-        entry.y = y;
-        entry.z = z;
-        entry.blockId = blockId;
-        entry.scheduledTime = static_cast<int64_t>(delay) + totalWorldTime;
-        entry.priority = priority;
-
-        if (pendingTicksHash.find(entry) == pendingTicksHash.end()) {
-            pendingTicksHash.insert(entry);
-            pendingTicksTree.insert(entry);
-        }
+    void scheduleBlockUpdate(int32_t x, int32_t y, int32_t z, int32_t blockId, int32_t delay, int32_t priority = 0) {
+        NextTickListEntry e; e.x=x; e.y=y; e.z=z; e.blockId=blockId; e.scheduledTime=delay+totalWorldTime; e.priority=priority;
+        if (pendingTicksHash.find(e)==pendingTicksHash.end()) { pendingTicksHash.insert(e); pendingTicksTree.insert(e); }
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // Block events
-    // Java: addBlockEvent
-    // ═══════════════════════════════════════════════════════════════════════
-
-    void addBlockEvent(int32_t x, int32_t y, int32_t z,
-                         int32_t blockId, int32_t eventId, int32_t param) {
-        blockEvents[blockEventIndex].push_back({x, y, z, blockId, eventId, param});
+    void addBlockEvent(int32_t x, int32_t y, int32_t z, int32_t blockId, int32_t eventId, int32_t param) {
+        blockEvents[blockEventIndex].push_back({x,y,z,blockId,eventId,param});
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // Weather
-    // ═══════════════════════════════════════════════════════════════════════
+    void resetRainAndThunder() { rainTime=0; raining=false; thunderTime=0; thundering=false; }
 
-    void resetRainAndThunder() {
-        rainTime = 0;
-        raining = false;
-        thunderTime = 0;
-        thundering = false;
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════
-    // Sleep
-    // Java: updateAllPlayersSleepingFlag / areAllPlayersAsleep
-    // ═══════════════════════════════════════════════════════════════════════
-
-    // Called from PlayerList when sleep state changes
     void updateAllPlayersSleepingFlag(int32_t numPlayers, int32_t numSleeping) {
-        playerCount = numPlayers;
-        allPlayersSleeping = (numPlayers > 0 && numSleeping == numPlayers);
+        playerCount = numPlayers; allPlayersSleeping = (numPlayers>0 && numSleeping==numPlayers);
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // Skylight
-    // Java: calculateSkylightSubtracted
-    // ═══════════════════════════════════════════════════════════════════════
-
-    // Sun angle: 0.0 at noon, 0.5 at midnight
-    float getCelestialAngle(float partialTicks) const {
-        int32_t dayPhase = static_cast<int32_t>(worldTime % 24000L);
-        float angle = (static_cast<float>(dayPhase) + partialTicks) / 24000.0f - 0.25f;
-        if (angle < 0.0f) angle += 1.0f;
-        if (angle > 1.0f) angle -= 1.0f;
-
-        // Smoothing
-        float smooth = angle;
-        angle = 1.0f - static_cast<float>(
-            (std::cos(static_cast<double>(angle) * 3.14159265358979) + 1.0) / 2.0);
-        angle = smooth + (angle - smooth) / 3.0f;
-        return angle;
+    float getCelestialAngle(float pt) const {
+        int32_t dp = static_cast<int32_t>(worldTime%24000L);
+        float a = (static_cast<float>(dp)+pt)/24000.0f-0.25f;
+        if (a<0) a+=1; if (a>1) a-=1;
+        float s=a; a=1.0f-static_cast<float>((std::cos(a*3.14159265358979)+1.0)/2.0); a=s+(a-s)/3.0f;
+        return a;
     }
 
-    int32_t calculateSkylightSubtracted(float partialTicks) const {
-        float angle = getCelestialAngle(partialTicks);
-        float brightness = 1.0f - (static_cast<float>(
-            std::cos(static_cast<double>(angle) * 3.14159265358979 * 2.0)) * 2.0f + 0.5f);
-        brightness = std::clamp(brightness, 0.0f, 1.0f);
-
-        // Rain/thunder darken
-        brightness = 1.0f - brightness;
-        if (raining) brightness -= 0.3f;   // 5/16 ≈ 0.3125
-        if (thundering) brightness -= 0.3f;
-        brightness = std::clamp(brightness, 0.0f, 1.0f);
-
-        return static_cast<int32_t>((1.0f - brightness) * 11.0f);
+    int32_t calculateSkylightSubtracted(float pt) const {
+        float a=getCelestialAngle(pt);
+        float b=1.0f-(static_cast<float>(std::cos(a*3.14159265358979*2.0))*2.0f+0.5f);
+        b=std::clamp(b,0.0f,1.0f); b=1.0f-b;
+        if(raining) b-=0.3f; if(thundering) b-=0.3f; b=std::clamp(b,0.0f,1.0f);
+        return static_cast<int32_t>((1.0f-b)*11.0f);
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // LCG helper
-    // Java: updateLCG = updateLCG * 3 + 1013904223
-    // ═══════════════════════════════════════════════════════════════════════
+    int32_t advanceLCG() { updateLCG=updateLCG*3+1013904223; return updateLCG; }
 
-    int32_t advanceLCG() {
-        updateLCG = updateLCG * 3 + 1013904223;
-        return updateLCG;
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════
-    // Spawn point
-    // ═══════════════════════════════════════════════════════════════════════
-
-    int32_t spawnX = 0, spawnY = 64, spawnZ = 0;
-
-    void setSpawnPoint(int32_t x, int32_t y, int32_t z) {
-        spawnX = x; spawnY = y; spawnZ = z;
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════
-    // Entity management
-    // ═══════════════════════════════════════════════════════════════════════
-
-    bool shouldUpdateEntities() const {
-        return playerCount > 0 || updateEntityTick < 1200;
-    }
+    int32_t spawnX=0, spawnY=64, spawnZ=0;
+    void setSpawnPoint(int32_t x, int32_t y, int32_t z) { spawnX=x; spawnY=y; spawnZ=z; }
+    bool shouldUpdateEntities() const { return playerCount>0 || updateEntityTick<1200; }
 };
+#endif // !MCCPP_WORLD_H_INCLUDED
 
 } // namespace mccpp

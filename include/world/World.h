@@ -22,6 +22,7 @@
  * JNI readiness: flat property layout, int position types for fast lookup.
  */
 #pragma once
+#define MCCPP_WORLD_H_INCLUDED
 
 #include "world/Chunk.h"
 #include "nbt/NBT.h"
@@ -39,6 +40,18 @@
 #include <algorithm>
 
 namespace mccpp {
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Difficulty enum
+// Java reference: net.minecraft.world.EnumDifficulty
+// ═══════════════════════════════════════════════════════════════════════════
+
+enum class Difficulty : int32_t {
+    PEACEFUL = 0,
+    EASY = 1,
+    NORMAL = 2,
+    HARD = 3
+};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // ChunkCoordIntPair — hash key for chunk coordinates.
@@ -257,6 +270,12 @@ public:
     // ─── Game rules ────────────────────────────────────────────────────
     // Java: GameRules "keepInventory" — if true, inventory/XP are kept on death
     bool keepInventory = false;
+
+    // Java: GameRules "doFireTick" — fire spreads and lightning places fire
+    bool doFireTick = true;
+
+    // Java: World.difficultySetting (EnumDifficulty)
+    Difficulty difficulty = Difficulty::NORMAL;
 
     // ─── Weather ────────────────────────────────────────────────────────
     bool isRaining() const { return raining_; }

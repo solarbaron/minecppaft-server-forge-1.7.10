@@ -3721,6 +3721,114 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
     if (worlds.empty()) return;
     WorldServer* world = worlds[0].get();
 
+    // ─── Lead on fence — Java: ItemLead.onItemUse() + func_150909_a ──────
+    // When right-clicking a fence block, find all mobs within 7 blocks leashed to
+    // this player and tie them to a leash knot entity at the fence post.
+    // Java: block.getRenderType() == 11 → fence-type blocks
+    {
+        Block* clickedBlock = world->getBlock(blockX, static_cast<int32_t>(blockY), blockZ);
+        int32_t clickedId = clickedBlock ? Block::getIdFromBlock(clickedBlock) : 0;
+        // Fence block IDs: 85=oak fence, 113=nether brick fence, 188-192=other wood fences
+        bool isFence = (clickedId == 85 || clickedId == 113 ||
+                        (clickedId >= 188 && clickedId <= 192));
+        if (isFence) {
+            int32_t fenceX = blockX;
+            int32_t fenceY = static_cast<int32_t>(blockY);
+            int32_t fenceZ = blockZ;
+
+            // Java: func_150909_a — search for mobs leashed to this player within 7 block radius
+            bool anyTied = false;
+            int32_t knotEntityId = -1;
+
+            // First, check if a leash knot already exists at this fence position
+            // Java: EntityLeashKnot.getKnotForBlock()
+            {
+                std::lock_guard<std::mutex> lock(server_.leashKnotEntitiesMutex_);
+                for (auto& knot : server_.leashKnotEntities_) {
+                    if (!knot.isDead && knot.blockX == fenceX &&
+                        knot.blockY == fenceY && knot.blockZ == fenceZ) {
+                        knotEntityId = knot.entityId;
+                        break;
+                    }
+                }
+            }
+
+            // Scan mobs within 7 blocks leashed to this player
+            {
+                std::lock_guard<std::mutex> lock(server_.mobEntitiesMutex_);
+                for (auto& mob : server_.mobEntities_) {
+                    if (mob.isDead || !mob.isLeashed) continue;
+                    if (mob.leashedToEntityId != entityId_) continue;
+
+                    // Java: distance check — AxisAlignedBB ±7 from fence position
+                    double dx = mob.posX - (static_cast<double>(fenceX) + 0.5);
+                    double dy = mob.posY - (static_cast<double>(fenceY) + 0.5);
+                    double dz = mob.posZ - (static_cast<double>(fenceZ) + 0.5);
+                    if (std::abs(dx) > 7.0 || std::abs(dy) > 7.0 || std::abs(dz) > 7.0) continue;
+
+                    // Create leash knot if it doesn't exist yet
+                    // Java: EntityLeashKnot.func_110129_a()
+                    if (knotEntityId < 0) {
+                        knotEntityId = server_.nextLeashKnotEntityId_.fetch_add(1, std::memory_order_relaxed);
+                        MinecraftServer::SpawnedLeashKnot knot;
+                        knot.entityId = knotEntityId;
+                        knot.blockX = fenceX;
+                        knot.blockY = fenceY;
+                        knot.blockZ = fenceZ;
+                        knot.isDead = false;
+
+                        {
+                            std::lock_guard<std::mutex> knotLock(server_.leashKnotEntitiesMutex_);
+                            server_.leashKnotEntities_.push_back(std::move(knot));
+                        }
+
+                        // Broadcast S0E SpawnObject type 77 (leash knot) to all clients
+                        // Java: EntityTrackerEntry → S0EPacketSpawnObject(entity, 77)
+                        {
+                            std::lock_guard<std::recursive_mutex> connLock(server_.connectionsMutex_);
+                            for (auto& c : server_.connections_) {
+                                if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
+                                auto handler = c->getHandler();
+                                auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                                if (ph) ph->sendSpawnObject(*c, knotEntityId, 77,
+                                    static_cast<double>(fenceX) + 0.5,
+                                    static_cast<double>(fenceY) + 0.5,
+                                    static_cast<double>(fenceZ) + 0.5,
+                                    0.0f, 0.0f, 0, 0.0, 0.0, 0.0);
+                            }
+                        }
+
+                        std::cout << "[LeashKnot] Spawned entity " << knotEntityId
+                                  << " at " << fenceX << "," << fenceY << "," << fenceZ << "\n";
+                    }
+
+                    // Transfer leash from player to knot
+                    // Java: entityLiving.setLeashedToEntity(entityLeashKnot, true)
+                    mob.leashedToEntityId = knotEntityId;
+
+                    // Broadcast S1B AttachEntity(leash=1, mobId, knotEntityId)
+                    server_.broadcastAttachEntity(1, mob.entityId, knotEntityId);
+
+                    anyTied = true;
+
+                    std::cout << "[Lead] " << playerName_
+                              << " tied mob " << mob.entityId
+                              << " (type=" << mob.mobType << ") to fence knot " << knotEntityId << "\n";
+                }
+            }
+
+            if (anyTied) {
+                // Play leash knot sound — Java: world.playSoundAtEntity("leashknot.place")
+                server_.broadcastSound("leashknot.place",
+                    static_cast<double>(fenceX) + 0.5,
+                    static_cast<double>(fenceY) + 0.5,
+                    static_cast<double>(fenceZ) + 0.5,
+                    1.0f, 1.0f);
+                return;
+            }
+        }
+    }
+
     // ─── Minecart item placement — Java: ItemMinecart.onItemUse() ────
     // Place minecart on a rail block when right-clicking with minecart items
     {
