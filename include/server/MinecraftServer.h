@@ -1156,6 +1156,43 @@ public:
     /** Tick all primed TNT entities (gravity, fuse countdown, explosion on fuse=0). */
     void tickTNTPrimed();
 
+    // ─── Falling block entities ─────────────────────────────────────────
+    // Java reference: EntityFallingBlock — sand, gravel, anvil with gravity physics
+    struct SpawnedFallingBlock {
+        int32_t entityId = 0;
+        int32_t blockId = 0;            // Java: Block.getIdFromBlock(blockObj)
+        int32_t metadata = 0;           // Java: EntityFallingBlock.metadata
+        double posX = 0, posY = 0, posZ = 0;
+        double motionX = 0, motionY = 0, motionZ = 0;
+        int32_t fallTime = 0;           // Java: EntityFallingBlock.fallTime
+        bool isDead = false;
+        bool onGround = false;
+        bool hurtEntities = false;      // Java: true for anvils
+        int64_t spawnTick = 0;
+        // Movement tracking for S18 EntityTeleport broadcast
+        int32_t lastSentPosX = 0, lastSentPosY = 0, lastSentPosZ = 0;
+        int32_t ticksSinceLastTeleport = 0;
+
+        static constexpr float GRAVITY = 0.04f;        // Java: motionY -= 0.04
+        static constexpr float FRICTION = 0.98f;        // Java: motionX/Y/Z *= 0.98
+        static constexpr float GROUND_FRICTION = 0.7f;  // Java: motionX/Z *= 0.7 on ground
+        static constexpr float GROUND_BOUNCE = -0.5f;   // Java: motionY *= -0.5 on ground
+        static constexpr int32_t MAX_FALL_TIME = 600;    // Java: fallTime > 600 → drop item, die
+    };
+    mutable std::mutex fallingBlockEntitiesMutex_;
+    std::vector<SpawnedFallingBlock> fallingBlockEntities_;
+    std::atomic<int32_t> nextFallingBlockEntityId_{1100000};
+
+    /**
+     * Spawn a falling block entity at position.
+     * Java reference: BlockFalling.func_149830_m → new EntityFallingBlock(world, x+0.5, y+0.5, z+0.5, block, meta)
+     * @return entity ID of the spawned falling block
+     */
+    int32_t spawnFallingBlock(double x, double y, double z, int32_t blockId, int32_t metadata = 0);
+
+    /** Tick all falling block entities (gravity, landing, placement/item drop). */
+    void tickFallingBlock();
+
     // ─── XP orb entities ────────────────────────────────────────────────
     // Java reference: EntityXPOrb — experience orb physics, player attraction, pickup
     struct SpawnedXPOrb {

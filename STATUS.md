@@ -205,7 +205,7 @@
 - ✅ **Farmland hydration** — 9×9 water check, decay without water
 - ✅ **Melon/pumpkin stems** — grow, then place fruit adjacent
 - ✅ **Leaf decay** — natural leaves without logs (4-block manhattan) decay
-- ✅ **Sand/gravel gravity** — blocks 12/13 fall through air/liquids
+- ✅ **Sand/gravel gravity** — blocks 12/13/145 spawn EntityFallingBlock with physics (gravity/friction/bounce), S0E SpawnObject type 70, S18 position sync, block placement on landing
 - ✅ **Water/lava flow** — flow simulation, infinite water source, lava+water interaction
 - ✅ **Fire spread** — fire burns 25+ flammable block types, eternal on netherrack
 - ✅ **Ice melting** — ice melts to water, mushroom spread
@@ -382,11 +382,11 @@
 62. **Random block tick** — ✅ Done (crop growth 0→7, sapling→tree, grass spread, farmland hydration/decay, melon/pumpkin fruit placement, leaf decay)
 63. **Crop harvest drops** — ✅ Done (wheat→wheat+seeds at meta 7, carrot/potato metadata-aware drops, melon/pumpkin stem→seeds)
 64. **Bed item placement** — ✅ Done (item 355→block 26, foot+head 2-block with yaw-facing, meta bit 8 for head part)
-65. **Sand/gravel gravity** — ✅ Done (blocks 12/13/145 instant-fall through air/water/lava to solid surface, dig.sand landing sound)
+65. **Sand/gravel gravity** — ✅ Done (blocks 12/13/145 spawn EntityFallingBlock entity with Java-parity physics — gravity 0.04, friction 0.98, S0E SpawnObject type 70, S18 EntityTeleport position sync, block placement on landing with dig.sand sound, item drop on failed placement, 600-tick max fall time)
 66. **Multi-block break propagation** — ✅ Done (doors 64/71 remove both halves, beds 26 remove both halves, cactus 81/sugar cane 83 chain-break above with drops)
 67. **Potion effect system** — ✅ Done (S1D EntityEffect, S1E RemoveEntityEffect, addPotionEffect, tickPotionEffects with regen/poison/wither/saturation per-tick effects)
 68. **/effect command** — ✅ Done (/effect <player> <id> [sec] [amp], /effect <player> clear, 14th server command)
-69. **Sand/gravel gravity in random tick** — ✅ Done (existing world blocks 12/13 fall through air/liquids during random ticks)
+69. **Sand/gravel gravity in random tick** — ✅ Done (existing world blocks 12/13/145 spawn EntityFallingBlock during random ticks when block below is passable)
 70. **Slab double-slab placement** — ✅ Done (stone slab 44→double 43, wood slab 126→double 125, sub-type from item damage bits 0-2)
 71. **Water/lava flow** — ✅ Done (water decay 1/7-block, lava decay 2/3-block, downward priority, horizontal spread, lava+water→cobblestone/obsidian)
 72. **Infinite water source** — ✅ Done (2+ adjacent water sources + solid below → new source, Java field_149815_a parity)
@@ -491,7 +491,7 @@
 171. **Unbreaking enchantment** — ✅ Done (ID 34: 1/(level+1) chance to apply durability damage)
 172. **Silk Touch enchantment** — ✅ Done (ID 33: 20 block types drop themselves — ores, glass, ice, leaves, bookshelves, etc.)
 173. **Fortune enchantment** — ✅ Done (ID 35: ore drops multiplied by 1+random(0..fortune) for 7 ore types; gravel flint chance increased)
-174. **Sand/gravel gravity** — ✅ Done (blocks 12, 13 fall when support removed, cascading downward, broadcast to all clients)
+174. **Sand/gravel gravity** — ✅ Done (blocks 12/13/145 spawn EntityFallingBlock on placement over passable blocks, entity-based physics with client sync)
 175. **Respiration enchantment** — ✅ Done (ID 5: helmet slot, random(level+1)>0 chance to skip air decrease per tick, Java decreaseAirSupply parity)
 176. **Water Breathing potion** — ✅ Done (potion ID 13: completely bypasses drowning; creative mode also exempt)
 177. **Player-vs-mob combat** — ✅ Done (handlePlayerAttack searches mobEntities_, weapon damage, S1A hurt/death, S13 destroy, durability+exhaustion, kill XP 5+rand(0..2))

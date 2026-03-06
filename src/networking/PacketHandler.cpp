@@ -6100,33 +6100,19 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
         1.0f, 0.8f);
 
     // ─── Sand/gravel/anvil gravity — Java: BlockFalling.onBlockAdded ─
-    // Simplified: instant fall instead of EntityFallingBlock
+    // Spawn EntityFallingBlock if the block below is passable
     if (placeBlockId == 12 || placeBlockId == 13 || placeBlockId == 145) {
-        int fallY = placeY - 1;
-        while (fallY > 0) {
-            Block* below = world->getBlock(placeX, fallY, placeZ);
-            int belowId = below ? Block::getIdFromBlock(below) : 0;
-            if (belowId != 0 && belowId != 8 && belowId != 9 &&
-                belowId != 10 && belowId != 11 && belowId != 31 &&
-                belowId != 51) {
-                break;
-            }
-            --fallY;
-        }
-        ++fallY; // Land on top of the solid block
-
-        if (fallY < placeY) {
-            // Remove from original position
-            world->setBlock(placeX, placeY, placeZ, Block::getBlockById(0));
-            server_.broadcastBlockChange(placeX, placeY, placeZ, 0, 0);
-            // Place at landing position
-            world->setBlock(placeX, fallY, placeZ, Block::getBlockById(placeBlockId));
-            world->setBlockMetadata(placeX, fallY, placeZ, meta);
-            server_.broadcastBlockChange(placeX, fallY, placeZ, placeBlockId, meta);
-            // Fall sound
-            server_.broadcastSound("dig.sand",
-                static_cast<double>(placeX) + 0.5, static_cast<double>(fallY) + 0.5,
-                static_cast<double>(placeZ) + 0.5, 0.5f, 0.6f);
+        Block* below = world->getBlock(placeX, placeY - 1, placeZ);
+        int belowId = below ? Block::getIdFromBlock(below) : 0;
+        // Java: BlockFalling.canFallBelow — air(0), fire(51), water(8/9), lava(10/11)
+        if (placeY > 1 && (belowId == 0 || belowId == 51 ||
+            belowId == 8 || belowId == 9 ||
+            belowId == 10 || belowId == 11)) {
+            server_.spawnFallingBlock(
+                static_cast<double>(placeX) + 0.5,
+                static_cast<double>(placeY) + 0.5,
+                static_cast<double>(placeZ) + 0.5,
+                placeBlockId, meta);
         }
     }
 }

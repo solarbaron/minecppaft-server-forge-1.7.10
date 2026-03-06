@@ -417,6 +417,7 @@ void MinecraftServer::tick() {
     tickLightning();
     tickBoats();
     tickTNTPrimed();
+    tickFallingBlock();
     tickXPOrbs();
 
     // Natural mob spawning every 200 ticks (10 seconds)
@@ -10703,27 +10704,20 @@ void MinecraftServer::tickRandomBlocks() {
                     }
                 }
 
-                // ─── Sand/gravel gravity (12/13) — Java: BlockFalling.updateTick ─
-                if (blockId == 12 || blockId == 13) {
+                // ─── Sand/gravel/anvil gravity (12/13/145) — Java: BlockFalling.updateTick ─
+                // Spawn EntityFallingBlock instead of instant teleport
+                if (blockId == 12 || blockId == 13 || blockId == 145) {
                     Block* below = world->getBlock(bx, by - 1, bz);
                     int belowId = below ? Block::getIdFromBlock(below) : 0;
-                    if (by > 1 && (belowId == 0 || belowId == 8 || belowId == 9 ||
+                    // Java: BlockFalling.canFallBelow — air, fire, water, lava
+                    if (by > 1 && (belowId == 0 || belowId == 51 ||
+                        belowId == 8 || belowId == 9 ||
                         belowId == 10 || belowId == 11)) {
-                        // Find landing position
-                        int fallY = by - 1;
-                        while (fallY > 0) {
-                            Block* fb = world->getBlock(bx, fallY, bz);
-                            int fid = fb ? Block::getIdFromBlock(fb) : 0;
-                            if (fid != 0 && fid != 8 && fid != 9 && fid != 10 && fid != 11) break;
-                            --fallY;
-                        }
-                        ++fallY;
-                        if (fallY < by) {
-                            world->setBlock(bx, by, bz, Block::getBlockById(0));
-                            broadcastBlockChange(bx, by, bz, 0, 0);
-                            world->setBlock(bx, fallY, bz, Block::getBlockById(blockId));
-                            broadcastBlockChange(bx, fallY, bz, blockId, 0);
-                        }
+                        spawnFallingBlock(
+                            static_cast<double>(bx) + 0.5,
+                            static_cast<double>(by) + 0.5,
+                            static_cast<double>(bz) + 0.5,
+                            blockId, meta);
                     }
                 }
 
@@ -12495,6 +12489,235 @@ void MinecraftServer::tickTNTPrimed() {
         std::remove_if(tntPrimedEntities_.begin(), tntPrimedEntities_.end(),
             [](const SpawnedTNTPrimed& t) { return t.isDead; }),
         tntPrimedEntities_.end());
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Falling block entity spawning — Java: BlockFalling.func_149830_m
+// Spawns an EntityFallingBlock at position with the given block ID/meta.
+// Broadcasts S0E SpawnObject type 70 with data = blockId | (metadata << 16).
+// ═══════════════════════════════════════════════════════════════════════════
+
+int32_t MinecraftServer::spawnFallingBlock(double x, double y, double z,
+                                           int32_t blockId, int32_t metadata) {
+    int32_t eid = nextFallingBlockEntityId_.fetch_add(1);
+
+    SpawnedFallingBlock fb;
+    fb.entityId = eid;
+    fb.blockId = blockId;
+    fb.metadata = metadata;
+    fb.posX = x;
+    fb.posY = y;
+    fb.posZ = z;
+    // Java: EntityFallingBlock constructor sets motionX/Y/Z = 0
+    fb.motionX = 0.0;
+    fb.motionY = 0.0;
+    fb.motionZ = 0.0;
+    fb.fallTime = 0;
+    fb.isDead = false;
+    fb.onGround = false;
+    // Java: BlockAnvil.onStartFalling → setHurtEntities(true)
+    fb.hurtEntities = (blockId == 145);
+    fb.spawnTick = tickCounter_.load();
+    fb.lastSentPosX = static_cast<int32_t>(x * 32.0);
+    fb.lastSentPosY = static_cast<int32_t>(y * 32.0);
+    fb.lastSentPosZ = static_cast<int32_t>(z * 32.0);
+
+    {
+        std::lock_guard<std::mutex> lock(fallingBlockEntitiesMutex_);
+        fallingBlockEntities_.push_back(std::move(fb));
+    }
+
+    // Broadcast S0E SpawnObject — type 70 = falling block
+    // Java: EntityTrackerEntry.func_151260_c → S0EPacketSpawnObject(entity, 70, blockId | (meta << 16))
+    int32_t data = blockId | (metadata << 16);
+    {
+        std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
+        for (auto& conn : connections_) {
+            if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+            auto handler = conn->getHandler();
+            auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+            if (ph) {
+                ph->sendSpawnObject(*conn, eid, 70, x, y, z, 0.0f, 0.0f, data, 0.0, 0.0, 0.0);
+            }
+        }
+    }
+
+    std::cout << "[FallingBlock] Spawned entity " << eid << " block=" << blockId
+              << " at " << x << "," << y << "," << z << "\n";
+    return eid;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Falling block entity ticking — Java: EntityFallingBlock.onUpdate()
+// Applies gravity 0.04, air friction 0.98, ground friction 0.7, ground
+// bounce -0.5. On fallTime==1, removes source block. When on ground,
+// places block at landing position (or drops as item). Max 600 ticks.
+// ═══════════════════════════════════════════════════════════════════════════
+
+void MinecraftServer::tickFallingBlock() {
+    std::lock_guard<std::mutex> lock(fallingBlockEntitiesMutex_);
+    if (fallingBlockEntities_.empty()) return;
+
+    auto* world = worlds_.empty() ? nullptr : worlds_[0].get();
+
+    std::vector<int32_t> destroyIds;
+
+    for (auto& fb : fallingBlockEntities_) {
+        if (fb.isDead) continue;
+
+        // Java: ++this.fallTime
+        ++fb.fallTime;
+
+        // Java: this.motionY -= 0.04
+        fb.motionY -= SpawnedFallingBlock::GRAVITY;
+
+        // Move entity — simplified collision (check block below feet)
+        double newX = fb.posX + fb.motionX;
+        double newY = fb.posY + fb.motionY;
+        double newZ = fb.posZ + fb.motionZ;
+
+        // Ground collision — check if block below feet is solid
+        fb.onGround = false;
+        if (world) {
+            int32_t bx = static_cast<int32_t>(std::floor(newX));
+            int32_t by = static_cast<int32_t>(std::floor(newY));
+            int32_t bz = static_cast<int32_t>(std::floor(newZ));
+            Block* below = world->getBlock(bx, by, bz);
+            int32_t belowId = below ? Block::getIdFromBlock(below) : 0;
+            // Java: BlockFalling.canFallBelow — air(0), fire(51), water(8/9), lava(10/11)
+            bool canFallThrough = (belowId == 0 || belowId == 51 ||
+                                   belowId == 8 || belowId == 9 ||
+                                   belowId == 10 || belowId == 11);
+            if (!canFallThrough && newY <= static_cast<double>(by + 1)) {
+                // Landed on solid block
+                newY = static_cast<double>(by + 1);
+                fb.onGround = true;
+            }
+        }
+
+        fb.posX = newX;
+        fb.posY = newY;
+        fb.posZ = newZ;
+
+        // Java: on fallTime == 1, remove the source block from the world
+        if (fb.fallTime == 1 && world) {
+            int32_t srcX = static_cast<int32_t>(std::floor(fb.posX));
+            int32_t srcY = static_cast<int32_t>(std::floor(fb.posY));
+            int32_t srcZ = static_cast<int32_t>(std::floor(fb.posZ));
+            Block* srcBlock = world->getBlock(srcX, srcY, srcZ);
+            int32_t srcId = srcBlock ? Block::getIdFromBlock(srcBlock) : 0;
+            if (srcId == fb.blockId) {
+                world->setBlock(srcX, srcY, srcZ, Block::getBlockById(0));
+                broadcastBlockChange(srcX, srcY, srcZ, 0, 0);
+            } else {
+                // Block was already removed/changed — die silently
+                fb.isDead = true;
+                destroyIds.push_back(fb.entityId);
+                continue;
+            }
+        }
+
+        // Apply friction
+        fb.motionX *= SpawnedFallingBlock::FRICTION;
+        fb.motionY *= SpawnedFallingBlock::FRICTION;
+        fb.motionZ *= SpawnedFallingBlock::FRICTION;
+
+        if (fb.onGround) {
+            fb.motionX *= SpawnedFallingBlock::GROUND_FRICTION;
+            fb.motionZ *= SpawnedFallingBlock::GROUND_FRICTION;
+            fb.motionY *= SpawnedFallingBlock::GROUND_BOUNCE;
+
+            // Java: setDead(); place block at landing position
+            fb.isDead = true;
+            destroyIds.push_back(fb.entityId);
+
+            if (world) {
+                int32_t lx = static_cast<int32_t>(std::floor(fb.posX));
+                int32_t ly = static_cast<int32_t>(std::floor(fb.posY));
+                int32_t lz = static_cast<int32_t>(std::floor(fb.posZ));
+
+                // Java: canPlaceEntityOnSide && !canFallBelow(below) → setBlock
+                Block* atLand = world->getBlock(lx, ly, lz);
+                int32_t atLandId = atLand ? Block::getIdFromBlock(atLand) : 0;
+                // Can place if target is air, fire, water, lava, or tall grass
+                bool canPlace = (atLandId == 0 || atLandId == 51 ||
+                                 atLandId == 8 || atLandId == 9 ||
+                                 atLandId == 10 || atLandId == 11 ||
+                                 atLandId == 31 || atLandId == 32);
+                // Must have solid ground below (not another canFallBelow)
+                Block* belowLand = world->getBlock(lx, ly - 1, lz);
+                int32_t belowLandId = belowLand ? Block::getIdFromBlock(belowLand) : 0;
+                bool solidBelow = (belowLandId != 0 && belowLandId != 51 &&
+                                   belowLandId != 8 && belowLandId != 9 &&
+                                   belowLandId != 10 && belowLandId != 11);
+
+                if (canPlace && solidBelow) {
+                    world->setBlock(lx, ly, lz, Block::getBlockById(fb.blockId));
+                    world->setBlockMetadata(lx, ly, lz, fb.metadata);
+                    broadcastBlockChange(lx, ly, lz, fb.blockId, fb.metadata);
+                    // Landing sound — Java: BlockFalling.playSoundWhenFallen (sand/gravel use dig.sand)
+                    broadcastSound("dig.sand",
+                        static_cast<double>(lx) + 0.5, static_cast<double>(ly) + 0.5,
+                        static_cast<double>(lz) + 0.5, 0.5f, 0.6f);
+                } else {
+                    // Can't place — drop as item
+                    // Java: entityDropItem(new ItemStack(blockObj, 1, damageDropped(meta)), 0)
+                    spawnItemDrop(fb.posX, fb.posY, fb.posZ, fb.blockId, fb.metadata, 1);
+                }
+            }
+            continue;
+        }
+
+        // Java: fallTime > 600 → drop as item, die
+        if (fb.fallTime > SpawnedFallingBlock::MAX_FALL_TIME) {
+            fb.isDead = true;
+            destroyIds.push_back(fb.entityId);
+            spawnItemDrop(fb.posX, fb.posY, fb.posZ, fb.blockId, fb.metadata, 1);
+            continue;
+        }
+
+        // Broadcast position — S18 EntityTeleport (every 3 ticks if moved)
+        ++fb.ticksSinceLastTeleport;
+        int32_t absX = static_cast<int32_t>(fb.posX * 32.0);
+        int32_t absY = static_cast<int32_t>(fb.posY * 32.0);
+        int32_t absZ = static_cast<int32_t>(fb.posZ * 32.0);
+        bool moved = (absX != fb.lastSentPosX || absY != fb.lastSentPosY ||
+                      absZ != fb.lastSentPosZ);
+
+        if (moved && fb.ticksSinceLastTeleport >= 3) {
+            fb.lastSentPosX = absX;
+            fb.lastSentPosY = absY;
+            fb.lastSentPosZ = absZ;
+            fb.ticksSinceLastTeleport = 0;
+
+            std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
+            for (auto& conn : connections_) {
+                if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                auto handler = conn->getHandler();
+                auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                if (ph) {
+                    ph->sendEntityTeleport(*conn, fb.entityId, fb.posX, fb.posY, fb.posZ, 0.0f, 0.0f);
+                }
+            }
+        }
+    }
+
+    // Broadcast S13 DestroyEntities for landed/expired falling blocks
+    if (!destroyIds.empty()) {
+        std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
+        for (auto& conn : connections_) {
+            if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+            auto handler = conn->getHandler();
+            auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+            if (ph) ph->sendDestroyEntities(*conn, destroyIds);
+        }
+    }
+
+    // Remove dead falling block entities
+    fallingBlockEntities_.erase(
+        std::remove_if(fallingBlockEntities_.begin(), fallingBlockEntities_.end(),
+            [](const SpawnedFallingBlock& f) { return f.isDead; }),
+        fallingBlockEntities_.end());
 }
 
 // ─── XP Orb Entity System ──────────────────────────────────────────────
