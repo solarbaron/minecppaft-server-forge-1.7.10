@@ -428,6 +428,7 @@ void MinecraftServer::tick() {
     // Java: SpawnerAnimals.findChunksForSpawning() for EnumCreatureType.creature
     if (ticks > 0 && ticks % 400 == 0) {
         spawnPassiveMobs();
+        spawnWaterMobs();
     }
 
     // Tick food/hunger for all play-state players
@@ -2787,6 +2788,15 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
                 // Java: field_82224_i[n] += 3 — accelerate charged shot counters
                 for (int i = 0; i < 2; ++i) {
                     mob.witherSideChargeCounter[i] += 3;
+                }
+            }
+
+            // ─── Silverfish damage — Java: EntitySilverfish.attackEntityFrom() ───
+            // When damaged by player (EntityDamageSource), set allySummonCooldown = 20
+            // This triggers nearby monster_egg blocks to release silverfish allies
+            if (mob.mobType == 60) {
+                if (mob.allySummonCooldown <= 0) {
+                    mob.allySummonCooldown = 20;
                 }
             }
 
@@ -6160,7 +6170,7 @@ static float getMobMaxHealth(uint8_t mobType) {
         case 62: return 16.0f;  // Magma Cube
         case 63: return 200.0f; // Ender Dragon
         case 64: return 300.0f; // Wither
-        case 65: return 10.0f;  // Bat
+        case 65: return 6.0f;   // Bat — Java: EntityBat.applyEntityAttributes() maxHealth=6
         case 66: return 26.0f;  // Witch
         case 90: return 10.0f;  // Pig
         case 91: return 4.0f;   // Sheep
@@ -6191,7 +6201,7 @@ static float getMobMovementSpeed(uint8_t mobType) {
         case 57: return 0.23f;  // Zombie Pigman
         case 58: return 0.30f;  // Enderman
         case 59: return 0.30f;  // Cave Spider
-        case 60: return 0.25f;  // Silverfish
+        case 60: return 0.60f;  // Silverfish — Java: 0.6 (EntitySilverfish.applyEntityAttributes)
         case 61: return 0.23f;  // Blaze
         case 62: return 0.20f;  // Magma Cube
         case 66: return 0.25f;  // Witch
@@ -6212,7 +6222,8 @@ static float getMobMovementSpeed(uint8_t mobType) {
 static bool isMobHostile(uint8_t mobType) {
     // Passive mobs: pig=90, sheep=91, cow=92, chicken=93
     if (mobType >= 90 && mobType <= 100) return false;
-    return mobType >= 50 && mobType <= 66 && mobType != 56; // Ghast is ranged-only
+    // Bat (65) is ambient, not hostile — Java: EntityAmbientCreature
+    return mobType >= 50 && mobType <= 66 && mobType != 56 && mobType != 65; // Ghast is ranged-only, Bat is ambient
 }
 
 int32_t MinecraftServer::summonMob(uint8_t mobType, double x, double y, double z) {
@@ -6327,6 +6338,25 @@ int32_t MinecraftServer::summonMob(uint8_t mobType, double x, double y, double z
             // Java: worldObj.playBroadcastSound(1015, ...) — wither spawn sound
             broadcastEffect(1015, static_cast<int32_t>(x),
                 static_cast<int32_t>(y), static_cast<int32_t>(z), 0);
+        }
+
+        // Bat-specific DataWatcher metadata — Java: EntityBat.entityInit()
+        // DW 16: byte (bit 0 = hanging) — starts hanging (bit 0 set)
+        if (mobType == 65) {
+            mob.isBatHanging = true;
+            auto dw16Pkt = PacketBuilder::entityMetadataByte(eid, 16, 1); // bit 0 = hanging
+            for (auto& conn : connections_) {
+                if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                conn->sendPacket(dw16Pkt);
+            }
+        }
+
+        // Squid-specific initialization — Java: EntitySquid constructor
+        // rotationVelocity = 1.0f / (rand.nextFloat() + 1.0f) * 0.2f
+        if (mobType == 94) {
+            static thread_local std::mt19937 squidRng(std::random_device{}());
+            std::uniform_real_distribution<float> fDist(0.0f, 1.0f);
+            mob.squidRotationVelocity = 1.0f / (fDist(squidRng) + 1.0f) * 0.2f;
         }
     }
     {
@@ -6903,6 +6933,36 @@ void MinecraftServer::tickMobs() {
                 }
             }
 
+            // ─── Bat tick — Java: EntityBat.onUpdate() + updateAITasks() ───
+            // Bat has its own flight AI; skips both passive wander and hostile chase
+            if (mob.mobType == 65) {
+                tickBat(mob, currentTick);
+                if (mob.isDead) {
+                    deadIds.push_back(mob.entityId);
+                }
+                continue;
+            }
+
+            // ─── Squid tick — Java: EntitySquid.onLivingUpdate() + updateEntityActionState() ───
+            // Squid has its own underwater swimming AI; skips both passive wander and hostile chase
+            if (mob.mobType == 94) {
+                tickSquid(mob, currentTick);
+                if (mob.isDead) {
+                    deadIds.push_back(mob.entityId);
+                }
+                continue;
+            }
+
+            // ─── Silverfish tick — Java: EntitySilverfish.updateEntityActionState() ───
+            // Silverfish has unique AI: ally summoning, block hiding, fast melee
+            if (mob.mobType == 60) {
+                tickSilverfish(mob, currentTick);
+                if (mob.isDead) {
+                    deadIds.push_back(mob.entityId);
+                }
+                continue;
+            }
+
             // Check distance to nearest player
             double nearestDistSq = 1e9;
             {
@@ -6955,6 +7015,11 @@ void MinecraftServer::tickMobs() {
                     case 60: sound = "mob.silverfish.say"; break;
                     case 61: sound = "mob.blaze.breathe"; break;
                     case 62: sound = (rand() % 2) ? "mob.magmacube.big" : "mob.magmacube.small"; break;
+                    case 65: // Bat — Java: EntityBat.getLivingSound()
+                        // Java: if hanging && rand.nextInt(4) != 0 → null (3/4 silent)
+                        if (mob.isBatHanging && (rand() % 4) != 0) break;
+                        sound = "mob.bat.idle";
+                        break;
                     case 66: sound = "mob.witch.idle"; break;
                     case 92: sound = "mob.cow.say"; break;
                     case 90: sound = "mob.pig.say"; break;
@@ -6991,8 +7056,11 @@ void MinecraftServer::tickMobs() {
                     default: break;
                 }
                 if (sound) {
-                    broadcastSound(sound, mob.posX, mob.posY, mob.posZ, 1.0f,
-                        0.8f + ((float)(rand() % 40) / 100.0f)); // Slight pitch randomization
+                    // Java: EntityBat.getSoundVolume() = 0.1f, getSoundPitch() = super * 0.95f
+                    float vol = (mob.mobType == 65) ? 0.1f : 1.0f;
+                    float basePitch = 0.8f + ((float)(rand() % 40) / 100.0f);
+                    if (mob.mobType == 65) basePitch *= 0.95f;
+                    broadcastSound(sound, mob.posX, mob.posY, mob.posZ, vol, basePitch);
                 }
             }
 
@@ -13000,6 +13068,751 @@ void MinecraftServer::tickSnowGolem(SpawnedMob& golem, int64_t currentTick) {
             broadcastSound("random.bow", golem.posX, golem.posY, golem.posZ, 1.0f, pitch);
 
             golem.snowGolemAttackCooldown = 20; // 20 ticks = 1 second
+        }
+    }
+}
+
+// ─── Bat AI Tick — Java: EntityBat.onUpdate() + updateAITasks() ────────────
+// Implements hanging/flying state machine, player flee, random flight targets.
+// Bat height=0.9, no fall damage, no collision, no pressure plates.
+void MinecraftServer::tickBat(SpawnedMob& bat, int64_t currentTick) {
+    if (worlds_.empty()) return;
+    auto* world = worlds_[0].get();
+
+    // ── Helper: is block at (bx,by,bz) a normal solid cube? ──
+    // Java: Block.isNormalCube() — used for ceiling hang check
+    auto isNormalCube = [this](int32_t bx, int32_t by, int32_t bz) -> bool {
+        int32_t id = getBlockIdInWorld(bx, by, bz);
+        if (id == 0) return false; // air
+        switch (id) {
+            case 6: case 18: case 20: case 26: case 27: case 28: case 30: case 31:
+            case 32: case 34: case 36: case 37: case 38: case 39: case 40: case 44:
+            case 50: case 51: case 55: case 59: case 63: case 64: case 65: case 66:
+            case 68: case 69: case 70: case 71: case 72: case 75: case 76: case 77:
+            case 78: case 83: case 85: case 90: case 92: case 93: case 94: case 96:
+            case 101: case 102: case 104: case 105: case 106: case 107: case 111:
+            case 113: case 115: case 117: case 119: case 126: case 127: case 131:
+            case 132: case 139: case 140: case 141: case 142: case 143: case 144:
+            case 145: case 147: case 148: case 149: case 150: case 151: case 154:
+            case 157: case 160: case 161: case 167: case 171: case 175:
+                return false;
+            default:
+                return true;
+        }
+    };
+
+    // ── Helper: broadcast DW16 byte for bat hanging state ──
+    auto broadcastBatDW16 = [&](SpawnedMob& b) {
+        uint8_t dw16 = b.isBatHanging ? 0x01 : 0x00;
+        auto metaPkt = PacketBuilder::entityMetadataByte(b.entityId, 16, dw16);
+        std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
+        for (auto& c : connections_) {
+            if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
+            c->sendPacket(metaPkt);
+        }
+    };
+
+    // ═══════════════════════════════════════════════════════════════════
+    // Java: EntityBat.onUpdate() — lines 98-108
+    // ═══════════════════════════════════════════════════════════════════
+    if (bat.isBatHanging) {
+        // Java: motionX = motionY = motionZ = 0
+        bat.batMotionX = 0.0;
+        bat.batMotionY = 0.0;
+        bat.batMotionZ = 0.0;
+        // Java: posY = (double)MathHelper.floor_double(this.posY) + 1.0 - (double)this.height
+        // Bat height = 0.9
+        bat.posY = static_cast<double>(static_cast<int>(std::floor(bat.posY))) + 1.0 - 0.9;
+    } else {
+        // Java: motionY *= 0.6f — vertical drag when flying
+        bat.batMotionY *= 0.6;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // Java: EntityBat.updateAITasks() — lines 111-147
+    // ═══════════════════════════════════════════════════════════════════
+    if (bat.isBatHanging) {
+        // ─── Hanging state ───
+        int bx = static_cast<int>(std::floor(bat.posX));
+        int by = static_cast<int>(bat.posY);
+        int bz = static_cast<int>(std::floor(bat.posZ));
+
+        // Java: if (!worldObj.getBlock(x, posY+1, z).isNormalCube()) → fall off
+        if (!isNormalCube(bx, by + 1, bz)) {
+            bat.isBatHanging = false;
+            broadcastBatDW16(bat);
+            // Java: playAuxSFXAtEntity(null, 1015, ...) → bat takeoff sound
+            broadcastSound("mob.bat.takeoff", bat.posX, bat.posY, bat.posZ, 0.05f,
+                           ((float)(rand() % 100) / 100.0f * 0.55f + 0.6f) * 0.95f);
+        } else {
+            // Java: if (rand.nextInt(200) == 0) rotationYawHead = rand.nextInt(360)
+            if (rand() % 200 == 0) {
+                bat.yaw = static_cast<float>(rand() % 360);
+            }
+
+            // Java: if (getClosestPlayerToEntity(this, 4.0) != null) → flee
+            double nearestDistSq = 16.0; // 4.0 * 4.0
+            bool playerNearby = false;
+            {
+                std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
+                for (auto& c : connections_) {
+                    if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
+                    auto handler = c->getHandler();
+                    auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                    if (!ph) continue;
+                    double dx = ph->getPlayerX() - bat.posX;
+                    double dy = ph->getPlayerY() - bat.posY;
+                    double dz = ph->getPlayerZ() - bat.posZ;
+                    double distSq = dx * dx + dy * dy + dz * dz;
+                    if (distSq < nearestDistSq) {
+                        playerNearby = true;
+                        break;
+                    }
+                }
+            }
+            if (playerNearby) {
+                bat.isBatHanging = false;
+                broadcastBatDW16(bat);
+                broadcastSound("mob.bat.takeoff", bat.posX, bat.posY, bat.posZ, 0.05f,
+                               ((float)(rand() % 100) / 100.0f * 0.55f + 0.6f) * 0.95f);
+            }
+        }
+    } else {
+        // ─── Flying state ───
+        // Java: if (spawnPosition != null && !(worldObj.isAirBlock(...) && spawnPosition.posY >= 1))
+        //          spawnPosition = null
+        if (bat.batHasTarget) {
+            int32_t tid = getBlockIdInWorld(bat.batTargetX, bat.batTargetY, bat.batTargetZ);
+            if (!(tid == 0 && bat.batTargetY >= 1)) {
+                bat.batHasTarget = false;
+            }
+        }
+
+        // Java: if (spawnPosition == null || rand.nextInt(30) == 0 ||
+        //          spawnPosition.getDistanceSquared((int)posX, (int)posY, (int)posZ) < 4.0f)
+        if (!bat.batHasTarget || rand() % 30 == 0) {
+            // Always pick new target
+            bat.batTargetX = static_cast<int>(bat.posX) + (rand() % 7) - (rand() % 7);
+            bat.batTargetY = static_cast<int>(bat.posY) + (rand() % 6) - 2;
+            bat.batTargetZ = static_cast<int>(bat.posZ) + (rand() % 7) - (rand() % 7);
+            bat.batHasTarget = true;
+        } else {
+            // Check distance to target
+            int dx = bat.batTargetX - static_cast<int>(bat.posX);
+            int dy = bat.batTargetY - static_cast<int>(bat.posY);
+            int dz = bat.batTargetZ - static_cast<int>(bat.posZ);
+            double distSq = static_cast<double>(dx * dx + dy * dy + dz * dz);
+            if (distSq < 4.0) {
+                // Too close — pick new target
+                bat.batTargetX = static_cast<int>(bat.posX) + (rand() % 7) - (rand() % 7);
+                bat.batTargetY = static_cast<int>(bat.posY) + (rand() % 6) - 2;
+                bat.batTargetZ = static_cast<int>(bat.posZ) + (rand() % 7) - (rand() % 7);
+                bat.batHasTarget = true;
+            }
+        }
+
+        // Java: double d = (double)spawnPosition.posX + 0.5 - posX
+        double d  = static_cast<double>(bat.batTargetX) + 0.5 - bat.posX;
+        double d2 = static_cast<double>(bat.batTargetY) + 0.1 - bat.posY;
+        double d3 = static_cast<double>(bat.batTargetZ) + 0.5 - bat.posZ;
+
+        // Java: motionX += (signum(d) * 0.5 - motionX) * 0.1
+        auto signum = [](double v) -> double {
+            if (v > 0.0) return 1.0;
+            if (v < 0.0) return -1.0;
+            return 0.0;
+        };
+        bat.batMotionX += (signum(d)  * 0.5 - bat.batMotionX) * 0.1;
+        bat.batMotionY += (signum(d2) * 0.7 - bat.batMotionY) * 0.1;
+        bat.batMotionZ += (signum(d3) * 0.5 - bat.batMotionZ) * 0.1;
+
+        // Java: float f = (float)(atan2(motionZ, motionX) * 180.0 / PI) - 90.0f
+        float targetYaw = static_cast<float>(std::atan2(bat.batMotionZ, bat.batMotionX) * 180.0 / M_PI) - 90.0f;
+        // Java: float f2 = MathHelper.wrapAngleTo180_float(f - rotationYaw)
+        float yawDelta = targetYaw - bat.yaw;
+        while (yawDelta > 180.0f)  yawDelta -= 360.0f;
+        while (yawDelta < -180.0f) yawDelta += 360.0f;
+        bat.yaw += yawDelta;
+
+        // Java: moveForward = 0.5f — not used for actual position change in server-side
+        // Instead we apply motion directly.
+
+        // Apply motion to position
+        bat.posX += bat.batMotionX;
+        bat.posY += bat.batMotionY;
+        bat.posZ += bat.batMotionZ;
+
+        // Java: if (rand.nextInt(100) == 0 && worldObj.getBlock(x, posY+1, z).isNormalCube())
+        //          setIsBatHanging(true)
+        if (rand() % 100 == 0) {
+            int cx = static_cast<int>(std::floor(bat.posX));
+            int cy = static_cast<int>(bat.posY);
+            int cz = static_cast<int>(std::floor(bat.posZ));
+            if (isNormalCube(cx, cy + 1, cz)) {
+                bat.isBatHanging = true;
+                bat.batMotionX = 0.0;
+                bat.batMotionY = 0.0;
+                bat.batMotionZ = 0.0;
+                broadcastBatDW16(bat);
+            }
+        }
+    }
+
+    // ─── Broadcast position to all clients ───
+    {
+        std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
+        for (auto& c : connections_) {
+            if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
+            auto handler = c->getHandler();
+            auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+            if (ph) {
+                ph->sendEntityTeleport(*c, bat.entityId,
+                    bat.posX, bat.posY, bat.posZ, bat.yaw, bat.pitch);
+            }
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Squid AI — Java reference: net/minecraft/entity/passive/EntitySquid.java
+// ═══════════════════════════════════════════════════════════════════════════════
+void MinecraftServer::tickSquid(SpawnedMob& squid, int64_t currentTick) {
+    static thread_local std::mt19937 rng(std::random_device{}());
+    static constexpr float PI = 3.14159265358979323846f;
+
+    // ─── Java: EntitySquid.updateEntityActionState() ───
+    // Increment entityAge; reset motion vectors if > 100
+    ++squid.squidEntityAge;
+    if (squid.squidEntityAge > 100) {
+        squid.squidRandomMotionVecX = 0.0f;
+        squid.squidRandomMotionVecY = 0.0f;
+        squid.squidRandomMotionVecZ = 0.0f;
+    } else {
+        // Java: rand.nextInt(50) == 0 || !this.inWater || (all motion zero)
+        // Check if squid is in water
+        int bx = static_cast<int>(std::floor(squid.posX));
+        int by = static_cast<int>(std::floor(squid.posY));
+        int bz = static_cast<int>(std::floor(squid.posZ));
+        int32_t blockAtSquid = getBlockIdInWorld(bx, by, bz);
+        bool inWater = (blockAtSquid == 8 || blockAtSquid == 9);
+
+        std::uniform_int_distribution<int> chance50(0, 49);
+        bool shouldPickNew = (chance50(rng) == 0) || !inWater ||
+            (squid.squidRandomMotionVecX == 0.0f &&
+             squid.squidRandomMotionVecY == 0.0f &&
+             squid.squidRandomMotionVecZ == 0.0f);
+
+        if (shouldPickNew) {
+            // Java: float f = rand.nextFloat() * PI * 2.0f
+            std::uniform_real_distribution<float> fDist(0.0f, 1.0f);
+            float f = fDist(rng) * PI * 2.0f;
+            squid.squidRandomMotionVecX = std::cos(f) * 0.2f;
+            squid.squidRandomMotionVecY = -0.1f + fDist(rng) * 0.2f;
+            squid.squidRandomMotionVecZ = std::sin(f) * 0.2f;
+        }
+    }
+
+    // ─── Java: EntitySquid.onLivingUpdate() ───
+    // Advance pulse rotation cycle
+    squid.squidRotation += squid.squidRotationVelocity;
+    if (squid.squidRotation > PI * 2.0f) {
+        squid.squidRotation -= PI * 2.0f;
+        // Java: rand.nextInt(10) == 0 → re-randomize rotationVelocity
+        if (rng() % 10 == 0) {
+            std::uniform_real_distribution<float> fDist(0.0f, 1.0f);
+            squid.squidRotationVelocity = 1.0f / (fDist(rng) + 1.0f) * 0.2f;
+        }
+    }
+
+    // Check if squid is in water
+    int bx = static_cast<int>(std::floor(squid.posX));
+    int by = static_cast<int>(std::floor(squid.posY));
+    int bz = static_cast<int>(std::floor(squid.posZ));
+    int32_t blockAtSquid = getBlockIdInWorld(bx, by, bz);
+    bool inWater = (blockAtSquid == 8 || blockAtSquid == 9);
+
+    if (inWater) {
+        // ─── In water: pulse-based swimming ───
+        if (squid.squidRotation < PI) {
+            float f = squid.squidRotation / PI;
+            // Java: tentacleAngle = sin(f*f*PI) * PI * 0.25f (client-side visual only)
+            if (static_cast<double>(f) > 0.75) {
+                squid.squidRandomMotionSpeed = 1.0f;
+                squid.squidField70871 = 1.0f;
+            } else {
+                squid.squidField70871 *= 0.8f;
+            }
+        } else {
+            squid.squidRandomMotionSpeed *= 0.9f;
+            squid.squidField70871 *= 0.99f;
+        }
+
+        // Java: motionX/Y/Z = randomMotionVec * randomMotionSpeed (server-side)
+        squid.squidMotionX = static_cast<double>(squid.squidRandomMotionVecX) *
+                             static_cast<double>(squid.squidRandomMotionSpeed);
+        squid.squidMotionY = static_cast<double>(squid.squidRandomMotionVecY) *
+                             static_cast<double>(squid.squidRandomMotionSpeed);
+        squid.squidMotionZ = static_cast<double>(squid.squidRandomMotionVecZ) *
+                             static_cast<double>(squid.squidRandomMotionSpeed);
+    } else {
+        // ─── Out of water: fall with gravity ───
+        squid.squidMotionX = 0.0;
+        squid.squidMotionY -= 0.08;
+        squid.squidMotionY *= 0.98;
+        squid.squidMotionZ = 0.0;
+    }
+
+    // ─── Apply motion to position — Java: moveEntityWithHeading → moveEntity ───
+    squid.posX += squid.squidMotionX;
+    squid.posY += squid.squidMotionY;
+    squid.posZ += squid.squidMotionZ;
+
+    // ─── Simple ground collision — don't fall through solid blocks ───
+    int groundY = static_cast<int>(std::floor(squid.posY));
+    if (groundY >= 0 && groundY < 256) {
+        int32_t blockBelow = getBlockIdInWorld(
+            static_cast<int>(std::floor(squid.posX)),
+            groundY,
+            static_cast<int>(std::floor(squid.posZ)));
+        // If block is solid (not air, not water, not lava)
+        if (blockBelow != 0 && blockBelow != 8 && blockBelow != 9 &&
+            blockBelow != 10 && blockBelow != 11) {
+            squid.posY = static_cast<double>(groundY) + 1.0;
+            squid.squidMotionY = 0.0;
+        }
+    }
+
+    // Clamp to world bounds
+    if (squid.posY < 0.0) {
+        squid.posY = 0.0;
+        squid.squidMotionY = 0.0;
+    }
+
+    // ─── Update yaw from motion — Java: renderYawOffset += (-atan2(motionX, motionZ)*180/PI - offset)*0.1f ───
+    if (inWater) {
+        float horizSpeed = static_cast<float>(std::sqrt(
+            squid.squidMotionX * squid.squidMotionX +
+            squid.squidMotionZ * squid.squidMotionZ));
+        if (horizSpeed > 0.001f) {
+            float targetYaw = static_cast<float>(-std::atan2(squid.squidMotionX, squid.squidMotionZ)) * 180.0f / PI;
+            squid.yaw += (targetYaw - squid.yaw) * 0.1f;
+        }
+    }
+
+    // ─── Despawn check — Java: EntityWaterMob.despawnEntity() ───
+    // Water mobs use standard EntityLiving despawn rules
+    {
+        double nearestDistSq = 1e9;
+        std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
+        for (auto& conn : connections_) {
+            if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+            auto handler = conn->getHandler();
+            auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+            if (!ph || ph->isDead()) continue;
+            double dx = squid.posX - ph->getPlayerX();
+            double dy = squid.posY - ph->getPlayerY();
+            double dz = squid.posZ - ph->getPlayerZ();
+            double d2 = dx*dx + dy*dy + dz*dz;
+            if (d2 < nearestDistSq) nearestDistSq = d2;
+        }
+        // Java: EntityLiving.despawnEntity() — hard despawn > 128 blocks
+        if (nearestDistSq > 128.0 * 128.0) {
+            squid.isDead = true;
+            return;
+        }
+    }
+
+    // ─── Broadcast position to all clients ───
+    {
+        std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
+        for (auto& c : connections_) {
+            if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
+            auto handler = c->getHandler();
+            auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+            if (ph) {
+                ph->sendEntityTeleport(*c, squid.entityId,
+                    squid.posX, squid.posY, squid.posZ, squid.yaw, squid.pitch);
+            }
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Water mob spawning — Java: SpawnerAnimals for EnumCreatureType.waterCreature
+// Spawns squid in water, separate from grass-based passive mobs
+// ═══════════════════════════════════════════════════════════════════════════════
+void MinecraftServer::spawnWaterMobs() {
+    int playerCount = getOnlinePlayerCount();
+    if (playerCount == 0) return;
+    if (worlds_.empty()) return;
+
+    // Check water mob cap
+    {
+        std::lock_guard<std::mutex> lock(mobEntitiesMutex_);
+        int waterCount = 0;
+        for (auto& mob : mobEntities_) {
+            if (!mob.isDead && mob.mobType == 94) waterCount++;
+        }
+        if (waterCount >= MAX_WATER_MOBS) return;
+    }
+
+    // Pick a random player to spawn near
+    static thread_local std::mt19937 rng(std::random_device{}());
+    PlayHandler* targetPlayer = nullptr;
+    {
+        std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
+        std::vector<PlayHandler*> players;
+        for (auto& conn : connections_) {
+            if (conn->isConnected() && conn->getState() == ConnectionState::Play) {
+                auto handler = conn->getHandler();
+                auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+                if (ph && !ph->isDead()) players.push_back(ph);
+            }
+        }
+        if (players.empty()) return;
+        targetPlayer = players[rng() % players.size()];
+    }
+
+    // Generate spawn position 8-24 blocks from chosen player
+    std::uniform_int_distribution<int> offsetDist(-24, 24);
+    double spawnX = targetPlayer->getPlayerX() + offsetDist(rng);
+    double spawnZ = targetPlayer->getPlayerZ() + offsetDist(rng);
+
+    // Min 8 blocks away
+    double dx = spawnX - targetPlayer->getPlayerX();
+    double dz = spawnZ - targetPlayer->getPlayerZ();
+    if (dx * dx + dz * dz < 64.0) return;
+
+    int bx = static_cast<int>(std::floor(spawnX));
+    int bz = static_cast<int>(std::floor(spawnZ));
+
+    // Java: EntitySquid.getCanSpawnHere() — Y between 45 and 63, must be in water
+    // Find a water block in the valid Y range
+    int spawnY = -1;
+    for (int y = 63; y >= 45; --y) {
+        int32_t blockId = getBlockIdInWorld(bx, y, bz);
+        if (blockId == 8 || blockId == 9) {
+            spawnY = y;
+            break;
+        }
+    }
+    if (spawnY < 0) return;
+
+    // Spawn a squid
+    std::uniform_real_distribution<float> yawDist(0.0f, 360.0f);
+    float yaw = yawDist(rng);
+
+    int32_t eid = nextMobEntityId_.fetch_add(1, std::memory_order_relaxed);
+    int64_t currentTick = tickCount_.load(std::memory_order_relaxed);
+
+    SpawnedMob mob;
+    mob.entityId = eid;
+    mob.mobType = 94;
+    mob.posX = spawnX + 0.5;
+    mob.posY = static_cast<double>(spawnY) + 0.5;
+    mob.posZ = spawnZ + 0.5;
+    mob.yaw = yaw;
+    mob.pitch = 0.0f;
+    mob.health = getMobMaxHealth(94); // 10.0
+    mob.spawnTick = currentTick;
+    mob.isDead = false;
+    mob.isPassive = true;
+    mob.lastSentPosX = static_cast<int32_t>(std::floor(mob.posX * 32.0));
+    mob.lastSentPosY = static_cast<int32_t>(std::floor(mob.posY * 32.0));
+    mob.lastSentPosZ = static_cast<int32_t>(std::floor(mob.posZ * 32.0));
+
+    // Java: EntitySquid constructor — rotationVelocity = 1.0f / (rand.nextFloat() + 1.0f) * 0.2f
+    std::uniform_real_distribution<float> fDist(0.0f, 1.0f);
+    mob.squidRotationVelocity = 1.0f / (fDist(rng) + 1.0f) * 0.2f;
+
+    // Broadcast S0F SpawnMob
+    {
+        std::lock_guard<std::recursive_mutex> lock(connectionsMutex_);
+        for (auto& conn : connections_) {
+            if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+            auto handler = conn->getHandler();
+            auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+            if (ph) ph->sendSpawnMob(*conn, eid, 94, mob.posX, mob.posY, mob.posZ, 0.0f, 0.0f, 0.0f);
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock(mobEntitiesMutex_);
+        mobEntities_.push_back(std::move(mob));
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Silverfish AI — Java: EntitySilverfish.updateEntityActionState()
+// Handles: ally summoning from monster_egg blocks, hiding in stone blocks,
+// melee attack within 1.2 blocks, wander AI, and despawn logic.
+// ═══════════════════════════════════════════════════════════════════════════════
+void MinecraftServer::tickSilverfish(SpawnedMob& sf, int64_t currentTick) {
+    if (worlds_.empty()) return;
+    auto* world = worlds_[0].get();
+
+    // Java: Facing.offsetsXForSide, offsetsYForSide, offsetsZForSide
+    // Indices 0..5 = bottom, top, north, south, west, east
+    static constexpr int facingX[6] = { 0, 0, 0, 0, -1, 1 };
+    static constexpr int facingY[6] = { -1, 1, 0, 0, 0, 0 };
+    static constexpr int facingZ[6] = { 0, 0, -1, 1, 0, 0 };
+
+    int bx = static_cast<int>(std::floor(sf.posX));
+    int by = static_cast<int>(std::floor(sf.posY));
+    int bz = static_cast<int>(std::floor(sf.posZ));
+
+    // ─── Ally summoning — Java: updateEntityActionState() lines 111-143 ───
+    // When allySummonCooldown reaches 0, search outward spiral for monster_egg blocks.
+    // Breaking them spawns new silverfish via onBlockDestroyedByPlayer.
+    if (sf.allySummonCooldown > 0) {
+        --sf.allySummonCooldown;
+        if (sf.allySummonCooldown == 0) {
+            int found = 0;
+            // Java spiral: for n6 = 0..±5; for n = 0..±10; for n7 = 0..±10
+            // Spiral pattern: 0, 1, -1, 2, -2, 3, -3, ...
+            auto nextSpiral = [](int v) -> int {
+                return v <= 0 ? 1 - v : -v;
+            };
+
+            for (int dy = 0; found == 0 && dy <= 5 && dy >= -5; dy = nextSpiral(dy)) {
+                for (int dx = 0; found == 0 && dx <= 10 && dx >= -10; dx = nextSpiral(dx)) {
+                    for (int dz = 0; found == 0 && dz <= 10 && dz >= -10; dz = nextSpiral(dz)) {
+                        int cx = bx + dx;
+                        int cy = by + dy;
+                        int cz = bz + dz;
+                        int32_t blockId = getBlockIdInWorld(cx, cy, cz);
+                        if (blockId == 97) { // monster_egg
+                            // Java: breakBlock → replaces with original block
+                            // func_150197_b(meta) → get original block+meta from monster_egg meta
+                            int32_t meta = 0;
+                            if (world) {
+                                Block* blk = world->getBlock(cx, cy, cz);
+                                if (blk) meta = world->getBlockMetadata(cx, cy, cz);
+                            }
+                            // Convert monster_egg meta → original block
+                            // Java: BlockSilverfish.func_150197_b(meta)
+                            int32_t origBlock = 1;  // stone
+                            int32_t origMeta = 0;
+                            switch (meta) {
+                                case 0: origBlock = 1; origMeta = 0; break;  // stone
+                                case 1: origBlock = 4; origMeta = 0; break;  // cobblestone
+                                case 2: origBlock = 98; origMeta = 0; break; // stonebrick
+                                case 3: origBlock = 98; origMeta = 1; break; // mossy stonebrick
+                                case 4: origBlock = 98; origMeta = 2; break; // cracked stonebrick
+                                case 5: origBlock = 98; origMeta = 3; break; // chiseled stonebrick
+                                default: origBlock = 1; origMeta = 0; break;
+                            }
+                            // Break the monster_egg → restore original block
+                            setBlockInWorld(cx, cy, cz, origBlock, origMeta);
+                            broadcastBlockChange(cx, cy, cz, origBlock, origMeta);
+
+                            // Java: onBlockDestroyedByPlayer → spawn silverfish
+                            summonMob(60, static_cast<double>(cx) + 0.5,
+                                      static_cast<double>(cy),
+                                      static_cast<double>(cz) + 0.5);
+
+                            // Java: if (rand.nextBoolean()) found = 1; break;
+                            if (rand() % 2 == 0) {
+                                found = 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ─── Find nearest player within 8 blocks — Java: findPlayerToAttack() ───
+    // Java: getClosestVulnerablePlayerToEntity(this, 8.0)
+    PlayHandler* target = nullptr;
+    double targetDistSq = 64.0; // 8 blocks squared
+    double targetX = 0, targetY = 0, targetZ = 0;
+    {
+        std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
+        for (auto& conn : connections_) {
+            if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+            auto handler = conn->getHandler();
+            auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+            if (!ph || ph->isDead()) continue;
+            if (ph->getGameMode() == 1 || ph->getGameMode() == 3) continue; // skip creative/spectator
+            double dx = ph->getPlayerX() - sf.posX;
+            double dy = ph->getPlayerY() - sf.posY;
+            double dz = ph->getPlayerZ() - sf.posZ;
+            double distSq = dx * dx + dy * dy + dz * dz;
+            if (distSq < targetDistSq) {
+                targetDistSq = distSq;
+                target = ph;
+                targetX = ph->getPlayerX();
+                targetY = ph->getPlayerY();
+                targetZ = ph->getPlayerZ();
+            }
+        }
+    }
+
+    double speed = 0.6 * 0.05; // Java: movementSpeed * tick factor
+
+    if (target) {
+        // ─── Melee attack — Java: attackEntity() ───
+        // Java: if (attackTime <= 0 && f < 1.2f && target.bb overlaps) → attack
+        // Simplified: if within ~1.5 blocks (2.25 distSq), deal 1.0 damage
+        if (sf.attackCooldown > 0) --sf.attackCooldown;
+        if (sf.attackCooldown <= 0 && targetDistSq < 2.25) {
+            sf.attackCooldown = 20;
+            // Java: attackEntityAsMob → 1.0 damage
+            float dmg = 1.0f;
+            int32_t armorVal = target->getTotalArmorValue();
+            if (armorVal > 0) {
+                dmg *= (25.0f - armorVal) / 25.0f;
+            }
+            int32_t protMod = target->getEnchantmentProtectionModifier();
+            if (protMod > 0) {
+                dmg *= (1.0f - std::min(protMod, 20) * 0.04f);
+            }
+            if (dmg < 0.5f) dmg = 0.5f;
+
+            target->applyDamage(dmg);
+            broadcastEntityEvent(target->getEntityId(), 2);
+            broadcastSound("mob.silverfish.hit", sf.posX, sf.posY, sf.posZ, 1.0f, 1.0f);
+            broadcastSound("game.player.hurt", targetX, targetY, targetZ, 1.0f, 1.0f);
+
+            if (target->getHealth() <= 0.0f) {
+                broadcastEntityEvent(target->getEntityId(), 3);
+                broadcastChatMessage(target->getPlayerName() + " was slain by Silverfish");
+            }
+        }
+
+        // ─── Chase player — move toward target ───
+        if (targetDistSq > 2.25) {
+            double dx = targetX - sf.posX;
+            double dz = targetZ - sf.posZ;
+            double dist = std::sqrt(dx * dx + dz * dz);
+            if (dist > 0.01) {
+                double moveX = (dx / dist) * speed;
+                double moveZ = (dz / dist) * speed;
+                sf.posX += moveX;
+                sf.posZ += moveZ;
+                sf.yaw = static_cast<float>(std::atan2(-dx, dz) * 180.0 / M_PI);
+
+                // Step-up and gravity
+                int nbx = static_cast<int>(std::floor(sf.posX));
+                int nbz = static_cast<int>(std::floor(sf.posZ));
+                int startY = static_cast<int>(sf.posY);
+                Block* feetBlock = world->getBlock(nbx, startY, nbz);
+                if (feetBlock != nullptr) {
+                    Block* stepBlock = world->getBlock(nbx, startY + 1, nbz);
+                    if (stepBlock == nullptr) {
+                        sf.posY = static_cast<double>(startY + 1);
+                    } else {
+                        sf.posX -= moveX;
+                        sf.posZ -= moveZ;
+                    }
+                } else {
+                    for (int y = startY - 1; y > 0; --y) {
+                        Block* b = world->getBlock(nbx, y, nbz);
+                        if (b != nullptr) {
+                            sf.posY = static_cast<double>(y + 1);
+                            break;
+                        }
+                        if (y == 1) sf.posY = 1.0;
+                    }
+                }
+            }
+        }
+    } else {
+        // ─── No target: try to hide in a block — Java: updateEntityActionState() lines 146-162 ───
+        // Java: if (entityToAttack == null && !hasPath()) → try to enter adjacent block
+        // Pick a random face (0-5), check if adjacent block is stone/cobble/stonebrick
+        // If so, convert to monster_egg and despawn
+        int face = rand() % 6;
+        int adjX = bx + facingX[face];
+        int adjY = static_cast<int>(std::floor(sf.posY + 0.5)) + facingY[face];
+        int adjZ = bz + facingZ[face];
+
+        int32_t adjBlockId = getBlockIdInWorld(adjX, adjY, adjZ);
+        int32_t adjMeta = 0;
+        if (world) {
+            Block* blk = world->getBlock(adjX, adjY, adjZ);
+            if (blk) adjMeta = world->getBlockMetadata(adjX, adjY, adjZ);
+        }
+
+        // Java: BlockSilverfish.func_150196_a(block) → stone(1), cobble(4), stonebrick(98)
+        bool canHide = (adjBlockId == 1 || adjBlockId == 4 || adjBlockId == 98);
+
+        if (canHide) {
+            // Java: BlockSilverfish.func_150195_a(block, meta) → monster_egg meta
+            int32_t eggMeta = 0;
+            if (adjMeta == 0) {
+                if (adjBlockId == 4) eggMeta = 1;       // cobblestone → meta 1
+                else if (adjBlockId == 98) eggMeta = 2; // stonebrick → meta 2
+                // stone → meta 0 (default)
+            } else if (adjBlockId == 98) {
+                switch (adjMeta) {
+                    case 1: eggMeta = 3; break; // mossy stonebrick
+                    case 2: eggMeta = 4; break; // cracked stonebrick
+                    case 3: eggMeta = 5; break; // chiseled stonebrick
+                    default: eggMeta = 2; break;
+                }
+            }
+
+            setBlockInWorld(adjX, adjY, adjZ, 97, eggMeta); // monster_egg = 97
+            broadcastBlockChange(adjX, adjY, adjZ, 97, eggMeta);
+
+            // Java: spawnExplosionParticle() + setDead()
+            broadcastEffect(2006, bx, by, bz, 0); // explosion particles
+            sf.isDead = true;
+            return;
+        } else {
+            // ─── Wander randomly — Java: updateWanderPath() ───
+            double wanderX = sf.posX + ((double)(rand() % 100) / 100.0 - 0.5) * 2.0;
+            double wanderZ = sf.posZ + ((double)(rand() % 100) / 100.0 - 0.5) * 2.0;
+            double dx = wanderX - sf.posX;
+            double dz = wanderZ - sf.posZ;
+            double dist = std::sqrt(dx * dx + dz * dz);
+            if (dist > 0.01) {
+                sf.posX += (dx / dist) * speed * 0.5;
+                sf.posZ += (dz / dist) * speed * 0.5;
+                sf.yaw = static_cast<float>(std::atan2(-dx, dz) * 180.0 / M_PI);
+            }
+
+            // Gravity
+            int nbx = static_cast<int>(std::floor(sf.posX));
+            int nbz = static_cast<int>(std::floor(sf.posZ));
+            int startY = static_cast<int>(sf.posY);
+            Block* feetBlock = world->getBlock(nbx, startY, nbz);
+            if (feetBlock != nullptr) {
+                Block* stepBlock = world->getBlock(nbx, startY + 1, nbz);
+                if (stepBlock == nullptr) {
+                    sf.posY = static_cast<double>(startY + 1);
+                }
+            } else {
+                for (int y = startY - 1; y > 0; --y) {
+                    Block* b = world->getBlock(nbx, y, nbz);
+                    if (b != nullptr) {
+                        sf.posY = static_cast<double>(y + 1);
+                        break;
+                    }
+                    if (y == 1) sf.posY = 1.0;
+                }
+            }
+        }
+    }
+
+    // ─── Step sound — Java: EntitySilverfish.playStepSound() ───
+    // Play step sound every ~10 ticks while moving
+    if ((currentTick - sf.spawnTick) % 10 == 0) {
+        broadcastSound("mob.silverfish.step", sf.posX, sf.posY, sf.posZ, 0.15f, 1.0f);
+    }
+
+    // ─── Broadcast position to all clients ───
+    {
+        std::lock_guard<std::recursive_mutex> connLock(connectionsMutex_);
+        for (auto& c : connections_) {
+            if (!c->isConnected() || c->getState() != ConnectionState::Play) continue;
+            auto handler = c->getHandler();
+            auto* ph = dynamic_cast<PlayHandler*>(handler.get());
+            if (ph) {
+                ph->sendEntityTeleport(*c, sf.entityId,
+                    sf.posX, sf.posY, sf.posZ, sf.yaw, sf.pitch);
+            }
         }
     }
 }

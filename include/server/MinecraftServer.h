@@ -865,15 +865,35 @@ private:
         bool isWitherArmored() const { return health <= 150.0f; } // <= maxHealth/2
         // ─── Snow Golem state — Java: EntitySnowman ───
         int32_t snowGolemAttackCooldown = 0;        // Java: EntityAIArrowAttack attackTime (20 tick interval)
+        // ─── Bat state — Java: EntityBat ───
+        bool isBatHanging = true;                   // DW 16 bit 0x01: true = hanging from ceiling
+        double batMotionX = 0, batMotionY = 0, batMotionZ = 0; // Java: motionX/Y/Z
+        // Java: EntityBat.spawnPosition — random flight target
+        int32_t batTargetX = 0, batTargetY = 0, batTargetZ = 0;
+        bool batHasTarget = false;                  // true if spawnPosition is set
+        // ─── Squid state — Java: EntitySquid ───
+        float squidRotation = 0.0f;                 // Java: squidRotation — pulse cycle phase
+        float squidRotationVelocity = 0.2f;         // Java: rotationVelocity — cycle speed
+        float squidRandomMotionSpeed = 0.0f;        // Java: randomMotionSpeed — propulsion
+        float squidField70871 = 0.0f;               // Java: field_70871_bB — tentacle animation speed
+        float squidRandomMotionVecX = 0.0f;         // Java: randomMotionVecX
+        float squidRandomMotionVecY = 0.0f;         // Java: randomMotionVecY
+        float squidRandomMotionVecZ = 0.0f;         // Java: randomMotionVecZ
+        double squidMotionX = 0, squidMotionY = 0, squidMotionZ = 0; // Java: motionX/Y/Z
+        int32_t squidEntityAge = 0;                 // Java: entityAge — direction reset timer
+        // ─── Silverfish state — Java: EntitySilverfish ───
+        int32_t allySummonCooldown = 0;              // Java: allySummonCooldown — 20 ticks after hit, triggers monster_egg search
     };
     mutable std::mutex mobEntitiesMutex_;
     std::vector<SpawnedMob> mobEntities_;
     std::atomic<int32_t> nextMobEntityId_{200000};
     static constexpr int MAX_HOSTILE_MOBS = 70;  // Java: EnumCreatureType.MONSTER.maxNumber
     static constexpr int MAX_PASSIVE_MOBS = 10;  // Java: EnumCreatureType.creature.maxNumber
+    static constexpr int MAX_WATER_MOBS = 5;     // Java: EnumCreatureType.waterCreature.maxNumber
 
     void spawnNaturalMobs();
     void spawnPassiveMobs();
+    void spawnWaterMobs();
     void tickMobs();
     void tickRandomBlocks();
     /** Tick a single Ender Dragon — Java: EntityDragon.onLivingUpdate() + onDeathUpdate() */
@@ -882,6 +902,12 @@ private:
     void tickWither(SpawnedMob& wither, int64_t currentTick);
     /** Tick a single Snow Golem — Java: EntitySnowman.onLivingUpdate() + ranged attack AI */
     void tickSnowGolem(SpawnedMob& golem, int64_t currentTick);
+    /** Tick a single Bat — Java: EntityBat.onUpdate() + updateAITasks() */
+    void tickBat(SpawnedMob& bat, int64_t currentTick);
+    /** Tick a single Squid — Java: EntitySquid.onLivingUpdate() + updateEntityActionState() */
+    void tickSquid(SpawnedMob& squid, int64_t currentTick);
+    /** Tick a single Silverfish — Java: EntitySilverfish.updateEntityActionState() */
+    void tickSilverfish(SpawnedMob& sf, int64_t currentTick);
 
 public:
     // ─── Arrow projectile entities ──────────────────────────────────
