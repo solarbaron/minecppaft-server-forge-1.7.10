@@ -883,6 +883,8 @@ private:
         int32_t squidEntityAge = 0;                 // Java: entityAge — direction reset timer
         // ─── Silverfish state — Java: EntitySilverfish ───
         int32_t allySummonCooldown = 0;              // Java: allySummonCooldown — 20 ticks after hit, triggers monster_egg search
+        // ─── Skeleton type — Java: EntitySkeleton DataWatcher(13) ───
+        int32_t skeletonType = 0;                    // 0=normal skeleton (bow), 1=wither skeleton (sword, Wither I on hit)
     };
     mutable std::mutex mobEntitiesMutex_;
     std::vector<SpawnedMob> mobEntities_;

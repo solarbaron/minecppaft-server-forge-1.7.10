@@ -3059,12 +3059,24 @@ void MinecraftServer::handlePlayerAttack(PlayHandler& attacker, Connection& atta
                     switch (mobType) {
                         case 54: // Zombie → rotten flesh (367)
                             dropId = 367; baseCount = 1 + (rand() % 2); break;
-                        case 51: // Skeleton → bones (352) + arrows (262)
-                            dropId = 352; baseCount = 1 + (rand() % 2);
-                            if (rand() % 2 == 0) {
-                                int32_t arrowCount = 1 + (rand() % 2) + looting;
-                                spawnItemDrop(mob.posX, mob.posY, mob.posZ, 262, 0, arrowCount);
+                        case 51: // Skeleton — Java: EntitySkeleton.dropFewItems()
+                            if (mob.skeletonType == 1) {
+                                // Wither Skeleton → coal (263) + bones (352)
+                                int32_t coalCount = rand() % (3 + looting) - 1;
+                                if (coalCount > 0)
+                                    spawnItemDrop(mob.posX, mob.posY, mob.posZ, 263, 0, coalCount);
+                                // Rare drop: wither skeleton skull (397:1) — Java: 2.5% + 1%/looting
+                                if (rand() % 40 < (1 + looting))
+                                    spawnItemDrop(mob.posX, mob.posY, mob.posZ, 397, 1, 1);
+                            } else {
+                                // Normal Skeleton → arrows (262)
+                                if (rand() % 2 == 0) {
+                                    int32_t arrowCount = 1 + (rand() % 2) + looting;
+                                    spawnItemDrop(mob.posX, mob.posY, mob.posZ, 262, 0, arrowCount);
+                                }
                             }
+                            // Both types drop bones
+                            dropId = 352; baseCount = 1 + (rand() % 2);
                             break;
                         case 50: // Creeper → gunpowder (289)
                             dropId = 289; baseCount = rand() % 2; break;
@@ -6358,6 +6370,28 @@ int32_t MinecraftServer::summonMob(uint8_t mobType, double x, double y, double z
             std::uniform_real_distribution<float> fDist(0.0f, 1.0f);
             mob.squidRotationVelocity = 1.0f / (fDist(squidRng) + 1.0f) * 0.2f;
         }
+
+        // Skeleton type detection — Java: EntitySkeleton.onSpawnWithEgg()
+        // In Nether (near nether_brick 112), 80% chance to become Wither Skeleton (type 1)
+        if (mobType == 51) {
+            int32_t bx = static_cast<int32_t>(std::floor(x));
+            int32_t by = static_cast<int32_t>(std::floor(y));
+            int32_t bz = static_cast<int32_t>(std::floor(z));
+            // Java: WorldProviderHell check — detect Nether via nether blocks nearby
+            int32_t blockBelow = getBlockIdInWorld(bx, by - 1, bz);
+            bool inNether = (blockBelow == 112 || blockBelow == 87 || blockBelow == 88 ||
+                             blockBelow == 113 || blockBelow == 114);
+            // Java: getRNG().nextInt(5) > 0 → 80% wither skeleton in Nether
+            if (inNether && (rand() % 5) > 0) {
+                mob.skeletonType = 1;
+            }
+            // Send DW byte 13 — Java: EntitySkeleton.entityInit() DataWatcher(13)
+            auto dw13Pkt = PacketBuilder::entityMetadataByte(eid, 13, static_cast<uint8_t>(mob.skeletonType));
+            for (auto& conn : connections_) {
+                if (!conn->isConnected() || conn->getState() != ConnectionState::Play) continue;
+                conn->sendPacket(dw13Pkt);
+            }
+        }
     }
     {
         std::lock_guard<std::mutex> lock(mobEntitiesMutex_);
@@ -8115,6 +8149,9 @@ void MinecraftServer::tickMobs() {
                     // Only undead: zombie(54), skeleton(51)
                     // Note: pigmen(57) are undead but spawn in Nether, not affected here
                     if (mob.mobType != 54 && mob.mobType != 51) continue;
+                    // Java: EntitySkeleton.setSkeletonType(1) → isImmuneToFire = true
+                    // Wither skeletons are fire immune and don't burn in sunlight
+                    if (mob.mobType == 51 && mob.skeletonType == 1) continue;
 
                     // Check if mob can see sky — simplified: Y > 62 (sea level)
                     // Java: world.canBlockSeeTheSky()
@@ -8274,6 +8311,8 @@ void MinecraftServer::tickMobs() {
         // Now uses real arrow projectiles via spawnArrow() instead of instant-hit
         for (auto& mob : mobEntities_) {
             if (mob.isDead || mob.mobType != 51) continue; // Skeleton only
+            // Java: Wither skeletons use melee (stone sword), not ranged arrows
+            if (mob.skeletonType == 1) continue;
             if (mob.attackCooldown > 0) { --mob.attackCooldown; continue; }
 
             // Find nearest player within 16 blocks
@@ -8600,7 +8639,8 @@ void MinecraftServer::tickMobs() {
         auto getMobAttackDamage = [](uint8_t mobType) -> float {
             switch (mobType) {
                 case 54: return 3.0f;   // Zombie — Java: 3.0 (Easy: 2, Normal: 3, Hard: 4)
-                case 51: return 2.0f;   // Skeleton (melee fallback) — arrows handled separately
+                case 51: return 2.0f;   // Normal Skeleton (melee fallback) — arrows handled separately
+                                        // Note: Wither Skeleton damage (4.0) handled below via skeletonType check
                 case 50: return 0.0f;   // Creeper — doesn't melee, explodes
                 case 52: return 2.0f;   // Spider — Java: 2.0
                 case 55: return 3.0f;   // Slime — Java: size-based, simplified to 3
@@ -8619,6 +8659,8 @@ void MinecraftServer::tickMobs() {
         for (auto& mob : mobEntities_) {
             if (mob.isDead) continue;
             float atkDmg = getMobAttackDamage(mob.mobType);
+            // Java: Wither Skeleton — EntitySkeleton.setSkeletonType(1) → attackDamage=4.0
+            if (mob.mobType == 51 && mob.skeletonType == 1) atkDmg = 4.0f;
             if (atkDmg <= 0.0f) continue; // Non-melee mob
 
             // Attack cooldown: 20 ticks (1 second)
@@ -8661,6 +8703,11 @@ void MinecraftServer::tickMobs() {
                     if (mob.mobType == 59) {
                         applyPlayerPotionEffect(ph->getPlayerName(), 19, 140, 0); // Poison, 7s, lvl 1
                     }
+                    // ─── Wither Skeleton wither effect ───────────────────
+                    // Java: EntitySkeleton.attackEntityAsMob() — Wither I for 200 ticks
+                    if (mob.mobType == 51 && mob.skeletonType == 1) {
+                        applyPlayerPotionEffect(ph->getPlayerName(), 20, 200, 0); // Wither, 10s, lvl 1
+                    }
                     // Hurt animation + sound
                     broadcastEntityEvent(ph->getEntityId(), 2);
                     broadcastSound("game.player.hurt",
@@ -8681,7 +8728,7 @@ void MinecraftServer::tickMobs() {
                         const char* deathMsg = "was slain";
                         switch (mob.mobType) {
                             case 54: deathMsg = "was slain by Zombie"; break;
-                            case 51: deathMsg = "was shot by Skeleton"; break;
+                            case 51: deathMsg = (mob.skeletonType == 1) ? "was slain by Wither Skeleton" : "was shot by Skeleton"; break;
                             case 52: deathMsg = "was slain by Spider"; break;
                             case 58: deathMsg = "was slain by Enderman"; break;
                             case 57: deathMsg = "was slain by Zombie Pigman"; break;
@@ -9802,10 +9849,22 @@ void MinecraftServer::tickArrows() {
                     int32_t baseCount = 0, dropId = 0, dropMeta = 0;
                     switch (mob.mobType) {
                         case 54: dropId = 367; baseCount = 1 + (rand() % 2); break;
-                        case 51:
+                        case 51: // Java: EntitySkeleton.dropFewItems()
+                            if (mob.skeletonType == 1) {
+                                // Wither Skeleton → coal (263) + bones (352)
+                                int32_t coalCount = rand() % (3 + lootingLevel) - 1;
+                                if (coalCount > 0)
+                                    spawnItemDrop(mob.posX, mob.posY, mob.posZ, 263, 0, coalCount);
+                                // Rare drop: wither skeleton skull (397:1)
+                                if (rand() % 40 < (1 + lootingLevel))
+                                    spawnItemDrop(mob.posX, mob.posY, mob.posZ, 397, 1, 1);
+                            } else {
+                                // Normal Skeleton → arrows (262)
+                                if (rand() % 2 == 0)
+                                    spawnItemDrop(mob.posX, mob.posY, mob.posZ, 262, 0, 1 + (rand() % 2) + lootingLevel);
+                            }
+                            // Both types drop bones
                             dropId = 352; baseCount = 1 + (rand() % 2);
-                            if (rand() % 2 == 0)
-                                spawnItemDrop(mob.posX, mob.posY, mob.posZ, 262, 0, 1 + (rand() % 2) + lootingLevel);
                             break;
                         case 50: dropId = 289; baseCount = rand() % 2; break;
                         case 52:
