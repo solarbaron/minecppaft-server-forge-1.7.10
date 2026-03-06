@@ -754,6 +754,12 @@ private:
     mutable std::mutex signsMutex_;
     std::map<int64_t, SignData> signs_;  // packed pos → text
 
+    // ─── Skull storage ───────────────────────────────────────────────────
+    // Java reference: TileEntitySkull — stores skull type per position
+    // Skull types: 0=skeleton, 1=wither_skeleton, 2=zombie, 3=player, 4=creeper
+    mutable std::mutex skullsMutex_;
+    std::map<int64_t, int32_t> skulls_;  // packed pos → skullType
+
     static void generateVillagerTrades(int profession, std::vector<MerchantRecipe>& out);
 
     // ─── Mob entities ───────────────────────────────────────────────

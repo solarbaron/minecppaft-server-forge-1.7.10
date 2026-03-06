@@ -2867,8 +2867,8 @@ void PlayHandler::handlePlayerDigging(const uint8_t* data, size_t length, Connec
             // Banner → self (1.8+, skip)
             // Flower pot → item 390
             case 140: return {390, 1, 0};
-            // Skull/head → item 397
-            case 144: return {397, 1, blockMeta};
+            // Skull/head → item 397 (damage = skull type from skulls_ map; overridden after call)
+            case 144: return {397, 1, 0};
             // Daylight sensor → self
             case 151: return {151, 1, 0};
             // Hopper → self  
@@ -2916,6 +2916,12 @@ void PlayHandler::handlePlayerDigging(const uint8_t* data, size_t length, Connec
             world->setBlockMetadata(blockX, blockY, blockZ, 0);
             server_.broadcastBlockChange(blockX, blockY, blockZ, 0, 0);
             server_.broadcastEffect(2001, blockX, blockY, blockZ, brokenBlockId);
+            // Clean up skull tile entity data
+            if (brokenBlockId == 144) {
+                int64_t skullPos = MinecraftServer::packBlockPos(blockX, blockY, blockZ);
+                std::lock_guard<std::mutex> lock(server_.skullsMutex_);
+                server_.skulls_.erase(skullPos);
+            }
             // Multi-block propagation (doors/beds/cactus/sugar cane)
             if (brokenBlockId == 64 || brokenBlockId == 71) {
                 int otherY = (brokenMeta & 0x08) ? blockY - 1 : blockY + 1;
@@ -3003,6 +3009,18 @@ void PlayHandler::handlePlayerDigging(const uint8_t* data, size_t length, Connec
                     1.0f, 0.8f);
                 // Spawn drop
                 auto drop = getBlockDrop(brokenBlockId, brokenMeta);
+                // Override skull drop metadata with stored skull type
+                if (brokenBlockId == 144) {
+                    int64_t skullPos = MinecraftServer::packBlockPos(blockX, blockY, blockZ);
+                    std::lock_guard<std::mutex> lock(server_.skullsMutex_);
+                    auto sit = server_.skulls_.find(skullPos);
+                    if (sit != server_.skulls_.end()) {
+                        drop = BlockDrop{397, 1, sit->second};
+                        server_.skulls_.erase(sit);
+                    } else {
+                        drop = BlockDrop{397, 1, 0};
+                    }
+                }
                 if (drop.itemId >= 0 && drop.quantity > 0) {
                     server_.spawnItemDrop(
                         static_cast<double>(blockX),
@@ -3202,6 +3220,18 @@ void PlayHandler::handlePlayerDigging(const uint8_t* data, size_t length, Connec
             }
         }
         auto drop = getBlockDrop(brokenBlockId, brokenMeta, heldToolId, hasSilkTouch, fortuneLevel);
+        // Override skull drop metadata with stored skull type
+        if (brokenBlockId == 144) {
+            int64_t skullPos = MinecraftServer::packBlockPos(blockX, blockY, blockZ);
+            std::lock_guard<std::mutex> lock(server_.skullsMutex_);
+            auto sit = server_.skulls_.find(skullPos);
+            if (sit != server_.skulls_.end()) {
+                drop = BlockDrop{397, 1, sit->second};
+                server_.skulls_.erase(sit);
+            } else {
+                drop = BlockDrop{397, 1, 0};
+            }
+        }
         if (drop.itemId >= 0 && drop.quantity > 0) {
             server_.spawnItemDrop(
                 static_cast<double>(blockX),
@@ -5782,6 +5812,160 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
 
     // Broadcast block change to all players
     server_.broadcastBlockChange(placeX, placeY, placeZ, placeBlockId, meta);
+
+    // ─── Skull type storage — Java: TileEntitySkull.setType(damage) ──────
+    // When a skull block (144) is placed, store skull type from item damage
+    if (placeBlockId == 144) {
+        int32_t skullType = itemDamage; // Item 397 damage = skull type (0-4)
+        int64_t posKey = MinecraftServer::packBlockPos(placeX, placeY, placeZ);
+        {
+            std::lock_guard<std::mutex> lock(server_.skullsMutex_);
+            server_.skulls_[posKey] = skullType;
+        }
+    }
+
+    // ─── Wither building detection — Java: BlockSkull.makeWither() ───────
+    // When a skull is placed, check if it completes a Wither pattern:
+    //   3 wither skeleton skulls (type 1) across the top
+    //   T-shape of soul sand (88) below: 3 at y-1, 1 at y-2 center
+    if (placeBlockId == 144) {
+        // Helper: check if block at pos is skull block 144 with skullType == 1
+        auto isWitherSkull = [&](int32_t sx, int32_t sy, int32_t sz) -> bool {
+            if (server_.getBlockIdInWorld(sx, sy, sz) != 144) return false;
+            int64_t key = MinecraftServer::packBlockPos(sx, sy, sz);
+            std::lock_guard<std::mutex> lock(server_.skullsMutex_);
+            auto it = server_.skulls_.find(key);
+            return it != server_.skulls_.end() && it->second == 1;
+        };
+
+        // Get skull type of placed skull
+        int32_t placedSkullType = 0;
+        {
+            int64_t key = MinecraftServer::packBlockPos(placeX, placeY, placeZ);
+            std::lock_guard<std::mutex> lock(server_.skullsMutex_);
+            auto it = server_.skulls_.find(key);
+            if (it != server_.skulls_.end()) placedSkullType = it->second;
+        }
+
+        // Only wither skeleton skulls (type 1) trigger Wither building
+        // Java: tileEntitySkull.getSkullType() == 1 && n2 >= 2 && difficulty != PEACEFUL
+        if (placedSkullType == 1 && placeY >= 2) {
+            bool witherBuilt = false;
+
+            // Pattern 1: Z-axis alignment — skulls span along Z
+            // Java: for (n4 = -2; n4 <= 0; ++n4) — tries offsets where placed skull could be
+            //   at z+n4, z+n4+1, or z+n4+2 (i.e. leftmost, center, or rightmost)
+            for (int32_t n4 = -2; n4 <= 0 && !witherBuilt; ++n4) {
+                int32_t sz0 = placeZ + n4;     // leftmost skull Z
+                int32_t sz1 = placeZ + n4 + 1; // center skull Z
+                int32_t sz2 = placeZ + n4 + 2; // rightmost skull Z
+
+                // Check 3 soul sand at y-1 and 1 soul sand at y-2 (center)
+                if (server_.getBlockIdInWorld(placeX, placeY - 1, sz0) != 88) continue;
+                if (server_.getBlockIdInWorld(placeX, placeY - 1, sz1) != 88) continue;
+                if (server_.getBlockIdInWorld(placeX, placeY - 1, sz2) != 88) continue;
+                if (server_.getBlockIdInWorld(placeX, placeY - 2, sz1) != 88) continue;
+
+                // Check 3 wither skeleton skulls at y
+                if (!isWitherSkull(placeX, placeY, sz0)) continue;
+                if (!isWitherSkull(placeX, placeY, sz1)) continue;
+                if (!isWitherSkull(placeX, placeY, sz2)) continue;
+
+                // Pattern matched! Clear all 7 structure blocks
+                server_.setBlockInWorld(placeX, placeY, sz0, 0, 0);
+                server_.setBlockInWorld(placeX, placeY, sz1, 0, 0);
+                server_.setBlockInWorld(placeX, placeY, sz2, 0, 0);
+                server_.setBlockInWorld(placeX, placeY - 1, sz0, 0, 0);
+                server_.setBlockInWorld(placeX, placeY - 1, sz1, 0, 0);
+                server_.setBlockInWorld(placeX, placeY - 1, sz2, 0, 0);
+                server_.setBlockInWorld(placeX, placeY - 2, sz1, 0, 0);
+
+                // Remove skull data for cleared positions
+                {
+                    std::lock_guard<std::mutex> lock(server_.skullsMutex_);
+                    server_.skulls_.erase(MinecraftServer::packBlockPos(placeX, placeY, sz0));
+                    server_.skulls_.erase(MinecraftServer::packBlockPos(placeX, placeY, sz1));
+                    server_.skulls_.erase(MinecraftServer::packBlockPos(placeX, placeY, sz2));
+                }
+
+                // Spawn Wither — Java: (x+0.5, y-1.45, z+n4+1.5), yaw=90°
+                int32_t witherEid = server_.summonMob(64, // EntityWither type ID
+                    static_cast<double>(placeX) + 0.5,
+                    static_cast<double>(placeY) - 1.45,
+                    static_cast<double>(sz0) + 1.5);
+
+                // Spawn particles — Java: 120 snowballpoof particles
+                for (int i = 0; i < 120; ++i) {
+                    server_.broadcastParticle("snowballpoof",
+                        static_cast<float>(placeX) + static_cast<float>(rand()) / RAND_MAX,
+                        static_cast<float>(placeY - 2) + static_cast<float>(rand()) / RAND_MAX * 3.9f,
+                        static_cast<float>(sz0 + 1) + static_cast<float>(rand()) / RAND_MAX,
+                        0.0f, 0.0f, 0.0f, 0.0f, 1);
+                }
+
+                std::cout << "[Wither] Wither built at " << placeX << "," << (placeY - 1) << "," << sz1
+                          << " (Z-axis pattern)\n";
+                witherBuilt = true;
+            }
+
+            // Pattern 2: X-axis alignment — skulls span along X
+            // Java: for (n4 = -2; n4 <= 0; ++n4)
+            for (int32_t n4 = -2; n4 <= 0 && !witherBuilt; ++n4) {
+                int32_t sx0 = placeX + n4;     // leftmost skull X
+                int32_t sx1 = placeX + n4 + 1; // center skull X
+                int32_t sx2 = placeX + n4 + 2; // rightmost skull X
+
+                // Check 3 soul sand at y-1 and 1 soul sand at y-2 (center)
+                if (server_.getBlockIdInWorld(sx0, placeY - 1, placeZ) != 88) continue;
+                if (server_.getBlockIdInWorld(sx1, placeY - 1, placeZ) != 88) continue;
+                if (server_.getBlockIdInWorld(sx2, placeY - 1, placeZ) != 88) continue;
+                if (server_.getBlockIdInWorld(sx1, placeY - 2, placeZ) != 88) continue;
+
+                // Check 3 wither skeleton skulls at y
+                if (!isWitherSkull(sx0, placeY, placeZ)) continue;
+                if (!isWitherSkull(sx1, placeY, placeZ)) continue;
+                if (!isWitherSkull(sx2, placeY, placeZ)) continue;
+
+                // Pattern matched! Clear all 7 structure blocks
+                server_.setBlockInWorld(sx0, placeY, placeZ, 0, 0);
+                server_.setBlockInWorld(sx1, placeY, placeZ, 0, 0);
+                server_.setBlockInWorld(sx2, placeY, placeZ, 0, 0);
+                server_.setBlockInWorld(sx0, placeY - 1, placeZ, 0, 0);
+                server_.setBlockInWorld(sx1, placeY - 1, placeZ, 0, 0);
+                server_.setBlockInWorld(sx2, placeY - 1, placeZ, 0, 0);
+                server_.setBlockInWorld(sx1, placeY - 2, placeZ, 0, 0);
+
+                // Remove skull data for cleared positions
+                {
+                    std::lock_guard<std::mutex> lock(server_.skullsMutex_);
+                    server_.skulls_.erase(MinecraftServer::packBlockPos(sx0, placeY, placeZ));
+                    server_.skulls_.erase(MinecraftServer::packBlockPos(sx1, placeY, placeZ));
+                    server_.skulls_.erase(MinecraftServer::packBlockPos(sx2, placeY, placeZ));
+                }
+
+                // Spawn Wither — Java: (x+n4+1.5, y-1.45, z+0.5), yaw=0°
+                int32_t witherEid = server_.summonMob(64, // EntityWither type ID
+                    static_cast<double>(sx0) + 1.5,
+                    static_cast<double>(placeY) - 1.45,
+                    static_cast<double>(placeZ) + 0.5);
+
+                // Spawn particles — Java: 120 snowballpoof particles
+                for (int i = 0; i < 120; ++i) {
+                    server_.broadcastParticle("snowballpoof",
+                        static_cast<float>(sx0 + 1) + static_cast<float>(rand()) / RAND_MAX,
+                        static_cast<float>(placeY - 2) + static_cast<float>(rand()) / RAND_MAX * 3.9f,
+                        static_cast<float>(placeZ) + static_cast<float>(rand()) / RAND_MAX,
+                        0.0f, 0.0f, 0.0f, 0.0f, 1);
+                }
+
+                std::cout << "[Wither] Wither built at " << sx1 << "," << (placeY - 1) << "," << placeZ
+                          << " (X-axis pattern)\n";
+                witherBuilt = true;
+            }
+
+            if (witherBuilt) return; // Structure consumed
+        }
+    }
 
     // ─── Golem building detection — Java: BlockPumpkin.onBlockAdded ───
     // When pumpkin (86) or jack-o-lantern (91) is placed, check for golem patterns
