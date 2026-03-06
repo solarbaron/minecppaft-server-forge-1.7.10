@@ -760,6 +760,16 @@ private:
     mutable std::mutex skullsMutex_;
     std::map<int64_t, int32_t> skulls_;  // packed pos → skullType
 
+    // ─── Jukebox disc storage ────────────────────────────────────────────
+    // Java reference: TileEntityJukebox — stores which disc item is in each jukebox
+    mutable std::mutex jukeboxDiscsMutex_;
+    std::map<int64_t, int32_t> jukeboxDiscs_;  // packed pos → disc item ID (2256-2267)
+
+    // ─── Flower pot contents storage ─────────────────────────────────────
+    // Java reference: TileEntityFlowerPot — stores which plant item ID + meta is in each pot
+    mutable std::mutex flowerPotsMutex_;
+    std::map<int64_t, std::pair<int32_t, int32_t>> flowerPots_;  // packed pos → {itemId, itemMeta}
+
     static void generateVillagerTrades(int profession, std::vector<MerchantRecipe>& out);
 
     // ─── Mob entities ───────────────────────────────────────────────

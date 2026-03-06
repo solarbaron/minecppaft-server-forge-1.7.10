@@ -9934,6 +9934,35 @@ void MinecraftServer::dropContainerContents(int32_t x, int32_t y, int32_t z, int
             }
             break;
         }
+        // Jukebox — drop stored disc on break
+        // Java: BlockJukebox.breakBlock() → func_149925_e()
+        case 84: {
+            std::lock_guard<std::mutex> lock(jukeboxDiscsMutex_);
+            auto it = jukeboxDiscs_.find(key);
+            if (it != jukeboxDiscs_.end()) {
+                int32_t discId = it->second;
+                jukeboxDiscs_.erase(it);
+                // Stop music — Java: world.playAuxSFX(1005, x, y, z, 0)
+                broadcastEffect(1005, x, y, z, 0);
+                // Drop disc as item entity
+                spawnItemDrop(dx, dy, dz, discId, 0, 1);
+            }
+            break;
+        }
+        // Flower Pot — drop contained plant on break
+        // Java: BlockFlowerPot.breakBlock() → dropBlockAsItem(flowerPotItem, 1, flowerPotData)
+        case 140: {
+            std::lock_guard<std::mutex> lock(flowerPotsMutex_);
+            auto it = flowerPots_.find(key);
+            if (it != flowerPots_.end()) {
+                int32_t plantId = it->second.first;
+                int32_t plantMeta = it->second.second;
+                flowerPots_.erase(it);
+                // Drop plant as item entity
+                spawnItemDrop(dx, dy, dz, plantId, plantMeta, 1);
+            }
+            break;
+        }
         default:
             break;
     }

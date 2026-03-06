@@ -4563,6 +4563,13 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
                 if (newMeta > 0) {
                     world->setBlockMetadata(blockX, by, blockZ, newMeta);
                     server_.broadcastBlockChange(blockX, by, blockZ, 140, newMeta);
+                    // Store plant in per-position map for break drops
+                    // Java: TileEntityFlowerPot.func_145964_a(item, data)
+                    {
+                        int64_t pos = MinecraftServer::packBlockPos(blockX, by, blockZ);
+                        std::lock_guard<std::mutex> lock(server_.flowerPotsMutex_);
+                        server_.flowerPots_[pos] = {itemId, held->getDamage()};
+                    }
                     // Consume in survival
                     if (gameMode_ != 1) {
                         if (held->getStackSize() > 1) {
@@ -4590,9 +4597,17 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
             // Music discs are items 2256-2267
             if (itemId >= 2256 && itemId <= 2267) {
                 // Insert disc — set metadata to 1 (has record)
+                // Java: TileEntityJukebox.func_145857_a(itemStack.copy())
                 world->setBlockMetadata(blockX, by, blockZ, 1);
                 server_.broadcastBlockChange(blockX, by, blockZ, 84, 1);
+                // Store disc ID for later retrieval on eject/break
+                {
+                    int64_t pos = MinecraftServer::packBlockPos(blockX, by, blockZ);
+                    std::lock_guard<std::mutex> lock(server_.jukeboxDiscsMutex_);
+                    server_.jukeboxDiscs_[pos] = itemId;
+                }
                 // Play record: S28 Effect with effectId 1005 and data = disc item ID
+                // Java: world.playAuxSFX(1005, x, y, z, Item.getIdFromItem(item))
                 server_.broadcastEffect(1005, blockX, by, blockZ, itemId);
                 // Consume disc in survival
                 if (gameMode_ != 1) {
@@ -4607,10 +4622,34 @@ void PlayHandler::handlePlayerBlockPlace(const uint8_t* data, size_t length, Con
                 std::cout << "[Jukebox] " << playerName_ << " inserted disc " << itemId << "\n";
             }
         } else if (meta > 0) {
-            // Eject disc — stop record + set metadata back to 0
-            server_.broadcastEffect(1005, blockX, by, blockZ, 0); // stop music
+            // Eject disc — Java: BlockJukebox.func_149925_e()
+            // Stop music: S28 Effect 1005 data=0
+            // Java: world.playAuxSFX(1005, x, y, z, 0) + world.playRecord(null, x, y, z)
+            server_.broadcastEffect(1005, blockX, by, blockZ, 0);
             world->setBlockMetadata(blockX, by, blockZ, 0);
             server_.broadcastBlockChange(blockX, by, blockZ, 84, 0);
+            // Drop the stored disc as an item entity
+            // Java: EntityItem(world, x+d, y+d2, z+d3, itemStack2)
+            {
+                int64_t pos = MinecraftServer::packBlockPos(blockX, by, blockZ);
+                int32_t discId = -1;
+                {
+                    std::lock_guard<std::mutex> lock(server_.jukeboxDiscsMutex_);
+                    auto it = server_.jukeboxDiscs_.find(pos);
+                    if (it != server_.jukeboxDiscs_.end()) {
+                        discId = it->second;
+                        server_.jukeboxDiscs_.erase(it);
+                    }
+                }
+                if (discId > 0) {
+                    // Java: random offset +0.5 centered, y offset +0.6+0.2 = 0.8 above block
+                    server_.spawnItemDrop(
+                        static_cast<double>(blockX) + 0.5,
+                        static_cast<double>(by) + 0.8,
+                        static_cast<double>(blockZ) + 0.5,
+                        discId, 0, 1);
+                }
+            }
             std::cout << "[Jukebox] " << playerName_ << " ejected disc\n";
         }
         return;
